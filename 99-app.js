@@ -379,6 +379,8 @@ function LabApp({
     setGasList: setGasList,
     testRecords: testRecords,
     setTestRecords: setTestRecords,
+    samples: samples,
+    setSamples: setSamples,
     notify: notify,
     editingRecord: editingRecord,
     onDoneEditing: () => setEditingRecord(null),

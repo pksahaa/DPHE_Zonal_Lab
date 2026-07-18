@@ -53,6 +53,7 @@ function SampleRegistrationForm({
     collectedBy: "",
     receivedDate: todayStr(),
     priority: "Routine",
+    numberOfSamples: 1,
     notes: ""
   });
   const [selectedTests, setSelectedTests] = React.useState([]);
@@ -142,6 +143,16 @@ function SampleRegistrationForm({
     onChange: v => setForm({
       ...form,
       receivedDate: v
+    })
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "No. of Samples in this Batch",
+    type: "number",
+    min: "1",
+    value: form.numberOfSamples,
+    onChange: v => setForm({
+      ...form,
+      numberOfSamples: v
     })
   })), /*#__PURE__*/React.createElement("div", {
     className: "mt-3"
@@ -376,7 +387,7 @@ function SampleDetail({
     style: {
       color: C.muted
     }
-  }, sample.matrix, " · ", sample.siteLocation)), qcWarnings.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, sample.matrix, " · ", sample.siteLocation, " · ", sample.numberOfSamples || 1, " sample", (sample.numberOfSamples || 1) > 1 ? "s" : "", " in batch")), qcWarnings.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "mb-3 p-3 rounded text-xs",
     style: {
       background: qcWarnings.some(w => w.status.hasReject) ? C.warnBg : C.infoBg,

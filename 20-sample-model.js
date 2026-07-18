@@ -165,6 +165,8 @@ function createSample(fields, existingSamples, user) {
     priority: fields.priority || "Routine",
     requestedTests: fields.requestedTests || [],
     // [{testTypeId, testTypeName}]
+    numberOfSamples: Number(fields.numberOfSamples) > 0 ? Number(fields.numberOfSamples) : 1,
+    // batch size — how many physical field samples this registration covers
     notes: fields.notes || "",
     status: "registered",
     preHoldStatus: null,

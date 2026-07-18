@@ -15,11 +15,14 @@ function AddTestTab({
   setGasList,
   testRecords,
   setTestRecords,
+  samples,
+  setSamples,
   notify,
   editingRecord,
   onDoneEditing,
   goToTestTypes
 }) {
+  const [selectedSampleId, setSelectedSampleId] = useState("");
   const [selectedTestId, setSelectedTestId] = useState(testTypes[0]?.id || "");
   const [values, setValues] = useState({});
   const [bottleOverride, setBottleOverride] = useState({});
@@ -50,6 +53,13 @@ function AddTestTab({
     }));
   }
   const selectedTest = testTypes.find(t => t.id === selectedTestId);
+  // Samples that still need test records logged against them (registered through
+  // in_progress, i.e. not yet at results/review/approval/release).
+  const linkableSamples = (samples || []).filter(s => ["registered", "received", "assigned", "in_progress"].includes(s.status));
+  const selectedSample = (samples || []).find(s => s.id === selectedSampleId) || null;
+  // Once a sample is picked, only show the test types that sample actually requested —
+  // instead of every test type in the system.
+  const testTypesForForm = selectedSample ? testTypes.filter(t => selectedSample.requestedTests.some(rt => rt.testTypeId === t.id)) : testTypes;
   const chemGroups = selectedTest ? selectedTest.chemicalRequirements : [];
   const dilutionGroups = selectedTest ? selectedTest.dilutionChemicalRequirements || [] : [];
   const resultParameters = selectedTest?.resultParameters || [];
@@ -136,6 +146,19 @@ function AddTestTab({
     setQcSampleType("");
     setQcMeasuredValue("");
   }, [selectedTestId]);
+
+  // When a sample is picked: jump the Test Type selector to one of that sample's
+  // requested tests (if the currently selected one isn't among them), and prefill
+  // No. of Field Samples from the batch size recorded at registration. The tester
+  // can still edit the count by hand afterwards — this only sets the starting value.
+  useEffect(() => {
+    if (editingRecord || !selectedSample) return;
+    if (!selectedSample.requestedTests.some(rt => rt.testTypeId === selectedTestId)) {
+      const firstReq = selectedSample.requestedTests[0];
+      if (firstReq) setSelectedTestId(firstReq.testTypeId);
+    }
+    setNumberOfFieldSamples(String(selectedSample.numberOfSamples || 1));
+  }, [selectedSampleId]);
   function setDirect(itemId, val) {
     setValues(prev => ({
       ...prev,
@@ -243,7 +266,7 @@ function AddTestTab({
     setTester("");
     setTestDate(todayStr());
     setNumberOfStandardSamples("");
-    setNumberOfFieldSamples("");
+    setNumberOfFieldSamples(selectedSample ? String(selectedSample.numberOfSamples || 1) : "");
     setEquipmentId(selectedTest?.defaultEquipmentId || "");
     setSampleSource("");
     setCollectFee(true);
@@ -389,6 +412,8 @@ function AddTestTab({
       numberOfSamples: samplesNum,
       numberOfStandardSamples: standardSamplesNum,
       numberOfFieldSamples: fieldSamplesNum,
+      sampleId: selectedSampleId || null,
+      sampleCode: selectedSample?.sampleCode || "",
       feeApplicable,
       unitCost,
       billedSamples,
@@ -436,10 +461,18 @@ function AddTestTab({
       resetForm();
       onDoneEditing && onDoneEditing();
     } else {
+      const newRecordId = uid("rec");
       setTestRecords(prev => [...prev, {
-        id: uid("rec"),
+        id: newRecordId,
         ...recordPayload
       }]);
+      if (selectedSampleId && setSamples && selectedSample) {
+        const updatedSample = {
+          ...selectedSample,
+          linkedTestRecordIds: [...(selectedSample.linkedTestRecordIds || []), newRecordId]
+        };
+        setSamples(prev => prev.map(s => s.id === selectedSampleId ? updatedSample : s), updatedSample);
+      }
       notify(anyMissing ? "Saved, but one or more linked chemicals no longer exist in inventory." : "Test record saved. Inventory updated (FEFO).", anyMissing ? "warn" : "ok");
       resetForm();
     }
@@ -759,6 +792,31 @@ function AddTestTab({
     name: "plus",
     size: 14
   }), "Manage Test Types")), /*#__PURE__*/React.createElement("div", {
+    className: "px-4 pt-4"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "flex flex-col gap-1 text-xs",
+    style: {
+      color: C.muted
+    }
+  }, "Select Sample (optional — links this record to a registered batch)", /*#__PURE__*/React.createElement("select", {
+    className: "border rounded px-2 py-1.5 text-sm",
+    style: {
+      borderColor: C.border
+    },
+    value: selectedSampleId,
+    onChange: e => setSelectedSampleId(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "— No sample (standalone record) —"), linkableSamples.map(s => /*#__PURE__*/React.createElement("option", {
+    key: s.id,
+    value: s.id
+  }, s.sampleCode, " — ", s.clientName, " (", s.numberOfSamples || 1, " samples)")))), selectedSample && /*#__PURE__*/React.createElement("div", {
+    className: "mx-4 mt-2 p-2 rounded text-xs",
+    style: {
+      background: C.infoBg,
+      color: C.info
+    }
+  }, "Batch of ", selectedSample.numberOfSamples || 1, " sample(s) from ", selectedSample.siteLocation, ". Requested tests: ", selectedSample.requestedTests.map(rt => rt.testTypeName).join(", "), ".")), /*#__PURE__*/React.createElement("div", {
     className: "p-4 grid gap-3.5",
     style: {
       gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))"
@@ -775,7 +833,7 @@ function AddTestTab({
     },
     value: selectedTestId,
     onChange: e => setSelectedTestId(e.target.value)
-  }, testTypes.map(t => /*#__PURE__*/React.createElement("option", {
+  }, testTypesForForm.map(t => /*#__PURE__*/React.createElement("option", {
     key: t.id,
     value: t.id
   }, t.name)))), /*#__PURE__*/React.createElement(TextField, {
