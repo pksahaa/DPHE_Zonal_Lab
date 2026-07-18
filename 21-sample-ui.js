@@ -48,6 +48,12 @@ function SampleRegistrationForm({
   const [form, setForm] = React.useState({
     clientName: "",
     siteLocation: "",
+    district: "",
+    upazila: "",
+    union: "",
+    village: "",
+    caretakerName: "",
+    sampleSourceId: "",
     matrix: "Drinking Water",
     collectionDate: todayStr(),
     collectedBy: "",
@@ -99,6 +105,54 @@ function SampleRegistrationForm({
     onChange: v => setForm({
       ...form,
       siteLocation: v
+    })
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "District",
+    value: form.district,
+    onChange: v => setForm({
+      ...form,
+      district: v
+    })
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Upazila / City Corporation",
+    value: form.upazila,
+    onChange: v => setForm({
+      ...form,
+      upazila: v
+    })
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Union / Pourashava",
+    value: form.union,
+    onChange: v => setForm({
+      ...form,
+      union: v
+    })
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Village / Ward",
+    value: form.village,
+    onChange: v => setForm({
+      ...form,
+      village: v
+    })
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Caretaker Name",
+    value: form.caretakerName,
+    onChange: v => setForm({
+      ...form,
+      caretakerName: v
+    })
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Sample Source (e.g. STW-6)",
+    value: form.sampleSourceId,
+    onChange: v => setForm({
+      ...form,
+      sampleSourceId: v
     })
   }), /*#__PURE__*/React.createElement(SelectField, {
     simple: true,
@@ -558,6 +612,54 @@ function SamplesTab({
     setShowForm(false);
     notify?.(`${sample.sampleCode} registered.`, "ok");
   }
+  async function importSamples(file) {
+    readWorkbook(file, async (err, rows) => {
+      if (err) return notify("Could not read Excel file", "warn");
+      let runningSamples = [...samples];
+      let count = 0,
+        skipped = 0;
+      const unmatchedTests = new Set();
+      for (const row of rows) {
+        const clientName = String(row.ClientName || row["Client Name"] || "").trim();
+        const siteLocation = String(row.SiteLocation || row["Site Location"] || "").trim();
+        if (!clientName || !siteLocation) {
+          skipped++;
+          continue;
+        }
+        const testNames = String(row.RequestedTests || row["Requested Tests"] || "").split(",").map(s => s.trim()).filter(Boolean);
+        testNames.forEach(n => {
+          if (!testTypes.some(t => t.name.toLowerCase() === n.toLowerCase())) unmatchedTests.add(n);
+        });
+        const requestedTests = testNames.map(n => testTypes.find(t => t.name.toLowerCase() === n.toLowerCase())).filter(Boolean).map(t => ({
+          testTypeId: t.id,
+          testTypeName: t.name
+        }));
+        const sample = createSample({
+          clientName,
+          siteLocation,
+          district: String(row.District || "").trim(),
+          upazila: String(row.Upazila || row["Upazila/City Corporation"] || "").trim(),
+          union: String(row.Union || row["Union/Pourashava"] || "").trim(),
+          village: String(row.Village || row["Village/Ward"] || "").trim(),
+          caretakerName: String(row.CaretakerName || row["Caretaker Name"] || "").trim(),
+          sampleSourceId: String(row.SampleSource || row["Sample Source"] || "").trim(),
+          batchRef: String(row.BatchRef || row["Batch Ref"] || "").trim(),
+          matrix: String(row.Matrix || "Drinking Water").trim(),
+          collectionDate: String(row.CollectionDate || todayStr()),
+          collectedBy: String(row.CollectedBy || "").trim(),
+          receivedDate: String(row.ReceivedDate || todayStr()),
+          priority: String(row.Priority || "Routine").trim(),
+          numberOfSamples: 1,
+          requestedTests,
+          notes: String(row.Notes || "").trim()
+        }, runningSamples, session);
+        runningSamples = [...runningSamples, sample];
+        await setSamples(prev => [...prev, sample], sample);
+        count++;
+      }
+      notify(`Imported ${count} sample(s) from manifest${skipped ? `, skipped ${skipped} row(s) missing Client Name/Site Location` : ""}.${unmatchedTests.size ? ` Note: these test names didn't match any Test Type and were ignored: ${Array.from(unmatchedTests).join(", ")}.` : ""}`, count ? "ok" : "warn");
+    });
+  }
   async function handleUpdate(next) {
     await setSamples(prev => prev.map(s => s.id === next.id ? next : s), next);
   }
@@ -574,12 +676,34 @@ function SamplesTab({
     style: {
       color: C.muted
     }
-  }, "Registration, chain of custody, assignment, approval and result release.")), perms.canRegister && /*#__PURE__*/React.createElement(Button, {
+  }, "Registration, chain of custody, assignment, approval and result release.")), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2 flex-wrap"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "ghost",
+    size: "sm",
+    onClick: () => downloadTemplate("samples")
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "download",
+    size: 14
+  }), "Download Manifest Template"), perms.canRegister && /*#__PURE__*/React.createElement("label", {
+    className: "cursor-pointer"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: ".xlsx,.xls,.csv",
+    className: "hidden",
+    onChange: e => e.target.files[0] && importSamples(e.target.files[0])
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement(Button, {
+    variant: "outline",
+    size: "sm"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "upload",
+    size: 14
+  }), "Bulk Upload Samples"))), perms.canRegister && /*#__PURE__*/React.createElement(Button, {
     onClick: () => setShowForm(true)
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "clipboard",
     size: 13
-  }), "Register New Sample")), /*#__PURE__*/React.createElement("div", {
+  }), "Register New Sample"))), /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-4 gap-3 mb-4"
   }, /*#__PURE__*/React.createElement(StatCard, {
     label: "Active Samples",

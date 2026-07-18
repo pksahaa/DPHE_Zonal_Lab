@@ -11,12 +11,14 @@ function seedUsers() {
     username: "admin",
     password: "admin123",
     name: "Lab Administrator",
+    designation: "Senior Chemist",
     role: "Administrator"
   }, {
     id: uid("user"),
     username: "tester",
     password: "tester123",
     name: "Lab Technician",
+    designation: "Sample Analyzer",
     role: "Technician"
   }];
 }

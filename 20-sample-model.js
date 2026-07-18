@@ -158,6 +158,19 @@ function createSample(fields, existingSamples, user) {
     sampleCode: generateSampleCode(existingSamples, fields.collectionDate),
     clientName: fields.clientName || "",
     siteLocation: fields.siteLocation || "",
+    // Administrative address hierarchy + caretaker/source — needed for the
+    // official lab report format (District > Upazila/City Corp > Union/Pourashava
+    // > Village/Ward), captured per physical sample since these can differ even
+    // within one registered batch.
+    district: fields.district || "",
+    upazila: fields.upazila || "",
+    union: fields.union || "",
+    village: fields.village || "",
+    caretakerName: fields.caretakerName || "",
+    sampleSourceId: fields.sampleSourceId || "",
+    // e.g. "STW-6"
+    batchRef: fields.batchRef || "",
+    // shared reference (e.g. office memo no.) linking samples uploaded together
     matrix: fields.matrix || "Drinking Water",
     collectionDate: fields.collectionDate || todayStr(),
     collectedBy: fields.collectedBy || "",

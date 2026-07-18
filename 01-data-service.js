@@ -293,3 +293,149 @@ function BackendSettingsModal({
     size: 13
   }), "Save"))));
 }
+
+// ---- Lab Identity (letterhead) — set once per office, used by the Custom
+// Report Generator so this same app can be reused by any DPHE Zonal Lab
+// without hardcoding one office's letterhead. Stored locally (or via
+// DataService in future if that's wired up); read with getLabIdentity(). ----
+function getLabIdentity() {
+  return loadKey("labIdentity", {
+    orgLine1: "Government of the People's Republic of Bangladesh",
+    orgLine2: "Office of the Senior Chemist",
+    orgLine3: "Department of Public Health Engineering (DPHE)",
+    labName: "",
+    phone: "",
+    email: "",
+    leftLogoDataUrl: "",
+    rightLogoDataUrl: ""
+  });
+}
+function saveLabIdentity(identity) {
+  saveKey("labIdentity", identity);
+}
+function LabIdentityModal({
+  onClose,
+  notify
+}) {
+  const [id_, setId] = React.useState(getLabIdentity());
+  function handleLogo(side, file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setId(prev => ({
+      ...prev,
+      [side]: reader.result
+    }));
+    reader.readAsDataURL(file);
+  }
+  function save() {
+    saveLabIdentity(id_);
+    notify?.("Lab identity saved. It will now appear on generated reports.", "ok");
+    onClose();
+  }
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: "Lab Identity (Report Letterhead)",
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs mb-3",
+    style: {
+      color: C.muted
+    }
+  }, "Set this once per lab/office. It's used as the header on every generated report — so this same app can be reused by any Zonal Lab, each with its own letterhead."), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Header line 1",
+    value: id_.orgLine1,
+    onChange: v => setId({
+      ...id_,
+      orgLine1: v
+    }),
+    placeholder: "Government of the People's Republic of Bangladesh"
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Header line 2",
+    value: id_.orgLine2,
+    onChange: v => setId({
+      ...id_,
+      orgLine2: v
+    }),
+    placeholder: "Office of the Senior Chemist"
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Header line 3",
+    value: id_.orgLine3,
+    onChange: v => setId({
+      ...id_,
+      orgLine3: v
+    }),
+    placeholder: "Department of Public Health Engineering (DPHE)"
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Lab name / address",
+    value: id_.labName,
+    onChange: v => setId({
+      ...id_,
+      labName: v
+    }),
+    placeholder: "e.g. Rangpur Zonal Lab, Radha Ballob, Rangpur."
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Phone",
+    value: id_.phone,
+    onChange: v => setId({
+      ...id_,
+      phone: v
+    })
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Email",
+    value: id_.email,
+    onChange: v => setId({
+      ...id_,
+      email: v
+    })
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3 mt-3"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "flex flex-col gap-1 text-xs",
+    style: {
+      color: C.muted
+    }
+  }, "Left logo (e.g. national emblem)", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*",
+    onChange: e => handleLogo("leftLogoDataUrl", e.target.files[0])
+  }), id_.leftLogoDataUrl && /*#__PURE__*/React.createElement("img", {
+    src: id_.leftLogoDataUrl,
+    style: {
+      height: 40,
+      marginTop: 4
+    }
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "flex flex-col gap-1 text-xs",
+    style: {
+      color: C.muted
+    }
+  }, "Right logo (e.g. DPHE logo)", /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: "image/*",
+    onChange: e => handleLogo("rightLogoDataUrl", e.target.files[0])
+  }), id_.rightLogoDataUrl && /*#__PURE__*/React.createElement("img", {
+    src: id_.rightLogoDataUrl,
+    style: {
+      height: 40,
+      marginTop: 4
+    }
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "mt-4 flex justify-end gap-2"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "outline",
+    onClick: onClose
+  }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
+    onClick: save
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "check",
+    size: 13
+  }), "Save")));
+}

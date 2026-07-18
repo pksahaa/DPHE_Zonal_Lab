@@ -82,6 +82,7 @@ function LabApp({
   const [toast, setToast] = useState(null);
   const [editingRecord, setEditingRecord] = useState(null);
   const [showBackendSettings, setShowBackendSettings] = useState(false);
+  const [showLabIdentitySettings, setShowLabIdentitySettings] = useState(false);
 
   // >>> PHASE 1: Sample Lifecycle collection — loaded/saved through DataService, NOT the
   // legacy loadKey/saveKey mechanism used above. Today DataService defaults to localStorage
@@ -241,7 +242,18 @@ function LabApp({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "link",
     size: 13
-  }), "Backend"), /*#__PURE__*/React.createElement("span", {
+  }), "Backend"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setShowLabIdentitySettings(true),
+    className: "flex items-center gap-1 px-2 py-1 rounded",
+    style: {
+      background: "rgba(255,255,255,0.12)",
+      color: "#fff"
+    },
+    title: "Lab identity / report letterhead"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "clipboard",
+    size: 13
+  }), "Lab Identity"), /*#__PURE__*/React.createElement("span", {
     className: "rounded-full p-1.5",
     style: {
       background: "rgba(255,255,255,0.15)"
@@ -413,6 +425,9 @@ function LabApp({
   })), showBackendSettings && /*#__PURE__*/React.createElement(BackendSettingsModal, {
     notify: notify,
     onClose: () => setShowBackendSettings(false)
+  }), showLabIdentitySettings && /*#__PURE__*/React.createElement(LabIdentityModal, {
+    notify: notify,
+    onClose: () => setShowLabIdentitySettings(false)
   }), toast && /*#__PURE__*/React.createElement("div", {
     className: "fixed bottom-5 right-5 px-4 py-2.5 rounded shadow-lg text-sm font-medium flex items-center gap-2 z-50",
     style: {
