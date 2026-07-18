@@ -305,7 +305,10 @@ function readWorkbook(file, cb) {
 }
 function downloadTemplate(kind) {
   let headers, rows;
-  if (kind === "chemicals") {
+  if (kind === "samples") {
+    headers = ["BatchRef", "ClientName", "SiteLocation", "District", "Upazila", "Union", "Village", "CaretakerName", "SampleSource", "Matrix", "CollectionDate", "CollectedBy", "ReceivedDate", "Priority", "RequestedTests", "Notes"];
+    rows = [["46.03.8500.106.16.004.25.1298", "Asst. Engineer, DPHE, Sadar Upazila, Rangpur", "Sreerampur", "Rangpur", "Sadar", "Chandanpat", "Sreerampur", "Md. Musha Mia", "STW-6", "Drinking Water", "2026-01-10", "Field Team A", "2026-01-12", "Routine", "Iron, Arsenic, Chloride", ""], ["46.03.8500.106.16.004.25.1298", "Asst. Engineer, DPHE, Sadar Upazila, Rangpur", "New Jummapara", "Rangpur", "Sadar", "City Corporation", "New Jummapara", "Md. Moynul Hossain", "STW-7", "Drinking Water", "2026-01-10", "Field Team A", "2026-01-12", "Routine", "Iron, Arsenic, Chloride", ""]];
+  } else if (kind === "chemicals") {
     headers = ["ChemicalName", "Unit", "DateReceived", "ExpiryDate", "Amount", "Origin", "ReceivedFrom"];
     rows = [["Fe Standard", "ml", "2026-01-10", "2026-07-10", 500, "Central Reagent Store", "DPHE Water Safety Project"], ["HCl", "ml", "2026-01-10", "2026-12-31", 1000, "Local Chemical Supplier", "Zonal Office Procurement"]];
   } else if (kind === "glassware") {
