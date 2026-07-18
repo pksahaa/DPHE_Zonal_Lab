@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Zonal Water Quality Lab — LIMS</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.0.1/chartjs-plugin-zoom.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+<div id="root"></div>
+
+<!--
+  These are PRECOMPILED plain JavaScript (JSX already converted to
+  React.createElement calls) — no Babel, no eval, no runtime transform.
+  This is what makes it work inside restrictive sandboxes (like a chat
+  app's inline preview) as well as any normal browser or GitHub Pages.
+
+  Source of truth: the JSX files in /js/*.js. If you edit those, run
+  `node build.js` (see repo root) to regenerate everything in /dist/.
+  Don't hand-edit files in /dist/ — they'll be overwritten on next build.
+-->
+<script src="dist/00-core.js"></script>
+<script src="dist/01-data-service.js"></script>
+<script src="dist/02-ui-kit.js"></script>
+<script src="dist/05-seed-data.js"></script>
+<script src="dist/06-legacy-storage.js"></script>
+<script src="dist/10-inventory-logic.js"></script>
+<script src="dist/11-inventory-ui.js"></script>
+<script src="dist/12-testtypes-ui.js"></script>
+<script src="dist/13-testrecords-ui.js"></script>
+<script src="dist/14-reports-ui.js"></script>
+<script src="dist/20-sample-model.js"></script>
+<script src="dist/21-sample-ui.js"></script>
+<script src="dist/30-dashboard.js"></script>
+<script src="dist/40-auth-ui.js"></script>
+<script src="dist/99-app.js"></script>
+</body>
+</html>
