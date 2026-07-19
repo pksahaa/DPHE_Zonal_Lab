@@ -207,6 +207,7 @@ function CustomReportGeneratorPage({
     }]
   });
   const filteredSamples = (samples || []).filter(s => !q || `${s.sampleCode} ${s.clientName} ${s.siteLocation} ${s.village}`.toLowerCase().includes(q.toLowerCase()));
+  const distinctBatchRefs = Array.from(new Set((samples || []).map(s => s.batchRef).filter(Boolean))).sort();
   const selectedSamples = (samples || []).filter(s => selectedSampleIds.includes(s.id));
   const availableTestIds = React.useMemo(() => {
     const ids = new Set();
@@ -275,7 +276,29 @@ function CustomReportGeneratorPage({
     placeholder: "Search by sample code, client, site, village…",
     value: q,
     onChange: e => setQ(e.target.value)
-  }), /*#__PURE__*/React.createElement("div", {
+  }), distinctBatchRefs.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 mb-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs",
+    style: {
+      color: C.muted
+    }
+  }, "Quick-select by original receiving batch:"), /*#__PURE__*/React.createElement("select", {
+    className: "border rounded px-2 py-1 text-xs",
+    style: {
+      borderColor: C.border
+    },
+    value: "",
+    onChange: e => {
+      if (!e.target.value) return;
+      setSelectedSampleIds((samples || []).filter(s => s.batchRef === e.target.value).map(s => s.id));
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Select a batch ref…"), distinctBatchRefs.map(ref => /*#__PURE__*/React.createElement("option", {
+    key: ref,
+    value: ref
+  }, ref, " (", (samples || []).filter(s => s.batchRef === ref).length, " samples)")))), /*#__PURE__*/React.createElement("div", {
     className: "flex gap-2 mb-2"
   }, /*#__PURE__*/React.createElement(Button, {
     variant: "ghost",

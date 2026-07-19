@@ -17,12 +17,16 @@ function AddTestTab({
   setTestRecords,
   samples,
   setSamples,
+  subBatches,
+  setSubBatches,
   notify,
   editingRecord,
   onDoneEditing,
   goToTestTypes
 }) {
   const [selectedSampleId, setSelectedSampleId] = useState("");
+  const [selectedSubBatchId, setSelectedSubBatchId] = useState("");
+  const [memberInputs, setMemberInputs] = useState({}); // { [sampleId]: { [paramId]: { [inputKey]: value } } } — sub-batch mode only
   const [selectedTestId, setSelectedTestId] = useState(testTypes[0]?.id || "");
   const [values, setValues] = useState({});
   const [bottleOverride, setBottleOverride] = useState({});
@@ -57,9 +61,12 @@ function AddTestTab({
   // in_progress, i.e. not yet at results/review/approval/release).
   const linkableSamples = (samples || []).filter(s => ["registered", "received", "assigned", "in_progress"].includes(s.status));
   const selectedSample = (samples || []).find(s => s.id === selectedSampleId) || null;
-  // Once a sample is picked, only show the test types that sample actually requested —
+  const pendingSubBatches = (subBatches || []).filter(sb => sb.status === "pending");
+  const selectedSubBatch = pendingSubBatches.find(sb => sb.id === selectedSubBatchId) || null;
+  const subBatchMembers = selectedSubBatch ? selectedSubBatch.memberSampleIds.map(id => (samples || []).find(s => s.id === id)).filter(Boolean) : [];
+  // Once a sample or sub-batch is picked, only show the test type(s) it actually requested —
   // instead of every test type in the system.
-  const testTypesForForm = selectedSample ? testTypes.filter(t => selectedSample.requestedTests.some(rt => rt.testTypeId === t.id)) : testTypes;
+  const testTypesForForm = selectedSubBatch ? testTypes.filter(t => t.id === selectedSubBatch.testTypeId) : selectedSample ? testTypes.filter(t => selectedSample.requestedTests.some(rt => rt.testTypeId === t.id)) : testTypes;
   const chemGroups = selectedTest ? selectedTest.chemicalRequirements : [];
   const dilutionGroups = selectedTest ? selectedTest.dilutionChemicalRequirements || [] : [];
   const resultParameters = selectedTest?.resultParameters || [];
@@ -85,6 +92,71 @@ function AddTestTab({
       ...res,
       value: +res.value.toFixed(param.roundTo ?? 2)
     } : res;
+  }
+  function setMemberInput(sampleId, paramId, key, val) {
+    setMemberInputs(prev => ({
+      ...prev,
+      [sampleId]: {
+        ...(prev[sampleId] || {}),
+        [paramId]: {
+          ...(prev[sampleId]?.[paramId] || {}),
+          [key]: val
+        }
+      }
+    }));
+  }
+  function computeMemberResult(sampleId, param) {
+    const vars = {};
+    param.inputs.forEach(inp => {
+      vars[inp.key] = Number(memberInputs[sampleId]?.[param.id]?.[inp.key]) || 0;
+    });
+    const res = evaluateFormula(param.formula, vars);
+    return res.ok ? {
+      ...res,
+      value: +res.value.toFixed(param.roundTo ?? 2)
+    } : res;
+  }
+  function renderSubBatchMemberRow(sampleId) {
+    const sample = (samples || []).find(s => s.id === sampleId);
+    const cells = [/*#__PURE__*/React.createElement("td", {
+      key: "code",
+      className: "p-1.5 font-medium",
+      style: {
+        borderBottom: `1px solid ${C.border}`
+      }
+    }, sample?.sampleCode)];
+    resultParameters.forEach(p => {
+      const res = computeMemberResult(sampleId, p);
+      const inputEls = p.inputs.map(inp => /*#__PURE__*/React.createElement("input", {
+        key: inp.id,
+        type: "number",
+        placeholder: inp.label || inp.key,
+        title: inp.label || inp.key,
+        className: "border rounded px-1 py-0.5 w-16",
+        style: {
+          borderColor: C.border
+        },
+        value: memberInputs[sampleId]?.[p.id]?.[inp.key] ?? "",
+        onChange: e => setMemberInput(sampleId, p.id, inp.key, e.target.value)
+      }));
+      cells.push(/*#__PURE__*/React.createElement("td", {
+        key: p.id,
+        className: "p-1.5",
+        style: {
+          borderBottom: `1px solid ${C.border}`
+        }
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "flex gap-1 items-center"
+      }, inputEls, /*#__PURE__*/React.createElement("span", {
+        className: "text-xs font-semibold ml-1",
+        style: {
+          color: res.ok ? C.ok : C.muted
+        }
+      }, res.ok ? `= ${fmtNum(res.value)}` : ""))));
+    });
+    return /*#__PURE__*/React.createElement("tr", {
+      key: sampleId
+    }, cells);
   }
   function defaultValuesForItems(reqs) {
     const initial = {};
@@ -159,6 +231,13 @@ function AddTestTab({
     }
     setNumberOfFieldSamples(String(selectedSample.numberOfSamples || 1));
   }, [selectedSampleId]);
+  // When a sub-batch is picked: lock the Test Type to the sub-batch's method
+  // and prefill No. of Field Samples from its member count.
+  useEffect(() => {
+    if (editingRecord || !selectedSubBatch) return;
+    setSelectedTestId(selectedSubBatch.testTypeId);
+    setNumberOfFieldSamples(String(selectedSubBatch.memberSampleIds.length));
+  }, [selectedSubBatchId]);
   function setDirect(itemId, val) {
     setValues(prev => ({
       ...prev,
@@ -412,8 +491,9 @@ function AddTestTab({
       numberOfSamples: samplesNum,
       numberOfStandardSamples: standardSamplesNum,
       numberOfFieldSamples: fieldSamplesNum,
-      sampleId: selectedSampleId || null,
-      sampleCode: selectedSample?.sampleCode || "",
+      sampleId: selectedSubBatch ? null : selectedSampleId || null,
+      sampleCode: selectedSubBatch ? "" : selectedSample?.sampleCode || "",
+      memberSampleIds: selectedSubBatch ? selectedSubBatch.memberSampleIds : null,
       feeApplicable,
       unitCost,
       billedSamples,
@@ -427,7 +507,7 @@ function AddTestTab({
       expiredOverrides,
       gasLog,
       resultInputs,
-      results: resultParameters.map(p => {
+      results: selectedSubBatch ? [] : resultParameters.map(p => {
         const res = computeResult(p);
         return {
           paramId: p.id,
@@ -443,6 +523,29 @@ function AddTestTab({
           })
         };
       }),
+      memberResults: selectedSubBatch ? selectedSubBatch.memberSampleIds.map(sampleId => {
+        const memberSample = (samples || []).find(s => s.id === sampleId);
+        return {
+          sampleId,
+          sampleCode: memberSample?.sampleCode || "",
+          results: resultParameters.map(p => {
+            const res = computeMemberResult(sampleId, p);
+            return {
+              paramId: p.id,
+              name: p.name,
+              unit: p.unit,
+              inputs: memberInputs[sampleId]?.[p.id] || {},
+              ...(res.ok ? {
+                value: res.value,
+                error: null
+              } : {
+                value: null,
+                error: res.error
+              })
+            };
+          })
+        };
+      }) : null,
       qcCheck: matchedQcRule && qcMeasuredValue !== "" ? {
         ruleId: matchedQcRule.id,
         qcType: matchedQcRule.qcType,
@@ -472,6 +575,26 @@ function AddTestTab({
           linkedTestRecordIds: [...(selectedSample.linkedTestRecordIds || []), newRecordId]
         };
         setSamples(prev => prev.map(s => s.id === selectedSampleId ? updatedSample : s), updatedSample);
+      }
+      if (selectedSubBatch && setSamples) {
+        for (const memberId of selectedSubBatch.memberSampleIds) {
+          const member = (samples || []).find(s => s.id === memberId);
+          if (!member) continue;
+          const updatedMember = {
+            ...member,
+            linkedTestRecordIds: [...(member.linkedTestRecordIds || []), newRecordId]
+          };
+          setSamples(prev => prev.map(s => s.id === memberId ? updatedMember : s), updatedMember);
+        }
+        if (setSubBatches) {
+          setSubBatches(prev => prev.map(sb => sb.id === selectedSubBatch.id ? {
+            ...sb,
+            status: "tested",
+            testRecordId: newRecordId
+          } : sb));
+        }
+        setSelectedSubBatchId("");
+        setMemberInputs({});
       }
       notify(anyMissing ? "Saved, but one or more linked chemicals no longer exist in inventory." : "Test record saved. Inventory updated (FEFO).", anyMissing ? "warn" : "ok");
       resetForm();
@@ -792,7 +915,10 @@ function AddTestTab({
     name: "plus",
     size: 14
   }), "Manage Test Types")), /*#__PURE__*/React.createElement("div", {
-    className: "px-4 pt-4"
+    className: "px-4 pt-4 grid gap-3",
+    style: {
+      gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))"
+    }
   }, /*#__PURE__*/React.createElement("label", {
     className: "flex flex-col gap-1 text-xs",
     style: {
@@ -804,19 +930,48 @@ function AddTestTab({
       borderColor: C.border
     },
     value: selectedSampleId,
-    onChange: e => setSelectedSampleId(e.target.value)
+    onChange: e => {
+      setSelectedSampleId(e.target.value);
+      if (e.target.value) setSelectedSubBatchId("");
+    }
   }, /*#__PURE__*/React.createElement("option", {
     value: ""
   }, "— No sample (standalone record) —"), linkableSamples.map(s => /*#__PURE__*/React.createElement("option", {
     key: s.id,
     value: s.id
-  }, s.sampleCode, " — ", s.clientName, " (", s.numberOfSamples || 1, " samples)")))), selectedSample && /*#__PURE__*/React.createElement("div", {
+  }, s.sampleCode, " — ", s.clientName, " (", s.numberOfSamples || 1, " samples)")))), /*#__PURE__*/React.createElement("label", {
+    className: "flex flex-col gap-1 text-xs",
+    style: {
+      color: C.muted
+    }
+  }, "OR Select Sub-Batch (many samples, shared QC)", /*#__PURE__*/React.createElement("select", {
+    className: "border rounded px-2 py-1.5 text-sm",
+    style: {
+      borderColor: C.border
+    },
+    value: selectedSubBatchId,
+    onChange: e => {
+      setSelectedSubBatchId(e.target.value);
+      if (e.target.value) setSelectedSampleId("");
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "— No sub-batch —"), pendingSubBatches.map(sb => /*#__PURE__*/React.createElement("option", {
+    key: sb.id,
+    value: sb.id
+  }, sb.label, " — ", sb.testTypeName, " (", sb.memberSampleIds.length, " samples)")))), selectedSample && /*#__PURE__*/React.createElement("div", {
     className: "mx-4 mt-2 p-2 rounded text-xs",
     style: {
       background: C.infoBg,
       color: C.info
     }
-  }, "Batch of ", selectedSample.numberOfSamples || 1, " sample(s) from ", selectedSample.siteLocation, ". Requested tests: ", selectedSample.requestedTests.map(rt => rt.testTypeName).join(", "), ".")), /*#__PURE__*/React.createElement("div", {
+  }, "Batch of ", selectedSample.numberOfSamples || 1, " sample(s) from ", selectedSample.siteLocation, ". Requested tests: ", selectedSample.requestedTests.map(rt => rt.testTypeName).join(", "), "."), selectedSubBatch && /*#__PURE__*/React.createElement("div", {
+    className: "mx-4 mt-2 p-2 rounded text-xs",
+    style: {
+      background: C.infoBg,
+      color: C.info
+    }
+  }, selectedSubBatch.label, ": ", subBatchMembers.length, " sample(s) — ", subBatchMembers.map(s => s.sampleCode).join(", "), ". Test Type locked to ", selectedSubBatch.testTypeName, ".")), /*#__PURE__*/React.createElement("div", {
     className: "p-4 grid gap-3.5",
     style: {
       gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))"
@@ -832,6 +987,7 @@ function AddTestTab({
       borderColor: C.border
     },
     value: selectedTestId,
+    disabled: !!selectedSubBatch,
     onChange: e => setSelectedTestId(e.target.value)
   }, testTypesForForm.map(t => /*#__PURE__*/React.createElement("option", {
     key: t.id,
@@ -862,7 +1018,8 @@ function AddTestTab({
     min: "0",
     value: numberOfFieldSamples,
     onChange: e => setNumberOfFieldSamples(e.target.value),
-    placeholder: "enter every time",
+    disabled: !!selectedSubBatch,
+    placeholder: selectedSubBatch ? "set by sub-batch size" : "enter every time",
     error: submitAttempted && numberOfStandardSamples === "" && numberOfFieldSamples === "" ? "No. of Samples is required." : undefined
   }), /*#__PURE__*/React.createElement(TextField, {
     label: "No. of Standard Samples (QC)",
@@ -979,7 +1136,7 @@ function AddTestTab({
     style: {
       color: C.ink
     }
-  }, "Dilution Gas Used"), renderGasChecklist(selectedTest.dilutionGasRequirements, dilutionGasesUsed, setDilutionGasesUsed)))), selectedTest && resultParameters.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
+  }, "Dilution Gas Used"), renderGasChecklist(selectedTest.dilutionGasRequirements, dilutionGasesUsed, setDilutionGasesUsed)))), selectedTest && resultParameters.length > 0 && !selectedSubBatch && /*#__PURE__*/React.createElement(SectionCard, {
     title: "Calculated Results",
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "chart",
@@ -1036,7 +1193,41 @@ function AddTestTab({
       name: "warning",
       size: 11
     }), res.error));
-  }))), selectedTest && qcRules.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
+  }))), selectedSubBatch && resultParameters.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
+    title: "Individual Results per Sample (Sub-Batch)",
+    icon: /*#__PURE__*/React.createElement(Icon, {
+      name: "chart",
+      size: 16,
+      color: C.teal
+    })
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs mb-3",
+    style: {
+      color: C.muted
+    }
+  }, "Each sample in this sub-batch gets its own reading and computed result."), /*#__PURE__*/React.createElement("div", {
+    className: "table-scroll"
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "w-full text-xs border-collapse"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, [/*#__PURE__*/React.createElement("th", {
+    key: "sample-col",
+    className: "text-left p-1.5",
+    style: {
+      borderBottom: `1px solid ${C.border}`
+    }
+  }, "Sample"), ...resultParameters.map(p => /*#__PURE__*/React.createElement("th", {
+    key: p.id,
+    className: "text-left p-1.5",
+    style: {
+      borderBottom: `1px solid ${C.border}`
+    }
+  }, p.name, p.unit ? ` (${p.unit})` : ""))])), /*#__PURE__*/React.createElement("tbody", null, selectedSubBatch.memberSampleIds.map(sampleId => renderSubBatchMemberRow(sampleId)))))), selectedSubBatch && resultParameters.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "mx-4 text-xs p-2 rounded",
+    style: {
+      background: C.infoBg,
+      color: C.info
+    }
+  }, "This method has no calculated result formula defined (Test Types → Calculated Results) — add one to enable per-sample entry here."), selectedTest && qcRules.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
     title: "QC Check (optional)",
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "check",

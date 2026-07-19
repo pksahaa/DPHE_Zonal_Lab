@@ -27,10 +27,10 @@ style.css                           # global styles
 14b-analytics-pages-1.js            # Executive/Insights/Test/Tech/Revenue/Chemical pages
 14c-analytics-pages-2.js            # Inventory/Glassware/Gas/Equipment/Trends/Forecast pages
 15-qc-module.js                     # Westgard rules, control charts, QcModuleTab
-16-test-run.js                      # NEW: Test Run (batch testing, shared QC, per-sample results)
-17-report-generator.js              # NEW: Custom Report Generator (official DPHE report format)
+16-sub-batch.js                     # Sub-Batch model + getSampleResultForTest lookup
+17-report-generator.js              # Custom Report Generator (official DPHE report format)
 20-sample-model.js                  # sample lifecycle/status logic
-21-sample-ui.js                     # SamplesTab, SampleDetail, forms (+ QC warning banner, bulk manifest upload)
+21-sample-ui.js                     # SamplesTab (Samples + Sub-Batches sub-tabs), forms, QC banner, bulk manifest upload
 30-dashboard.js                     # DashboardTab, SampleKpiStrip
 40-auth-ui.js                       # LoginPage
 99-app.js                           # AppRoot, LabApp, ReactDOM.render
@@ -76,20 +76,45 @@ file needs to be opened/edited — much cheaper than re-processing the whole
   helper — used by both the QC Module tab and the Sample review/approval
   banner in `SampleDetail` (`21-sample-ui.js`) so both stay in sync.
 
-## Test Run Module (added)
+## Sub-Batch Workflow (replaces the earlier Test Run tab)
 
-- For methods where 15-20+ field samples run together, sharing one QC check.
-- One Test Run = ONE test record with `memberSampleIds` (which samples) and
-  `memberResults` (per-sample computed result arrays) — not N separate
-  records. `getSampleResultForTest(sample, testTypeId, testRecords)` in
-  `16-test-run.js` is the shared lookup that works for both a Test Run's
-  `memberResults` and a regular single Add Test Record entry — used by the
-  Report Generator to pull values regardless of how a sample was tested.
-- QC Frequency (Test Types → QC Acceptance Rules → "QC Frequency") gives a
-  soft warning if a run's sample count exceeds it without a QC check.
-- Scope note: Test Run does not yet deduct chemical/gas inventory per run —
-  only Add Test Record does. Add inventory deduction to Test Run later if
-  needed, without changing the `memberResults` data shape.
+For methods where 15-20+ field samples run together, sharing one QC check.
+Three steps, deliberately in three different places since different people
+do them at different times:
+
+1. **Create** — Samples tab → "Sub-Batches" sub-tab. Pick a Test Type, check
+   off pending samples (any registration batch — mixing is fine, see below),
+   optionally assign a tester. Saved as a `subBatch` record (`16-sub-batch.js`),
+   status `"pending"`.
+2. **Test** — Add Test Record → "OR Select Sub-Batch" dropdown (instead of a
+   single Sample). Locks the Test Type, prefills No. of Field Samples from
+   the member count (drives the existing chemical/gas deduction — unchanged
+   logic), shows a per-sample result-entry grid, and the existing QC section
+   (now shared across the whole sub-batch). On save: **one** test record is
+   created holding `memberSampleIds` + `memberResults` (per-sample computed
+   values), inventory is deducted exactly like a normal single-sample record,
+   every member sample gets the record linked into `linkedTestRecordIds`, and
+   the sub-batch flips to status `"tested"`.
+3. **Report** — `getSampleResultForTest(sample, testTypeId, testRecords)` in
+   `16-sub-batch.js` is the shared lookup: works whether a sample's result
+   came from a plain single Add Test Record entry or from inside a
+   sub-batch's `memberResults`. Used by the QC Module, the Sample review
+   banner, and the Report Generator — so none of them care how a sample was
+   actually tested.
+
+**Mixing registration batches in one sub-batch is intentional and safe** — a
+sample's own `batchRef` (set at registration) never changes regardless of
+which sub-batch tested it. Reporting is done by filtering Samples on
+`batchRef` (see Report Generator's "Quick-select by original receiving
+batch" dropdown), completely independent of testing groupings.
+
+Test Type → QC Acceptance Rules → "QC Frequency" gives a soft warning when
+creating/using a sub-batch larger than the configured frequency without a
+QC check attached.
+
+Scope note: chemical/gas inventory deduction for sub-batches reuses the
+exact same logic Add Test Record already uses for single samples (driven by
+No. of Field Samples) — no separate/duplicate inventory code was written.
 
 ## Custom Report Generator (added)
 
@@ -107,3 +132,15 @@ file needs to be opened/edited — much cheaper than re-processing the whole
   React) that assembles the full printable HTML; `printOfficialReport()`
   opens it in a new window and calls `window.print()`, the same pattern
   `printLabel()` in `10-inventory-logic.js` already used for bottle labels.
+- Step 1 has a "Quick-select by original receiving batch" dropdown — one
+  click selects every sample sharing a `batchRef`, regardless of which
+  sub-batch(es) actually tested them.
+
+## Manual Batch Registration
+
+Samples tab → "Register Batch" (next to "Register New Sample"): enter
+shared info once (client, matrix, district/upazila/union, dates, requested
+tests), then add repeatable rows for only what differs per sample
+(Village/Ward, Caretaker Name, Sample Source). Creates one individual
+Sample per row, all sharing a `batchRef`. Alternative to the Excel manifest
+upload for smaller batches typed directly in the browser.

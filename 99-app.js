@@ -79,6 +79,7 @@ function LabApp({
   const [gasList, setGasList] = useState([]);
   const [testTypes, setTestTypes] = useState([]);
   const [testRecords, setTestRecords] = useState([]);
+  const [subBatches, setSubBatches] = useState([]);
   const [toast, setToast] = useState(null);
   const [editingRecord, setEditingRecord] = useState(null);
   const [showBackendSettings, setShowBackendSettings] = useState(false);
@@ -123,6 +124,7 @@ function LabApp({
       ...t
     })));
     setTestRecords(loadKey("testRecords", []));
+    setSubBatches(loadKey("subBatches", []));
     setLoaded(true);
   }, []);
   useEffect(() => {
@@ -146,6 +148,9 @@ function LabApp({
   useEffect(() => {
     if (loaded) saveKey("testRecords", testRecords);
   }, [testRecords, loaded]);
+  useEffect(() => {
+    if (loaded) saveKey("subBatches", subBatches);
+  }, [subBatches, loaded]);
   const notify = useCallback((msg, tone = "ok") => {
     setToast({
       msg,
@@ -311,10 +316,6 @@ function LabApp({
     k: "qc",
     label: "QC",
     icon: "chart"
-  }, {
-    k: "testRuns",
-    label: "Test Runs",
-    icon: "flask"
   }].map(t => /*#__PURE__*/React.createElement("button", {
     key: t.k,
     onClick: () => {
@@ -349,6 +350,9 @@ function LabApp({
     setSamples: setSamples,
     testTypes: testTypes,
     testRecords: testRecords,
+    subBatches: subBatches,
+    setSubBatches: setSubBatches,
+    equipment: equipment,
     users: users,
     session: session,
     notify: notify
@@ -397,6 +401,8 @@ function LabApp({
     setTestRecords: setTestRecords,
     samples: samples,
     setSamples: setSamples,
+    subBatches: subBatches,
+    setSubBatches: setSubBatches,
     notify: notify,
     editingRecord: editingRecord,
     onDoneEditing: () => setEditingRecord(null),
@@ -429,14 +435,6 @@ function LabApp({
   }), tab === "qc" && /*#__PURE__*/React.createElement(QcModuleTab, {
     testTypes: testTypes,
     testRecords: testRecords
-  }), tab === "testRuns" && /*#__PURE__*/React.createElement(TestRunTab, {
-    testTypes: testTypes,
-    samples: samples,
-    setSamples: setSamples,
-    testRecords: testRecords,
-    setTestRecords: setTestRecords,
-    equipment: equipment,
-    notify: notify
   })), showBackendSettings && /*#__PURE__*/React.createElement(BackendSettingsModal, {
     notify: notify,
     onClose: () => setShowBackendSettings(false)
