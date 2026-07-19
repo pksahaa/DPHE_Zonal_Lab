@@ -311,6 +311,10 @@ function LabApp({
     k: "qc",
     label: "QC",
     icon: "chart"
+  }, {
+    k: "testRuns",
+    label: "Test Runs",
+    icon: "flask"
   }].map(t => /*#__PURE__*/React.createElement("button", {
     key: t.k,
     onClick: () => {
@@ -418,10 +422,21 @@ function LabApp({
     gasList: gasList,
     testTypes: testTypes,
     testRecords: testRecords,
+    samples: samples,
+    users: users,
+    notify: notify,
     onLoadDemoData: loadDemoReportData
   }), tab === "qc" && /*#__PURE__*/React.createElement(QcModuleTab, {
     testTypes: testTypes,
     testRecords: testRecords
+  }), tab === "testRuns" && /*#__PURE__*/React.createElement(TestRunTab, {
+    testTypes: testTypes,
+    samples: samples,
+    setSamples: setSamples,
+    testRecords: testRecords,
+    setTestRecords: setTestRecords,
+    equipment: equipment,
+    notify: notify
   })), showBackendSettings && /*#__PURE__*/React.createElement(BackendSettingsModal, {
     notify: notify,
     onClose: () => setShowBackendSettings(false)

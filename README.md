@@ -27,8 +27,10 @@ style.css                           # global styles
 14b-analytics-pages-1.js            # Executive/Insights/Test/Tech/Revenue/Chemical pages
 14c-analytics-pages-2.js            # Inventory/Glassware/Gas/Equipment/Trends/Forecast pages
 15-qc-module.js                     # Westgard rules, control charts, QcModuleTab
+16-test-run.js                      # NEW: Test Run (batch testing, shared QC, per-sample results)
+17-report-generator.js              # NEW: Custom Report Generator (official DPHE report format)
 20-sample-model.js                  # sample lifecycle/status logic
-21-sample-ui.js                     # SamplesTab, SampleDetail, forms (+ QC warning banner)
+21-sample-ui.js                     # SamplesTab, SampleDetail, forms (+ QC warning banner, bulk manifest upload)
 30-dashboard.js                     # DashboardTab, SampleKpiStrip
 40-auth-ui.js                       # LoginPage
 99-app.js                           # AppRoot, LabApp, ReactDOM.render
@@ -73,3 +75,35 @@ file needs to be opened/edited — much cheaper than re-processing the whole
 - `getQcStatusForMethod(testTypeId, testTypes, testRecords)` is the shared
   helper — used by both the QC Module tab and the Sample review/approval
   banner in `SampleDetail` (`21-sample-ui.js`) so both stay in sync.
+
+## Test Run Module (added)
+
+- For methods where 15-20+ field samples run together, sharing one QC check.
+- One Test Run = ONE test record with `memberSampleIds` (which samples) and
+  `memberResults` (per-sample computed result arrays) — not N separate
+  records. `getSampleResultForTest(sample, testTypeId, testRecords)` in
+  `16-test-run.js` is the shared lookup that works for both a Test Run's
+  `memberResults` and a regular single Add Test Record entry — used by the
+  Report Generator to pull values regardless of how a sample was tested.
+- QC Frequency (Test Types → QC Acceptance Rules → "QC Frequency") gives a
+  soft warning if a run's sample count exceeds it without a QC check.
+- Scope note: Test Run does not yet deduct chemical/gas inventory per run —
+  only Add Test Record does. Add inventory deduction to Test Run later if
+  needed, without changing the `memberResults` data shape.
+
+## Custom Report Generator (added)
+
+- Reports tab → "Official Report" group → "Custom Report Generator".
+- Three layers of data, each set in a different place:
+  - **Lab Identity** (Settings → "Lab Identity" button, `01-data-service.js`):
+    office letterhead — set once per lab, reused on every report.
+  - **Per-Sample fields** (Sample registration / bulk manifest,
+    `20-sample-model.js` / `21-sample-ui.js`): District, Upazila, Union,
+    Village, Caretaker Name, Sample Source — captured once per sample.
+  - **Per-Report memo fields** (entered in the generator itself): Memo No,
+    Ref Memo No/Date, Date of Testing, Receiving Date, etc. — different for
+    every report/memo.
+- `buildReportHtml()` in `17-report-generator.js` is a pure function (no
+  React) that assembles the full printable HTML; `printOfficialReport()`
+  opens it in a new window and calls `window.print()`, the same pattern
+  `printLabel()` in `10-inventory-logic.js` already used for bottle labels.

@@ -1057,6 +1057,7 @@ function TestTypeBuilder({
   const [dilutionGasRequirements, setDilutionGasRequirements] = useState(initial?.dilutionGasRequirements || []);
   const [resultParameters, setResultParameters] = useState(initial?.resultParameters || []);
   const [qcRules, setQcRules] = useState(initial?.qcRules || []);
+  const [qcFrequency, setQcFrequency] = useState(initial?.qcFrequency ? String(initial.qcFrequency) : "");
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const chemOptions = {
     raw: chemicals,
@@ -1097,7 +1098,8 @@ function TestTypeBuilder({
       dilutionChemicalRequirements: dilutionEnabled ? dilutionChemicalRequirements : [],
       dilutionGasRequirements: dilutionEnabled ? dilutionGasRequirements : [],
       resultParameters,
-      qcRules
+      qcRules,
+      qcFrequency: qcFrequency === "" ? null : Number(qcFrequency)
     });
   }
   return /*#__PURE__*/React.createElement("div", {
@@ -1267,7 +1269,18 @@ function TestTypeBuilder({
   }, /*#__PURE__*/React.createElement(QcRuleEditor, {
     qcRules: qcRules,
     setQcRules: setQcRules
-  })), /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "mt-3 pt-3",
+    style: {
+      borderTop: `1px solid ${C.border}`
+    }
+  }, /*#__PURE__*/React.createElement(TextField, {
+    label: "QC Frequency — warn if a Test Run exceeds this many samples without a QC check",
+    type: "number",
+    value: qcFrequency,
+    onChange: e => setQcFrequency(e.target.value),
+    placeholder: "e.g. 15 (leave blank to disable this reminder)"
+  }))), /*#__PURE__*/React.createElement("div", {
     className: "flex justify-end gap-2 mt-2"
   }, /*#__PURE__*/React.createElement(Button, {
     variant: "outline",
