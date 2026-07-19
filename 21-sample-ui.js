@@ -857,6 +857,7 @@ function SamplesTab({
   const [sampleSubTab, setSampleSubTab] = React.useState("samples");
   const [showForm, setShowForm] = React.useState(false);
   const [showBatchForm, setShowBatchForm] = React.useState(false);
+  const bulkUploadInputRef = React.useRef(null);
   const [openId, setOpenId] = React.useState(null);
   const [statusFilter, setStatusFilter] = React.useState("");
   const [q, setQ] = React.useState("");
@@ -999,20 +1000,23 @@ function SamplesTab({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "download",
     size: 14
-  }), "Download Manifest Template"), perms.canRegister && /*#__PURE__*/React.createElement("label", {
-    className: "cursor-pointer"
-  }, /*#__PURE__*/React.createElement("input", {
+  }), "Download Manifest Template"), perms.canRegister && /*#__PURE__*/React.createElement("input", {
+    ref: bulkUploadInputRef,
     type: "file",
     accept: ".xlsx,.xls,.csv",
     className: "hidden",
-    onChange: e => e.target.files[0] && importSamples(e.target.files[0])
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement(Button, {
+    onChange: e => {
+      if (e.target.files[0]) importSamples(e.target.files[0]);
+      e.target.value = "";
+    }
+  }), perms.canRegister && /*#__PURE__*/React.createElement(Button, {
     variant: "outline",
-    size: "sm"
+    size: "sm",
+    onClick: () => bulkUploadInputRef.current && bulkUploadInputRef.current.click()
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "upload",
     size: 14
-  }), "Bulk Upload Samples")))), /*#__PURE__*/React.createElement("div", {
+  }), "Bulk Upload Samples")), /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-4 gap-3 mb-4"
   }, /*#__PURE__*/React.createElement(StatCard, {
     label: "Active Samples",

@@ -21,6 +21,9 @@ function InventoryTab({
   notify
 }) {
   const [showAddChemical, setShowAddChemical] = useState(false);
+  const chemUploadRef = useRef(null);
+  const glassUploadRef = useRef(null);
+  const equipUploadRef = useRef(null);
   const [showMasterList, setShowMasterList] = useState(false);
   const [editChemicalFor, setEditChemicalFor] = useState(null);
   const [deleteChemicalFor, setDeleteChemicalFor] = useState(null);
@@ -221,20 +224,23 @@ function InventoryTab({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "download",
     size: 14
-  }), "Download Template"), /*#__PURE__*/React.createElement("label", {
-    className: "cursor-pointer"
-  }, /*#__PURE__*/React.createElement("input", {
+  }), "Download Template"), /*#__PURE__*/React.createElement("input", {
+    ref: chemUploadRef,
     type: "file",
     accept: ".xlsx,.xls,.csv",
     className: "hidden",
-    onChange: e => e.target.files[0] && importChemicals(e.target.files[0])
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement(Button, {
+    onChange: e => {
+      if (e.target.files[0]) importChemicals(e.target.files[0]);
+      e.target.value = "";
+    }
+  }), /*#__PURE__*/React.createElement(Button, {
     variant: "outline",
-    size: "sm"
+    size: "sm",
+    onClick: () => chemUploadRef.current && chemUploadRef.current.click()
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "upload",
     size: 14
-  }), "Import from Excel"))), /*#__PURE__*/React.createElement(Button, {
+  }), "Import from Excel"), /*#__PURE__*/React.createElement(Button, {
     variant: "outline",
     size: "sm",
     onClick: () => setShowMasterList(true)
@@ -520,20 +526,23 @@ function InventoryTab({
     }, /*#__PURE__*/React.createElement(Icon, {
       name: "download",
       size: 13
-    }), "Template"), /*#__PURE__*/React.createElement("label", {
-      className: "cursor-pointer"
-    }, /*#__PURE__*/React.createElement("input", {
+    }), "Template"), /*#__PURE__*/React.createElement("input", {
+      ref: glassUploadRef,
       type: "file",
       accept: ".xlsx,.xls,.csv",
       className: "hidden",
-      onChange: e => e.target.files[0] && importGlassware(e.target.files[0])
-    }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement(Button, {
+      onChange: e => {
+        if (e.target.files[0]) importGlassware(e.target.files[0]);
+        e.target.value = "";
+      }
+    }), /*#__PURE__*/React.createElement(Button, {
       variant: "outline",
-      size: "sm"
+      size: "sm",
+      onClick: () => glassUploadRef.current && glassUploadRef.current.click()
     }, /*#__PURE__*/React.createElement(Icon, {
       name: "upload",
       size: 13
-    }), "Import"))), /*#__PURE__*/React.createElement(Button, {
+    }), "Import"), /*#__PURE__*/React.createElement(Button, {
       size: "sm",
       onClick: () => setShowAddGlass(true)
     }, /*#__PURE__*/React.createElement(Icon, {
@@ -730,20 +739,23 @@ function InventoryTab({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "download",
     size: 14
-  }), "Download Template"), /*#__PURE__*/React.createElement("label", {
-    className: "cursor-pointer"
-  }, /*#__PURE__*/React.createElement("input", {
+  }), "Download Template"), /*#__PURE__*/React.createElement("input", {
+    ref: equipUploadRef,
     type: "file",
     accept: ".xlsx,.xls,.csv",
     className: "hidden",
-    onChange: e => e.target.files[0] && importEquipment(e.target.files[0])
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement(Button, {
+    onChange: e => {
+      if (e.target.files[0]) importEquipment(e.target.files[0]);
+      e.target.value = "";
+    }
+  }), /*#__PURE__*/React.createElement(Button, {
     variant: "outline",
-    size: "sm"
+    size: "sm",
+    onClick: () => equipUploadRef.current && equipUploadRef.current.click()
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "upload",
     size: 14
-  }), "Import from Excel"))), /*#__PURE__*/React.createElement(Button, {
+  }), "Import from Excel"), /*#__PURE__*/React.createElement(Button, {
     size: "sm",
     onClick: () => setShowAddEquip(true)
   }, /*#__PURE__*/React.createElement(Icon, {
