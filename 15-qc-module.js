@@ -140,12 +140,11 @@ function evaluateWestgard(points, mean, sd) {
 // combination that has at least one QC-flagged test record.
 function collectQcGroups(testTypes, testRecords) {
   const byKey = new Map();
-  (testRecords || []).forEach(r => {
-    if (!r.qcCheck || r.qcCheck.value == null || Number.isNaN(Number(r.qcCheck.value))) return;
-    const key = `${r.testTypeId}::${r.qcCheck.qcType}::${r.qcCheck.ruleId || ""}`;
+  function ensureGroup(r, ruleIdOverride) {
+    const key = `${r.testTypeId}::${r.qcCheck.qcType}::${ruleIdOverride ?? r.qcCheck.ruleId ?? ""}`;
     if (!byKey.has(key)) {
       const testType = (testTypes || []).find(t => t.id === r.testTypeId) || null;
-      const rule = testType?.qcRules?.find(q => q.id === r.qcCheck.ruleId) || testType?.qcRules?.find(q => q.qcType === r.qcCheck.qcType) || null;
+      const rule = testType?.qcRules?.find(q => q.id === (ruleIdOverride ?? r.qcCheck.ruleId)) || testType?.qcRules?.find(q => q.qcType === r.qcCheck.qcType) || null;
       byKey.set(key, {
         key,
         testTypeId: r.testTypeId,
@@ -158,7 +157,31 @@ function collectQcGroups(testTypes, testRecords) {
         points: []
       });
     }
-    byKey.get(key).points.push({
+    return byKey.get(key);
+  }
+  (testRecords || []).forEach(r => {
+    if (!r.qcCheck) return;
+    if (r.qcCheck.qcType === "bracketing") {
+      // Bracketing/interspersed QC: every checkpoint in the run is its own
+      // control-chart point (that's the whole idea — several checks spread
+      // across one run, each plotted and Westgard-evaluated on the series).
+      (r.qcCheck.points || []).forEach((p, i) => {
+        if (p.value == null || Number.isNaN(Number(p.value))) return;
+        const g = ensureGroup(r, r.qcCheck.ruleId);
+        g.points.push({
+          value: Number(p.value),
+          date: r.date,
+          recordId: r.id,
+          pass: p.pass,
+          tester: r.tester,
+          checkpointLabel: p.label
+        });
+      });
+      return;
+    }
+    if (r.qcCheck.value == null || Number.isNaN(Number(r.qcCheck.value))) return;
+    const g = ensureGroup(r);
+    g.points.push({
       value: Number(r.qcCheck.value),
       date: r.date,
       recordId: r.id,

@@ -905,7 +905,8 @@ function QcRuleEditor({
       unit: "",
       notes: "",
       targetMean: null,
-      targetSD: null
+      targetSD: null,
+      bracketingInterval: null
     }]);
   }
   function update(id, patch) {
@@ -1008,7 +1009,15 @@ function QcRuleEditor({
       targetSD: e.target.value === "" ? null : Number(e.target.value)
     }),
     placeholder: "leave blank to auto-calculate"
-  })), /*#__PURE__*/React.createElement("div", {
+  })), r.qcType === "bracketing" && /*#__PURE__*/React.createElement(TextField, {
+    label: "Bracketing Interval (insert a QC checkpoint every N field samples)",
+    type: "number",
+    value: r.bracketingInterval ?? "",
+    onChange: e => update(r.id, {
+      bracketingInterval: e.target.value === "" ? null : Number(e.target.value)
+    }),
+    placeholder: "e.g. 10 — also brackets the very first and last sample"
+  }), /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] mt-1",
     style: {
       color: C.muted

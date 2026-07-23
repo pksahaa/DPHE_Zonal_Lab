@@ -414,6 +414,9 @@ function LabApp({
     setChemicals: setChemicals,
     gasList: gasList,
     setGasList: setGasList,
+    samples: samples,
+    setSamples: setSamples,
+    testTypes: testTypes,
     notify: notify,
     onEditRecord: r => {
       setEditingRecord(r);

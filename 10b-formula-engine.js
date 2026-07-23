@@ -196,6 +196,9 @@ const QC_RULE_TYPES = [{
   value: "calibration",
   label: "Calibration Curve (R²)"
 }, {
+  value: "bracketing",
+  label: "Bracketing / Interspersed QC"
+}, {
   value: "other",
   label: "Other"
 }];
