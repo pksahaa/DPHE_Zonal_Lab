@@ -39,6 +39,35 @@ function PriorityBadge({
   }, priority);
 }
 
+// ---- compact "N status" chip strip shown on a collapsed/expanded batch header row ----
+function BatchStatusSummary({
+  members
+}) {
+  const toneMap = {
+    info: C.teal,
+    warn: C.warn,
+    ok: C.ok
+  };
+  const counts = {};
+  members.forEach(s => {
+    counts[s.status] = (counts[s.status] || 0) + 1;
+  });
+  const order = Object.keys(counts).sort((a, b) => SAMPLE_STATUSES.findIndex(x => x.key === a) - SAMPLE_STATUSES.findIndex(x => x.key === b));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-1 flex-wrap"
+  }, order.map(statusKey => {
+    const meta = sampleStatusMeta(statusKey);
+    return /*#__PURE__*/React.createElement("span", {
+      key: statusKey,
+      className: "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold",
+      style: {
+        background: `${toneMap[meta.color]}1A`,
+        color: toneMap[meta.color]
+      }
+    }, counts[statusKey], " ", meta.label);
+  }));
+}
+
 // ---- Registration form ----
 function SampleRegistrationForm({
   testTypes,
@@ -841,6 +870,70 @@ function BatchRegistrationForm({
   }), "Register ", rows.filter(r => r.village.trim() || r.caretakerName.trim()).length, " Sample(s)")));
 }
 
+// ---- shown right after a bulk manifest file is picked: choose which tests
+// apply to every row in that file (checkbox multi-select, same pattern as
+// Register New Sample / Register Batch — no more typing test names) ----
+function ImportTestPickerModal({
+  testTypes,
+  rowCount,
+  onConfirm,
+  onClose
+}) {
+  const [selectedTests, setSelectedTests] = React.useState([]);
+  const [err, setErr] = React.useState("");
+  function toggleTest(t) {
+    setSelectedTests(prev => prev.some(x => x.testTypeId === t.id) ? prev.filter(x => x.testTypeId !== t.id) : [...prev, {
+      testTypeId: t.id,
+      testTypeName: t.name
+    }]);
+  }
+  function submit() {
+    if (!selectedTests.length) {
+      setErr("Select at least one requested test.");
+      return;
+    }
+    onConfirm(selectedTests);
+  }
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: `Requested Tests for ${rowCount} Imported Sample(s)`,
+    onClose: onClose
+  }, err && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs p-2 rounded mb-3",
+    style: {
+      background: C.warnBg,
+      color: C.warn
+    }
+  }, err), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs mb-2",
+    style: {
+      color: C.muted
+    }
+  }, "These tests will be applied to every sample in this upload (same as one physical manifest sheet requesting one panel)."), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-2 mb-4"
+  }, testTypes.map(t => /*#__PURE__*/React.createElement("label", {
+    key: t.id,
+    className: "flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer",
+    style: {
+      border: `1px solid ${selectedTests.some(x => x.testTypeId === t.id) ? C.teal : C.border}`,
+      background: selectedTests.some(x => x.testTypeId === t.id) ? `${C.teal}14` : "transparent"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: selectedTests.some(x => x.testTypeId === t.id),
+    onChange: () => toggleTest(t)
+  }), t.name))), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end gap-2"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "outline",
+    onClick: onClose
+  }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
+    onClick: submit
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "check",
+    size: 13
+  }), "Import ", rowCount, " Sample(s)")));
+}
+
 // ---- main tab: list + registration + detail ----
 function SamplesTab({
   samples,
@@ -861,6 +954,9 @@ function SamplesTab({
   const [openId, setOpenId] = React.useState(null);
   const [statusFilter, setStatusFilter] = React.useState("");
   const [q, setQ] = React.useState("");
+  const [expandedBatches, setExpandedBatches] = React.useState(new Set());
+  const [pendingImportRows, setPendingImportRows] = React.useState(null);
+  const [pendingImportSkipped, setPendingImportSkipped] = React.useState(0);
   const perms = permissionsFor(session.role);
   const openSample = samples.find(s => s.id === openId) || null;
   const filtered = samples.filter(s => {
@@ -868,59 +964,90 @@ function SamplesTab({
     if (q && !`${s.sampleCode} ${s.clientName} ${s.siteLocation}`.toLowerCase().includes(q.toLowerCase())) return false;
     return true;
   }).sort((a, b) => a.createdAt < b.createdAt ? 1 : -1);
+  function toggleBatchExpand(ref) {
+    setExpandedBatches(prev => {
+      const next = new Set(prev);
+      if (next.has(ref)) next.delete(ref);else next.add(ref);
+      return next;
+    });
+  }
+  // Group filtered samples by batchRef (bulk upload / Register Batch) while
+  // keeping individually-registered samples (no batchRef) as plain rows, all
+  // in original sort order (position = first/most-recent member encountered).
+  const batchGroups = {};
+  filtered.forEach(s => {
+    if (s.batchRef) (batchGroups[s.batchRef] = batchGroups[s.batchRef] || []).push(s);
+  });
+  const listItems = [];
+  const seenBatchRefs = new Set();
+  filtered.forEach(s => {
+    if (s.batchRef) {
+      if (seenBatchRefs.has(s.batchRef)) return;
+      seenBatchRefs.add(s.batchRef);
+      listItems.push({
+        type: "batch",
+        batchRef: s.batchRef,
+        members: batchGroups[s.batchRef]
+      });
+    } else {
+      listItems.push({
+        type: "single",
+        sample: s
+      });
+    }
+  });
   async function handleCreate(fields) {
     const sample = createSample(fields, samples, session);
     await setSamples(prev => [sample, ...prev], sample);
     setShowForm(false);
     notify?.(`${sample.sampleCode} registered.`, "ok");
   }
-  async function importSamples(file) {
-    readWorkbook(file, async (err, rows) => {
+  // Step 1: just read the workbook and stage the rows — test selection now
+  // happens via a checkbox window (same UX as Register Sample/Batch) instead
+  // of a typed "RequestedTests" column.
+  function importSamples(file) {
+    readWorkbook(file, (err, rows) => {
       if (err) return notify("Could not read Excel file", "warn");
-      let runningSamples = [...samples];
-      let count = 0,
-        skipped = 0;
-      const unmatchedTests = new Set();
-      for (const row of rows) {
-        const clientName = String(row.ClientName || row["Client Name"] || "").trim();
-        const siteLocation = String(row.SiteLocation || row["Site Location"] || "").trim();
-        if (!clientName || !siteLocation) {
-          skipped++;
-          continue;
-        }
-        const testNames = String(row.RequestedTests || row["Requested Tests"] || "").split(",").map(s => s.trim()).filter(Boolean);
-        testNames.forEach(n => {
-          if (!testTypes.some(t => t.name.toLowerCase() === n.toLowerCase())) unmatchedTests.add(n);
-        });
-        const requestedTests = testNames.map(n => testTypes.find(t => t.name.toLowerCase() === n.toLowerCase())).filter(Boolean).map(t => ({
-          testTypeId: t.id,
-          testTypeName: t.name
-        }));
-        const sample = createSample({
-          clientName,
-          siteLocation,
-          district: String(row.District || "").trim(),
-          upazila: String(row.Upazila || row["Upazila/City Corporation"] || "").trim(),
-          union: String(row.Union || row["Union/Pourashava"] || "").trim(),
-          village: String(row.Village || row["Village/Ward"] || "").trim(),
-          caretakerName: String(row.CaretakerName || row["Caretaker Name"] || "").trim(),
-          sampleSourceId: String(row.SampleSource || row["Sample Source"] || "").trim(),
-          batchRef: String(row.BatchRef || row["Batch Ref"] || "").trim(),
-          matrix: String(row.Matrix || "Drinking Water").trim(),
-          collectionDate: String(row.CollectionDate || todayStr()),
-          collectedBy: String(row.CollectedBy || "").trim(),
-          receivedDate: String(row.ReceivedDate || todayStr()),
-          priority: String(row.Priority || "Routine").trim(),
-          numberOfSamples: 1,
-          requestedTests,
-          notes: String(row.Notes || "").trim()
-        }, runningSamples, session);
-        runningSamples = [...runningSamples, sample];
-        await setSamples(prev => [...prev, sample], sample);
-        count++;
-      }
-      notify(`Imported ${count} sample(s) from manifest${skipped ? `, skipped ${skipped} row(s) missing Client Name/Site Location` : ""}.${unmatchedTests.size ? ` Note: these test names didn't match any Test Type and were ignored: ${Array.from(unmatchedTests).join(", ")}.` : ""}`, count ? "ok" : "warn");
+      const usableRows = rows.filter(row => String(row.ClientName || row["Client Name"] || "").trim() && String(row.SiteLocation || row["Site Location"] || "").trim());
+      const skipped = rows.length - usableRows.length;
+      if (!usableRows.length) return notify("No usable rows found (need Client Name and Site Location in every row).", "warn");
+      setPendingImportRows(usableRows);
+      setPendingImportSkipped(skipped);
     });
+  }
+  // Step 2: after the tester picks tests in ImportTestPickerModal, actually
+  // create the samples — every row gets the same requestedTests, same as one
+  // physical manifest sheet requesting the same panel for the whole batch.
+  async function confirmImportSamples(requestedTests) {
+    let runningSamples = [...samples];
+    let count = 0;
+    for (const row of pendingImportRows) {
+      const sample = createSample({
+        clientName: String(row.ClientName || row["Client Name"] || "").trim(),
+        siteLocation: String(row.SiteLocation || row["Site Location"] || "").trim(),
+        district: String(row.District || "").trim(),
+        upazila: String(row.Upazila || row["Upazila/City Corporation"] || "").trim(),
+        union: String(row.Union || row["Union/Pourashava"] || "").trim(),
+        village: String(row.Village || row["Village/Ward"] || "").trim(),
+        caretakerName: String(row.CaretakerName || row["Caretaker Name"] || "").trim(),
+        sampleSourceId: String(row.SampleSource || row["Sample Source"] || "").trim(),
+        batchRef: String(row.BatchRef || row["Batch Ref"] || "").trim(),
+        matrix: String(row.Matrix || "Drinking Water").trim(),
+        collectionDate: String(row.CollectionDate || todayStr()),
+        collectedBy: String(row.CollectedBy || "").trim(),
+        receivedDate: String(row.ReceivedDate || todayStr()),
+        priority: String(row.Priority || "Routine").trim(),
+        numberOfSamples: 1,
+        requestedTests,
+        notes: String(row.Notes || "").trim()
+      }, runningSamples, session);
+      runningSamples = [...runningSamples, sample];
+      await setSamples(prev => [...prev, sample], sample);
+      count++;
+    }
+    notify(`Imported ${count} sample(s) from manifest${pendingImportSkipped ? `, skipped ${pendingImportSkipped} row(s) missing Client Name/Site Location` : ""}.`, count ? "ok" : "warn");
+    setPendingImportRows(null);
+    setPendingImportSkipped(0);
   }
   async function handleUpdate(next) {
     await setSamples(prev => prev.map(s => s.id === next.id ? next : s), next);
@@ -944,6 +1071,57 @@ function SamplesTab({
     notify?.(`${count} sample(s) registered under batch ${shared.batchRef || "(no ref)"}.`, "ok");
   }
   const stats = sampleLifecycleStats(samples);
+  function renderSampleRow(s, indented) {
+    return /*#__PURE__*/React.createElement("tr", {
+      key: s.id,
+      className: "cursor-pointer",
+      style: {
+        borderTop: `1px solid ${C.border}`,
+        background: indented ? C.card : "transparent"
+      },
+      onClick: () => setOpenId(s.id)
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "px-3 py-2 font-medium",
+      style: {
+        color: C.ink,
+        paddingLeft: indented ? 28 : undefined
+      }
+    }, s.sampleCode), /*#__PURE__*/React.createElement("td", {
+      className: "px-3 py-2",
+      style: {
+        color: C.ink
+      }
+    }, s.clientName), /*#__PURE__*/React.createElement("td", {
+      className: "px-3 py-2",
+      style: {
+        color: C.muted
+      }
+    }, s.siteLocation), /*#__PURE__*/React.createElement("td", {
+      className: "px-3 py-2",
+      style: {
+        color: C.muted
+      }
+    }, s.matrix), /*#__PURE__*/React.createElement("td", {
+      className: "px-3 py-2"
+    }, /*#__PURE__*/React.createElement(PriorityBadge, {
+      priority: s.priority
+    })), /*#__PURE__*/React.createElement("td", {
+      className: "px-3 py-2"
+    }, /*#__PURE__*/React.createElement(SampleStatusBadge, {
+      status: s.status
+    })), /*#__PURE__*/React.createElement("td", {
+      className: "px-3 py-2",
+      style: {
+        color: C.muted
+      }
+    }, s.assignedTo || "—"), /*#__PURE__*/React.createElement("td", {
+      className: "px-3 py-2 text-right"
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: "chevronRight",
+      size: 14,
+      color: C.muted
+    })));
+  }
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "flex gap-2 mb-4 flex-wrap"
   }, [{
@@ -952,7 +1130,7 @@ function SamplesTab({
     icon: "beaker"
   }, {
     k: "subBatches",
-    label: "Sub-Batches",
+    label: "Create and Edit Sub-Batches",
     icon: "flask"
   }].map(t => /*#__PURE__*/React.createElement("button", {
     key: t.k,
@@ -1080,53 +1258,47 @@ function SamplesTab({
     style: {
       color: C.muted
     }
-  }, h)))), /*#__PURE__*/React.createElement("tbody", null, filtered.map(s => /*#__PURE__*/React.createElement("tr", {
-    key: s.id,
-    className: "cursor-pointer",
-    style: {
-      borderTop: `1px solid ${C.border}`
-    },
-    onClick: () => setOpenId(s.id)
-  }, /*#__PURE__*/React.createElement("td", {
-    className: "px-3 py-2 font-medium",
-    style: {
-      color: C.ink
-    }
-  }, s.sampleCode), /*#__PURE__*/React.createElement("td", {
-    className: "px-3 py-2",
-    style: {
-      color: C.ink
-    }
-  }, s.clientName), /*#__PURE__*/React.createElement("td", {
-    className: "px-3 py-2",
-    style: {
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, listItems.map(item => {
+    if (item.type === "single") return renderSampleRow(item.sample, false);
+    const isOpen = expandedBatches.has(item.batchRef);
+    return /*#__PURE__*/React.createElement(React.Fragment, {
+      key: "batch-" + item.batchRef
+    }, /*#__PURE__*/React.createElement("tr", {
+      className: "cursor-pointer",
+      style: {
+        borderTop: `1px solid ${C.border}`,
+        background: C.bg
+      },
+      onClick: () => toggleBatchExpand(item.batchRef)
+    }, /*#__PURE__*/React.createElement("td", {
+      colSpan: 8,
+      className: "px-3 py-2"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-2 flex-wrap"
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: isOpen ? "chevronDown" : "chevronRight",
+      size: 14,
       color: C.muted
-    }
-  }, s.siteLocation), /*#__PURE__*/React.createElement("td", {
-    className: "px-3 py-2",
-    style: {
-      color: C.muted
-    }
-  }, s.matrix), /*#__PURE__*/React.createElement("td", {
-    className: "px-3 py-2"
-  }, /*#__PURE__*/React.createElement(PriorityBadge, {
-    priority: s.priority
-  })), /*#__PURE__*/React.createElement("td", {
-    className: "px-3 py-2"
-  }, /*#__PURE__*/React.createElement(SampleStatusBadge, {
-    status: s.status
-  })), /*#__PURE__*/React.createElement("td", {
-    className: "px-3 py-2",
-    style: {
-      color: C.muted
-    }
-  }, s.assignedTo || "—"), /*#__PURE__*/React.createElement("td", {
-    className: "px-3 py-2 text-right"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "chevronRight",
-    size: 14,
-    color: C.muted
-  })))), !filtered.length && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    }), /*#__PURE__*/React.createElement(Icon, {
+      name: "clipboard",
+      size: 14,
+      color: C.teal
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "text-sm font-semibold",
+      style: {
+        color: C.ink
+      }
+    }, "Batch: ", item.batchRef), /*#__PURE__*/React.createElement("span", {
+      className: "text-xs",
+      style: {
+        color: C.muted
+      }
+    }, item.members.length, " sample(s)"), /*#__PURE__*/React.createElement("span", {
+      className: "flex-1"
+    }), /*#__PURE__*/React.createElement(BatchStatusSummary, {
+      members: item.members
+    })))), isOpen && item.members.map(s => renderSampleRow(s, true)));
+  }), !listItems.length && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
     colSpan: 8,
     className: "px-3 py-8 text-center text-sm",
     style: {
@@ -1147,6 +1319,14 @@ function SamplesTab({
     testTypes: testTypes,
     onCreate: handleBatchCreate,
     onClose: () => setShowBatchForm(false)
+  }), pendingImportRows && /*#__PURE__*/React.createElement(ImportTestPickerModal, {
+    testTypes: testTypes,
+    rowCount: pendingImportRows.length,
+    onConfirm: confirmImportSamples,
+    onClose: () => {
+      setPendingImportRows(null);
+      setPendingImportSkipped(0);
+    }
   }), openSample && /*#__PURE__*/React.createElement(SampleDetail, {
     sample: openSample,
     users: users,
@@ -1184,13 +1364,66 @@ function SubBatchBuilder({
   notify
 }) {
   const [selectedTestId, setSelectedTestId] = React.useState("");
+  const [selectedBatchRefs, setSelectedBatchRefs] = React.useState([]);
   const [selectedSampleIds, setSelectedSampleIds] = React.useState([]);
   const [label, setLabel] = React.useState("");
   const [assignedTester, setAssignedTester] = React.useState("");
-  const eligibleSamples = selectedTestId ? samples.filter(s => SUBBATCH_ELIGIBLE_STATUSES.includes(s.status) && s.requestedTests.some(rt => rt.testTypeId === selectedTestId) && !subBatches.some(sb => sb.status === "pending" && sb.memberSampleIds.includes(s.id))) : [];
+  const [autoCount, setAutoCount] = React.useState("");
+  const [editingSubBatchId, setEditingSubBatchId] = React.useState(null);
+  const [deleteSubBatchId, setDeleteSubBatchId] = React.useState(null);
+
+  // Samples eligible for the chosen Test Type — ignoring the sub-batch's own
+  // current membership while it's being edited (otherwise its members would
+  // wrongly look "already used" and disappear from the picker).
+  const eligibleForTest = selectedTestId ? samples.filter(s => SUBBATCH_ELIGIBLE_STATUSES.includes(s.status) && s.requestedTests.some(rt => rt.testTypeId === selectedTestId) && !subBatches.some(sb => sb.status === "pending" && sb.id !== editingSubBatchId && sb.memberSampleIds.includes(s.id))) : [];
+  // Registration batches (BatchRef) available to filter by, scoped to the
+  // Test Type above — a batch can carry several test types, so this narrows
+  // to only batches that actually have samples requesting THIS test.
+  const batchRefOptions = Array.from(new Set(eligibleForTest.map(s => s.batchRef).filter(Boolean))).sort();
+  const eligibleSamples = selectedBatchRefs.length ? eligibleForTest.filter(s => selectedBatchRefs.includes(s.batchRef)) : eligibleForTest;
   const distinctBatchRefs = Array.from(new Set(samples.filter(s => selectedSampleIds.includes(s.id)).map(s => s.batchRef).filter(Boolean)));
   function toggleMember(id) {
     setSelectedSampleIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+  function toggleBatchRefFilter(ref) {
+    setSelectedBatchRefs(prev => prev.includes(ref) ? prev.filter(x => x !== ref) : [...prev, ref]);
+  }
+  // "No. of samples" auto-pick — takes that many not-yet-selected eligible
+  // samples (in list order). If fewer are available (odd/short batch), it
+  // takes all it can and tells the tester so the remainder can go in a
+  // separate sub-batch instead of silently under-filling.
+  function autoSelect() {
+    const n = parseInt(autoCount, 10);
+    if (!n || n <= 0) {
+      notify?.("Enter a valid number of samples first.", "warn");
+      return;
+    }
+    const notYetSelected = eligibleSamples.filter(s => !selectedSampleIds.includes(s.id));
+    const take = notYetSelected.slice(0, n).map(s => s.id);
+    setSelectedSampleIds(prev => [...prev, ...take]);
+    if (take.length < n) {
+      notify?.(`Only ${take.length} eligible sample(s) were available (asked for ${n}) — added all of them. Put the remainder in a second sub-batch.`, "warn");
+    } else {
+      notify?.(`Added ${take.length} sample(s).`, "ok");
+    }
+    setAutoCount("");
+  }
+  function resetForm() {
+    setSelectedTestId("");
+    setSelectedBatchRefs([]);
+    setSelectedSampleIds([]);
+    setLabel("");
+    setAssignedTester("");
+    setAutoCount("");
+    setEditingSubBatchId(null);
+  }
+  function startEdit(sb) {
+    setSelectedTestId(sb.testTypeId);
+    setSelectedBatchRefs([]);
+    setSelectedSampleIds(sb.memberSampleIds || []);
+    setLabel(sb.label);
+    setAssignedTester(sb.assignedTester || "");
+    setEditingSubBatchId(sb.id);
   }
   function createGroup() {
     if (!selectedTestId || selectedSampleIds.length === 0) {
@@ -1198,18 +1431,28 @@ function SubBatchBuilder({
       return;
     }
     const test = testTypes.find(t => t.id === selectedTestId);
-    const sb = createSubBatch({
-      label: label.trim(),
-      testTypeId: selectedTestId,
-      testTypeName: test?.name || "",
-      memberSampleIds: selectedSampleIds,
-      assignedTester
-    }, subBatches);
-    setSubBatches(prev => [sb, ...prev]);
-    notify?.(`${sb.label} created with ${selectedSampleIds.length} sample(s).`, "ok");
-    setSelectedSampleIds([]);
-    setLabel("");
-    setAssignedTester("");
+    if (editingSubBatchId) {
+      setSubBatches(prev => prev.map(sb => sb.id === editingSubBatchId ? {
+        ...sb,
+        label: label.trim() || sb.label,
+        testTypeId: selectedTestId,
+        testTypeName: test?.name || sb.testTypeName,
+        memberSampleIds: selectedSampleIds,
+        assignedTester
+      } : sb));
+      notify?.(`${label.trim() || "Sub-batch"} updated — now ${selectedSampleIds.length} sample(s).`, "ok");
+    } else {
+      const sb = createSubBatch({
+        label: label.trim(),
+        testTypeId: selectedTestId,
+        testTypeName: test?.name || "",
+        memberSampleIds: selectedSampleIds,
+        assignedTester
+      }, subBatches);
+      setSubBatches(prev => [sb, ...prev]);
+      notify?.(`${sb.label} created with ${selectedSampleIds.length} sample(s).`, "ok");
+    }
+    resetForm();
   }
   function updateAssignedTester(sbId, tester) {
     setSubBatches(prev => prev.map(sb => sb.id === sbId ? {
@@ -1217,16 +1460,13 @@ function SubBatchBuilder({
       assignedTester: tester
     } : sb));
   }
-  return /*#__PURE__*/React.createElement("div", {
-    className: "grid gap-4"
-  }, /*#__PURE__*/React.createElement(SectionCard, {
-    title: "Create a Sub-Batch",
-    subtitle: "Group pending samples requesting the same test into one batch — shares one QC check, tested together in Add Test Record.",
-    icon: /*#__PURE__*/React.createElement(Icon, {
-      name: "flask",
-      size: 15
-    })
-  }, /*#__PURE__*/React.createElement("div", {
+  function doDeleteSubBatch(sb) {
+    setSubBatches(prev => prev.filter(x => x.id !== sb.id));
+    setDeleteSubBatchId(null);
+    if (editingSubBatchId === sb.id) resetForm();
+    notify?.(`${sb.label} deleted.`, "ok");
+  }
+  const filterFields = /*#__PURE__*/React.createElement("div", {
     className: "grid gap-3",
     style: {
       gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))"
@@ -1237,6 +1477,7 @@ function SubBatchBuilder({
     value: selectedTestId,
     onChange: v => {
       setSelectedTestId(v);
+      setSelectedBatchRefs([]);
       setSelectedSampleIds([]);
     },
     options: testTypes.map(t => ({
@@ -1260,30 +1501,54 @@ function SubBatchBuilder({
       label: `${u.name} (${u.designation || u.role})`
     })),
     placeholder: "Unassigned"
-  })), !selectedTestId ? /*#__PURE__*/React.createElement("div", {
-    className: "text-xs p-3 rounded mt-3",
-    style: {
-      background: C.infoBg,
-      color: C.info
-    }
-  }, "Pick a Test Type to see eligible pending samples.") : eligibleSamples.length === 0 ? /*#__PURE__*/React.createElement("div", {
-    className: "text-xs p-3 rounded mt-3",
-    style: {
-      background: C.infoBg,
-      color: C.info
-    }
-  }, "No pending samples are requesting this test (or all are already in another pending sub-batch).") : /*#__PURE__*/React.createElement("div", {
-    className: "mt-3"
+  }));
+
+  const batchFilterBlock = batchRefOptions.length > 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "mb-3"
   }, /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-between mb-1.5"
+    className: "text-xs font-semibold mb-1.5",
+    style: {
+      color: C.ink
+    }
+  }, "Filter by Registration Batch (optional — pick one or more)"), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-2"
+  }, batchRefOptions.map(ref => /*#__PURE__*/React.createElement("label", {
+    key: ref,
+    className: "flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer",
+    style: {
+      border: `1px solid ${selectedBatchRefs.includes(ref) ? C.teal : C.border}`,
+      background: selectedBatchRefs.includes(ref) ? `${C.teal}14` : "transparent"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: selectedBatchRefs.includes(ref),
+    onChange: () => toggleBatchRefFilter(ref)
+  }), ref)))) : null;
+
+  const pickerHeaderRow = /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mb-1.5 flex-wrap gap-2"
   }, /*#__PURE__*/React.createElement("div", {
     className: "text-xs font-semibold",
     style: {
       color: C.ink
     }
   }, "Select Samples (", selectedSampleIds.length, " of ", eligibleSamples.length, ")"), /*#__PURE__*/React.createElement("div", {
-    className: "flex gap-2"
-  }, /*#__PURE__*/React.createElement(Button, {
+    className: "flex items-center gap-2 flex-wrap"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: 1,
+    placeholder: "No. of samples",
+    value: autoCount,
+    onChange: e => setAutoCount(e.target.value),
+    className: "border rounded px-2 py-1 text-xs w-28",
+    style: {
+      borderColor: C.border
+    }
+  }), /*#__PURE__*/React.createElement(Button, {
+    variant: "outline",
+    size: "sm",
+    onClick: autoSelect
+  }, "Auto-Select"), /*#__PURE__*/React.createElement(Button, {
     variant: "ghost",
     size: "sm",
     onClick: () => setSelectedSampleIds(eligibleSamples.map(s => s.id))
@@ -1291,7 +1556,9 @@ function SubBatchBuilder({
     variant: "ghost",
     size: "sm",
     onClick: () => setSelectedSampleIds([])
-  }, "Clear"))), /*#__PURE__*/React.createElement("div", {
+  }, "Clear")));
+
+  const pickerListBox = /*#__PURE__*/React.createElement("div", {
     className: "grid gap-1 max-h-56 overflow-y-auto p-1 rounded",
     style: {
       border: `1px solid ${C.border}`
@@ -1312,20 +1579,112 @@ function SubBatchBuilder({
     style: {
       color: C.muted
     }
-  }, s.clientName, s.batchRef ? ` · batch: ${s.batchRef}` : "")))), distinctBatchRefs.length > 1 && /*#__PURE__*/React.createElement("div", {
+  }, s.clientName, s.batchRef ? ` · batch: ${s.batchRef}` : ""))));
+
+  const mixedBatchWarning = distinctBatchRefs.length > 1 ? /*#__PURE__*/React.createElement("div", {
     className: "text-xs p-2 rounded mt-2",
     style: {
       background: C.warnBg,
       color: C.warn
     }
-  }, "Heads up: this sub-batch mixes samples from ", distinctBatchRefs.length, " different registration batches (", distinctBatchRefs.join(", "), "). That's fine for testing — each sample keeps its own batch reference for reporting."), /*#__PURE__*/React.createElement("div", {
-    className: "flex justify-end mt-3"
-  }, /*#__PURE__*/React.createElement(Button, {
+  }, "Heads up: this sub-batch mixes samples from ", distinctBatchRefs.length, " different registration batches (", distinctBatchRefs.join(", "), "). That's fine for testing — each sample keeps its own batch reference for reporting.") : null;
+
+  const actionRow = /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end gap-2 mt-3"
+  }, editingSubBatchId && /*#__PURE__*/React.createElement(Button, {
+    variant: "outline",
+    onClick: resetForm
+  }, "Cancel Edit"), /*#__PURE__*/React.createElement(Button, {
     onClick: createGroup
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "check",
     size: 13
-  }), "Create Sub-Batch (", selectedSampleIds.length, ")")))), /*#__PURE__*/React.createElement(SectionCard, {
+  }), editingSubBatchId ? "Save Changes" : `Create Sub-Batch (${selectedSampleIds.length})`));
+
+  const pickerBlock = !selectedTestId ? /*#__PURE__*/React.createElement("div", {
+    className: "text-xs p-3 rounded mt-3",
+    style: {
+      background: C.infoBg,
+      color: C.info
+    }
+  }, "Pick a Test Type to see eligible pending samples.") : /*#__PURE__*/React.createElement("div", {
+    className: "mt-3"
+  }, batchFilterBlock, eligibleSamples.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "text-xs p-3 rounded",
+    style: {
+      background: C.infoBg,
+      color: C.info
+    }
+  }, "No pending samples match this Test Type", selectedBatchRefs.length ? " + Batch filter" : "", " (or all are already in another pending sub-batch).") : /*#__PURE__*/React.createElement("div", null, pickerHeaderRow, pickerListBox, mixedBatchWarning, actionRow));
+
+  const createCard = /*#__PURE__*/React.createElement(SectionCard, {
+    title: editingSubBatchId ? "Edit Sub-Batch" : "Create a Sub-Batch",
+    subtitle: "Group pending samples requesting the same test into one batch — shares one QC check, tested together in Add Test Record.",
+    icon: /*#__PURE__*/React.createElement(Icon, {
+      name: "flask",
+      size: 15
+    })
+  }, filterFields, pickerBlock);
+
+  function renderSubBatchRow(sb) {
+    const testerControl = sb.status === "pending" ? /*#__PURE__*/React.createElement("select", {
+      className: "border rounded px-2 py-1 text-xs",
+      style: {
+        borderColor: C.border
+      },
+      value: sb.assignedTester,
+      onChange: e => updateAssignedTester(sb.id, e.target.value)
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "Unassigned"), users.map(u => /*#__PURE__*/React.createElement("option", {
+      key: u.id,
+      value: u.name
+    }, u.name))) : /*#__PURE__*/React.createElement("span", {
+      className: "text-xs",
+      style: {
+        color: C.muted
+      }
+    }, sb.assignedTester || "—");
+    return /*#__PURE__*/React.createElement("div", {
+      key: sb.id,
+      className: "px-3 py-2 rounded",
+      style: {
+        border: `1px solid ${C.border}`
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-between gap-2"
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "text-xs font-semibold",
+      style: {
+        color: C.ink
+      }
+    }, sb.label, " · ", sb.testTypeName), /*#__PURE__*/React.createElement("div", {
+      className: "text-[11px]",
+      style: {
+        color: C.muted
+      }
+    }, sb.memberSampleIds.length, " samples · created ", new Date(sb.createdAt).toLocaleDateString())), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-2"
+    }, testerControl, SUB_BATCH_STATUS_BADGE(sb.status), /*#__PURE__*/React.createElement(IconButton, {
+      name: "edit",
+      color: C.teal,
+      title: sb.status === "pending" ? "Edit sub-batch" : "Only pending sub-batches can be edited (this one is already tested)",
+      disabled: sb.status !== "pending",
+      onClick: () => startEdit(sb)
+    }), /*#__PURE__*/React.createElement(IconButton, {
+      name: "trash",
+      color: C.warn,
+      title: sb.status === "pending" ? "Delete sub-batch" : "Delete the linked test record first to remove a tested sub-batch",
+      disabled: sb.status !== "pending",
+      onClick: () => setDeleteSubBatchId(sb.id)
+    }))), deleteSubBatchId === sb.id && /*#__PURE__*/React.createElement(ConfirmBar, {
+      text: `Delete sub-batch "${sb.label}"? Its ${sb.memberSampleIds.length} member sample(s) become available for another sub-batch again.`,
+      onConfirm: () => doDeleteSubBatch(sb),
+      onCancel: () => setDeleteSubBatchId(null)
+    }));
+  }
+
+  const listCard = /*#__PURE__*/React.createElement(SectionCard, {
     title: "All Sub-Batches",
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "clipboard",
@@ -1338,40 +1697,9 @@ function SubBatchBuilder({
     }
   }, "No sub-batches created yet.") : /*#__PURE__*/React.createElement("div", {
     className: "grid gap-1.5"
-  }, subBatches.map(sb => /*#__PURE__*/React.createElement("div", {
-    key: sb.id,
-    className: "flex items-center justify-between gap-2 px-3 py-2 rounded",
-    style: {
-      border: `1px solid ${C.border}`
-    }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "text-xs font-semibold",
-    style: {
-      color: C.ink
-    }
-  }, sb.label, " · ", sb.testTypeName), /*#__PURE__*/React.createElement("div", {
-    className: "text-[11px]",
-    style: {
-      color: C.muted
-    }
-  }, sb.memberSampleIds.length, " samples · created ", new Date(sb.createdAt).toLocaleDateString())), /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center gap-2"
-  }, sb.status === "pending" ? /*#__PURE__*/React.createElement("select", {
-    className: "border rounded px-2 py-1 text-xs",
-    style: {
-      borderColor: C.border
-    },
-    value: sb.assignedTester,
-    onChange: e => updateAssignedTester(sb.id, e.target.value)
-  }, /*#__PURE__*/React.createElement("option", {
-    value: ""
-  }, "Unassigned"), users.map(u => /*#__PURE__*/React.createElement("option", {
-    key: u.id,
-    value: u.name
-  }, u.name))) : /*#__PURE__*/React.createElement("span", {
-    className: "text-xs",
-    style: {
-      color: C.muted
-    }
-  }, sb.assignedTester || "—"), SUB_BATCH_STATUS_BADGE(sb.status)))))));
+  }, subBatches.map(sb => renderSubBatchRow(sb))));
+
+  return /*#__PURE__*/React.createElement("div", {
+    className: "grid gap-4"
+  }, createCard, listCard);
 }
