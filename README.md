@@ -116,6 +116,26 @@ Scope note: chemical/gas inventory deduction for sub-batches reuses the
 exact same logic Add Test Record already uses for single samples (driven by
 No. of Field Samples) — no separate/duplicate inventory code was written.
 
+### Per-parameter eligibility (fixed)
+
+A sample with several `requestedTests` does **not** move through them in
+lockstep — one parameter can be Done while another is still fully Pending.
+Eligibility ("does this sample still need testing for parameter X?") is
+computed per **(sample, testTypeId)** pair via `pendingTestTypeIdsForSample()`
+/ `testStatusForSample()` in `16-sub-batch.js`, never off the sample's single
+overall `status` field. A sample keeps showing up in the Sub-Batch Builder
+and the Add Test Record sample picker for every parameter it still needs,
+independently, until a test record is actually saved for that specific
+parameter (or it's queued into a pending sub-batch for that parameter).
+Sample Detail's "Requested Tests" chips show each parameter's own state
+(Done / Queued / Pending / On Hold) for the same reason.
+
+Previously the sample's single `status` field (and a same-sample-any-
+pending-sub-batch check that didn't look at *which* test type) was used for
+this, which could wrongly hide a sample from parameters it still needed
+once one other parameter moved forward, or wrongly block re-offering a
+parameter that was actually still open.
+
 ## Custom Report Generator (added)
 
 - Reports tab → "Official Report" group → "Custom Report Generator".

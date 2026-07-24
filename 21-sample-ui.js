@@ -426,6 +426,7 @@ function SampleDetail({
   session,
   testTypes,
   testRecords,
+  subBatches,
   onClose,
   onUpdate,
   onDelete,
@@ -660,14 +661,43 @@ function SampleDetail({
     }
   }, "Requested Tests"), /*#__PURE__*/React.createElement("div", {
     className: "flex flex-wrap gap-1.5"
-  }, sample.requestedTests.map(t => /*#__PURE__*/React.createElement("span", {
-    key: t.testTypeId,
-    className: "text-[11px] px-2 py-0.5 rounded-full",
-    style: {
-      background: `${C.teal}1A`,
-      color: C.tealDark
-    }
-  }, t.testTypeName))), !!sample.linkedTestRecordIds.length && /*#__PURE__*/React.createElement("div", {
+  }, sample.requestedTests.map(t => {
+    // Per-parameter status — NOT sample.status. A sample with 3 requested
+    // tests can have one Done, one Queued in a pending sub-batch, and one
+    // still fully Pending, all at the same time.
+    const paramStatus = testStatusForSample(sample, t.testTypeId, testRecords, subBatches);
+    const paramStatusStyle = {
+      done: {
+        bg: `${C.ok}1A`,
+        fg: C.ok,
+        label: "Done"
+      },
+      queued: {
+        bg: `${C.info}1A`,
+        fg: C.info,
+        label: "Queued"
+      },
+      pending: {
+        bg: `${C.teal}1A`,
+        fg: C.tealDark,
+        label: "Pending"
+      },
+      blocked: {
+        bg: `${C.muted}1A`,
+        fg: C.muted,
+        label: "On Hold"
+      }
+    }[paramStatus];
+    return /*#__PURE__*/React.createElement("span", {
+      key: t.testTypeId,
+      className: "text-[11px] px-2 py-0.5 rounded-full",
+      style: {
+        background: paramStatusStyle.bg,
+        color: paramStatusStyle.fg
+      },
+      title: `${t.testTypeName} — ${paramStatusStyle.label}`
+    }, t.testTypeName, " · ", paramStatusStyle.label);
+  })), !!sample.linkedTestRecordIds.length && /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] mt-1.5",
     style: {
       color: C.muted
@@ -1471,6 +1501,7 @@ function SamplesTab({
     testTypes: testTypes,
     subBatches: subBatches,
     setSubBatches: setSubBatches,
+    testRecords: testRecords,
     users: users,
     notify: notify
   }), showBatchForm && /*#__PURE__*/React.createElement(BatchRegistrationForm, {
@@ -1491,6 +1522,7 @@ function SamplesTab({
     session: session,
     testTypes: testTypes,
     testRecords: testRecords,
+    subBatches: subBatches,
     onClose: () => setOpenId(null),
     onUpdate: handleUpdate,
     onDelete: handleDeleteSample,
@@ -1519,6 +1551,7 @@ function SubBatchBuilder({
   testTypes,
   subBatches,
   setSubBatches,
+  testRecords,
   users,
   notify
 }) {
@@ -1535,7 +1568,13 @@ function SubBatchBuilder({
   // Samples eligible for the chosen Test Type — ignoring the sub-batch's own
   // current membership while it's being edited (otherwise its members would
   // wrongly look "already used" and disappear from the picker).
-  const eligibleForTest = selectedTestId ? samples.filter(s => SUBBATCH_ELIGIBLE_STATUSES.includes(s.status) && s.requestedTests.some(rt => rt.testTypeId === selectedTestId) && !subBatches.some(sb => sb.status === "pending" && sb.id !== editingSubBatchId && sb.memberSampleIds.includes(s.id))) : [];
+  const eligibleForTest = selectedTestId ? samples.filter(s => {
+    // While editing an existing sub-batch, its own current members must not
+    // be excluded by the "already queued" check below (they're queued IN
+    // this sub-batch) — pretend this sub-batch doesn't exist for that check.
+    const subBatchesForCheck = editingSubBatchId ? subBatches.filter(sb => sb.id !== editingSubBatchId) : subBatches;
+    return pendingTestTypeIdsForSample(s, testRecords, subBatchesForCheck).includes(selectedTestId);
+  }) : [];
   // Registration batches (BatchRef) available to filter by, scoped to the
   // Test Type above — a batch can carry several test types, so this narrows
   // to only batches that actually have samples requesting THIS test.

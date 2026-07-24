@@ -61,18 +61,21 @@ function AddTestTab({
   // Samples that still need test records logged against them (registered through
   // in_progress, i.e. not yet at results/review/approval/release).
   const pendingSubBatches = (subBatches || []).filter(sb => sb.status === "pending");
-  const samplesInPendingSubBatches = new Set(pendingSubBatches.flatMap(sb => sb.memberSampleIds || []));
-  // Samples that still need test records logged against them (registered through
-  // in_progress, i.e. not yet at results/review/approval/release) — excluding
-  // any sample already committed to a pending sub-batch, since it must be
-  // tested through that sub-batch run, not bypassed as a standalone record.
-  const linkableSamples = (samples || []).filter(s => ["registered", "received", "assigned", "in_progress"].includes(s.status) && !samplesInPendingSubBatches.has(s.id));
+  // Samples that still have at least one requested parameter genuinely
+  // pending (not yet resulted, not already queued in a pending sub-batch
+  // for that specific parameter) — computed per (sample, testType) pair via
+  // pendingTestTypeIdsForSample, NOT off the sample's single overall
+  // `status` field. A sample with 3 requested parameters where only 1 is
+  // done must still show up here for the other 2.
+  const linkableSamples = (samples || []).filter(s => pendingTestTypeIdsForSample(s, testRecords, subBatches).length > 0);
   const selectedSample = (samples || []).find(s => s.id === selectedSampleId) || null;
   const selectedSubBatch = pendingSubBatches.find(sb => sb.id === selectedSubBatchId) || null;
   const subBatchMembers = selectedSubBatch ? selectedSubBatch.memberSampleIds.map(id => (samples || []).find(s => s.id === id)).filter(Boolean) : [];
-  // Once a sample or sub-batch is picked, only show the test type(s) it actually requested —
-  // instead of every test type in the system.
-  const testTypesForForm = selectedSubBatch ? testTypes.filter(t => t.id === selectedSubBatch.testTypeId) : selectedSample ? testTypes.filter(t => selectedSample.requestedTests.some(rt => rt.testTypeId === t.id)) : testTypes;
+  // Once a sample or sub-batch is picked, only show the test type(s) it
+  // actually still needs — a parameter that's already Done (has a result)
+  // or already Queued (committed to a different pending sub-batch) is left
+  // off the list so it can't be silently re-recorded or double-run.
+  const testTypesForForm = selectedSubBatch ? testTypes.filter(t => t.id === selectedSubBatch.testTypeId) : selectedSample ? testTypes.filter(t => pendingTestTypeIdsForSample(selectedSample, testRecords, subBatches).includes(t.id)) : testTypes;
   const chemGroups = selectedTest ? selectedTest.chemicalRequirements : [];
   const dilutionGroups = selectedTest ? selectedTest.dilutionChemicalRequirements || [] : [];
   const resultParameters = selectedTest?.resultParameters || [];

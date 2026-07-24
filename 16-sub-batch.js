@@ -13,6 +13,11 @@
 // "Filter by Batch Ref" control in 17-report-generator.js.
 // ============================================================================
 
+// Superseded by pendingTestTypeIdsForSample() below — a sample's single
+// overall `status` can't represent "which of its several requested
+// parameters still need testing", so eligibility is now computed per
+// (sample, testTypeId) pair instead. Kept here only in case older code
+// elsewhere still imports it; do not use for new eligibility checks.
 const SUBBATCH_ELIGIBLE_STATUSES = ["registered", "received", "assigned", "in_progress"];
 function generateSubBatchLabel(existingSubBatches) {
   const year = todayStr().slice(0, 4);
@@ -58,4 +63,55 @@ function getSampleResultForTest(sample, testTypeId, testRecords) {
     };
   }
   return null;
+}
+
+// ============================================================================
+// PER-PARAMETER ELIGIBILITY — a sample with several requestedTests does NOT
+// move through those tests in lockstep. "Batch shows up for every parameter
+// it still needs, until Add Test Record is saved for that specific
+// parameter" — so eligibility must be computed per (sample, testTypeId)
+// pair, never off the sample's single `status` field. `status` still gates
+// whether the sample can be tested AT ALL right now (on_hold/rejected/
+// cancelled), it just can't tell you WHICH parameters remain.
+// ============================================================================
+
+// Custody-level gate: blocked from any testing regardless of parameter.
+function sampleBlockedFromTesting(sample) {
+  return ["on_hold", "rejected", "cancelled"].includes(sample.status);
+}
+
+// Has this one requested parameter already produced a result for this
+// sample — single Add Test Record entry OR inside a Sub-Batch's
+// memberResults? (Done = no longer eligible for anything, anywhere.)
+function isTestDoneForSample(sample, testTypeId, testRecords) {
+  return !!getSampleResultForTest(sample, testTypeId, testRecords);
+}
+
+// Is this parameter already committed to a pending (not-yet-tested)
+// Sub-Batch for THIS sample? (Queued = don't offer it again for a second
+// sub-batch or a standalone record — but only for this parameter, other
+// parameters on the same sample are untouched.)
+function isTestQueuedForSample(sample, testTypeId, subBatches) {
+  return (subBatches || []).some(sb => sb.status === "pending" && sb.testTypeId === testTypeId && sb.memberSampleIds.includes(sample.id));
+}
+
+// The parameters this sample still genuinely needs run: requested, not yet
+// resulted, not already queued (unless includeQueued is asked for, e.g. to
+// show "committed" state in a status chip). This — not sample.status — is
+// what should drive every "pending work" list in the app.
+function pendingTestTypeIdsForSample(sample, testRecords, subBatches, {
+  includeQueued = false
+} = {}) {
+  if (sampleBlockedFromTesting(sample)) return [];
+  return (sample.requestedTests || []).map(rt => rt.testTypeId).filter(tid => !isTestDoneForSample(sample, tid, testRecords)).filter(tid => includeQueued || !isTestQueuedForSample(sample, tid, subBatches));
+}
+
+// Per-parameter status for display: "done" | "queued" | "pending" | "blocked".
+// Drives the Requested Tests chips on Sample Detail so the per-parameter
+// state is visible, not just correct in the background.
+function testStatusForSample(sample, testTypeId, testRecords, subBatches) {
+  if (isTestDoneForSample(sample, testTypeId, testRecords)) return "done";
+  if (sampleBlockedFromTesting(sample)) return "blocked";
+  if (isTestQueuedForSample(sample, testTypeId, subBatches)) return "queued";
+  return "pending";
 }
