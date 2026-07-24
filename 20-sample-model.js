@@ -248,6 +248,34 @@ function transitionSample(sample, newStatus, meta, user) {
     notes: meta?.notes
   }, user);
 }
+// Correct registration-entry mistakes (typos, wrong batch upload row, etc.) —
+// only the registration fields are editable, never status/results/custody
+// history itself; every edit is logged as its own custody event so the
+// correction is auditable rather than silently overwritten.
+const SAMPLE_EDITABLE_FIELDS = ["clientName", "siteLocation", "district", "upazila", "union", "village", "caretakerName", "sampleSourceId", "batchRef", "matrix", "collectionDate", "collectedBy", "receivedDate", "priority", "numberOfSamples", "requestedTests", "notes"];
+function editSample(sample, patch, user) {
+  const changes = [];
+  const cleanPatch = {};
+  SAMPLE_EDITABLE_FIELDS.forEach(field => {
+    if (!(field in patch)) return;
+    const oldVal = sample[field];
+    const newVal = patch[field];
+    const oldStr = Array.isArray(oldVal) ? oldVal.map(t => t.testTypeName).join(", ") : String(oldVal ?? "");
+    const newStr = Array.isArray(newVal) ? newVal.map(t => t.testTypeName).join(", ") : String(newVal ?? "");
+    if (oldStr !== newStr) changes.push(`${field}: "${oldStr}" → "${newStr}"`);
+    cleanPatch[field] = newVal;
+  });
+  const next = {
+    ...sample,
+    ...cleanPatch
+  };
+  if (!changes.length) return sample;
+  return addCustodyEvent(next, {
+    action: "Registration Corrected",
+    toUser: user?.name,
+    notes: changes.join("; ")
+  }, user);
+}
 function assignSample(sample, assigneeName, user) {
   const next = {
     ...sample,

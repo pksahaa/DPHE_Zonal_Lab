@@ -60,9 +60,14 @@ function AddTestTab({
   const selectedTest = testTypes.find(t => t.id === selectedTestId);
   // Samples that still need test records logged against them (registered through
   // in_progress, i.e. not yet at results/review/approval/release).
-  const linkableSamples = (samples || []).filter(s => ["registered", "received", "assigned", "in_progress"].includes(s.status));
-  const selectedSample = (samples || []).find(s => s.id === selectedSampleId) || null;
   const pendingSubBatches = (subBatches || []).filter(sb => sb.status === "pending");
+  const samplesInPendingSubBatches = new Set(pendingSubBatches.flatMap(sb => sb.memberSampleIds || []));
+  // Samples that still need test records logged against them (registered through
+  // in_progress, i.e. not yet at results/review/approval/release) — excluding
+  // any sample already committed to a pending sub-batch, since it must be
+  // tested through that sub-batch run, not bypassed as a standalone record.
+  const linkableSamples = (samples || []).filter(s => ["registered", "received", "assigned", "in_progress"].includes(s.status) && !samplesInPendingSubBatches.has(s.id));
+  const selectedSample = (samples || []).find(s => s.id === selectedSampleId) || null;
   const selectedSubBatch = pendingSubBatches.find(sb => sb.id === selectedSubBatchId) || null;
   const subBatchMembers = selectedSubBatch ? selectedSubBatch.memberSampleIds.map(id => (samples || []).find(s => s.id === id)).filter(Boolean) : [];
   // Once a sample or sub-batch is picked, only show the test type(s) it actually requested —
@@ -1429,158 +1434,91 @@ function AddTestTab({
 // plus optional QC checkpoint rows), and re-imports the filled sheet to
 // create Test Records directly — no formula/inputs re-entry needed.
 // ============================================================================
+// ============================================================================
+// PER-RECORD BULK RESULT UPLOAD — for a Test Record that's already been
+// saved (single sample or a sub-batch run), download an Excel template
+// pre-filled with that record's own sample list + current values, patch in
+// the real numbers you already have on paper/instrument printout, and
+// re-upload to correct/fill exactly those samples — nothing else.
+// ============================================================================
 function bulkResultParamHeader(p) {
   return `${p.name}${p.unit ? ` (${p.unit})` : ""}`;
 }
-function buildBulkResultTemplate(testType, samples) {
-  const paramHeaders = (testType.resultParameters || []).map(bulkResultParamHeader);
-  const headers = ["SampleCode", "ClientName", "Tester", "Date", ...paramHeaders, "QC Value (only for QC rows below)"];
-  const sampleRows = samples.map(s => [s.sampleCode, s.clientName, "", "", ...paramHeaders.map(() => ""), ""]);
-  const qcRows = (testType.qcRules || []).filter(r => r.qcType !== "bracketing").map(r => [`QC - ${r.label || QC_RULE_TYPES.find(q => q.value === r.qcType)?.label || r.qcType}`, "", "", "", ...paramHeaders.map(() => ""), ""]);
-  const ws = XLSX.utils.aoa_to_sheet([headers, ...sampleRows, ...qcRows]);
+function recordMemberRows(record) {
+  // Normalizes both shapes (single-sample vs sub-batch) into one list.
+  if (record.memberResults && record.memberResults.length) return record.memberResults;
+  if (record.sampleId) return [{
+    sampleId: record.sampleId,
+    sampleCode: record.sampleCode || "",
+    results: record.results || []
+  }];
+  return [];
+}
+function downloadRecordResultTemplate(record, testType, samples) {
+  const members = recordMemberRows(record);
+  const params = testType?.resultParameters || [];
+  const paramHeaders = params.map(bulkResultParamHeader);
+  const headers = ["SampleCode", "ClientName", ...paramHeaders];
+  const rows = members.map(m => {
+    const sample = (samples || []).find(s => s.id === m.sampleId);
+    const byParamId = {};
+    (m.results || []).forEach(r => byParamId[r.paramId] = r.value);
+    return [m.sampleCode, sample?.clientName || "", ...params.map(p => byParamId[p.id] ?? "")];
+  });
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Results");
-  XLSX.writeFile(wb, `${testType.name.replace(/[^a-z0-9]+/gi, "_")}_result_template.xlsx`);
+  XLSX.writeFile(wb, `${(testType?.name || "test").replace(/[^a-z0-9]+/gi, "_")}_${record.date}_results.xlsx`);
 }
-function BulkResultUpload({
-  testTypes,
+function RecordBulkUploadModal({
+  record,
+  testType,
   samples,
-  setSamples,
-  testRecords,
-  setTestRecords,
+  onApply,
+  onClose,
   notify
 }) {
-  const [selectedTestId, setSelectedTestId] = React.useState("");
-  const [selectedBatchRefs, setSelectedBatchRefs] = React.useState([]);
-  const [selectedSampleIds, setSelectedSampleIds] = React.useState([]);
+  const members = recordMemberRows(record);
+  const params = testType?.resultParameters || [];
   const [pendingRows, setPendingRows] = React.useState(null);
-  const [defaultTester, setDefaultTester] = React.useState("");
-  const [defaultDate, setDefaultDate] = React.useState(todayStr());
-  const selectedTest = testTypes.find(t => t.id === selectedTestId);
-  const resultParameters = selectedTest?.resultParameters || [];
-  function hasDirectResult(sampleId) {
-    return testRecords.some(r => r.testTypeId === selectedTestId && (r.sampleId === sampleId || (r.memberSampleIds || []).includes(sampleId)));
-  }
-  const eligibleForTest = selectedTestId ? samples.filter(s => s.requestedTests.some(rt => rt.testTypeId === selectedTestId) && !hasDirectResult(s.id)) : [];
-  const batchRefOptions = Array.from(new Set(eligibleForTest.map(s => s.batchRef).filter(Boolean))).sort();
-  const eligibleSamples = selectedBatchRefs.length ? eligibleForTest.filter(s => selectedBatchRefs.includes(s.batchRef)) : eligibleForTest;
-  function toggleSample(id) {
-    setSelectedSampleIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  }
-  function toggleBatchRefFilter(ref) {
-    setSelectedBatchRefs(prev => prev.includes(ref) ? prev.filter(x => x !== ref) : [...prev, ref]);
-  }
-  function downloadTemplateForSelection() {
-    const chosen = samples.filter(s => selectedSampleIds.includes(s.id));
-    if (!chosen.length) {
-      notify?.("Select at least one sample first (or Select All).", "warn");
-      return;
-    }
-    buildBulkResultTemplate(selectedTest, chosen);
-    notify?.(`Template downloaded for ${chosen.length} sample(s).`, "ok");
-  }
   function handleFile(file) {
     readWorkbook(file, (err, rows) => {
       if (err) return notify?.("Could not read Excel file", "warn");
       setPendingRows(rows);
     });
   }
-  // Preview counts before committing, so a tester can see at a glance
-  // whether codes matched before anything is actually saved.
   const preview = React.useMemo(() => {
     if (!pendingRows) return null;
-    let fieldMatched = 0,
-      fieldUnmatched = 0,
-      fieldBlank = 0,
-      qcRows = 0;
+    let matched = 0,
+      unmatched = 0,
+      blank = 0;
     pendingRows.forEach(row => {
       const code = String(row.SampleCode || "").trim();
       if (!code) return;
-      if (/^QC/i.test(code)) {
-        qcRows++;
+      const member = members.find(m => m.sampleCode === code);
+      if (!member) {
+        unmatched++;
         return;
       }
-      const sample = samples.find(s => s.sampleCode === code);
-      if (!sample) {
-        fieldUnmatched++;
-        return;
-      }
-      const hasAnyValue = resultParameters.some(p => String(row[bulkResultParamHeader(p)] ?? "").trim() !== "");
-      if (!hasAnyValue) fieldBlank++;else fieldMatched++;
+      const hasAnyValue = params.some(p => String(row[bulkResultParamHeader(p)] ?? "").trim() !== "");
+      if (!hasAnyValue) blank++;else matched++;
     });
     return {
-      fieldMatched,
-      fieldUnmatched,
-      fieldBlank,
-      qcRows
+      matched,
+      unmatched,
+      blank
     };
-  }, [pendingRows, samples, resultParameters]);
-  function commitImport() {
-    let created = 0,
-      qcCreated = 0,
-      skipped = 0;
-    const newRecords = [];
-    const sampleLinkUpdates = new Map(); // sampleId -> array of new record ids
-    pendingRows.forEach(row => {
-      const code = String(row.SampleCode || "").trim();
-      if (!code) return;
-      const rowTester = String(row.Tester || defaultTester || "").trim();
-      const rowDate = String(row.Date || defaultDate || todayStr()).trim();
-      if (/^QC/i.test(code)) {
-        const rawQcVal = row["QC Value (only for QC rows below)"];
-        if (rawQcVal === "" || rawQcVal == null) {
-          skipped++;
-          return;
-        }
-        const rule = (selectedTest.qcRules || []).find(r => code.toLowerCase().includes((r.label || "").toLowerCase()) || code.toLowerCase().includes((QC_RULE_TYPES.find(q => q.value === r.qcType)?.label || "").toLowerCase()));
-        if (!rule) {
-          skipped++;
-          return;
-        }
-        const evalRes = evaluateQcRule(rule, rawQcVal);
-        const id = uid("rec");
-        newRecords.push({
-          id,
-          date: rowDate,
-          tester: rowTester,
-          testTypeId: selectedTest.id,
-          testTypeName: selectedTest.name,
-          sampleId: null,
-          sampleCode: "",
-          memberSampleIds: null,
-          memberResults: null,
-          numberOfSamples: 0,
-          values: {},
-          consumption: {},
-          bottleLog: {},
-          gasLog: [],
-          resultInputs: {},
-          results: [],
-          source: "bulk-result-import",
-          qcCheck: {
-            ruleId: rule.id,
-            qcType: rule.qcType,
-            label: rule.label,
-            value: Number(rawQcVal),
-            pass: evalRes.pass,
-            message: evalRes.message
-          }
-        });
-        qcCreated++;
-        return;
-      }
-      const sample = samples.find(s => s.sampleCode === code);
-      if (!sample) {
-        skipped++;
-        return;
-      }
-      if (hasDirectResult(sample.id)) {
-        skipped++;
-        return;
-      }
-      const results = resultParameters.map(p => {
+  }, [pendingRows, members, params]);
+  function confirmApply() {
+    const updatedMembers = members.map(m => {
+      const row = pendingRows.find(r => String(r.SampleCode || "").trim() === m.sampleCode);
+      if (!row) return m;
+      const existingByParamId = {};
+      (m.results || []).forEach(r => existingByParamId[r.paramId] = r);
+      const results = params.map(p => {
         const raw = row[bulkResultParamHeader(p)];
-        if (raw === "" || raw == null) return {
+        const existing = existingByParamId[p.id];
+        if (raw === "" || raw == null) return existing || {
           paramId: p.id,
           name: p.name,
           unit: p.unit,
@@ -1596,167 +1534,32 @@ function BulkResultUpload({
           error: Number.isNaN(num) ? "Non-numeric value in upload" : null
         };
       });
-      if (!results.some(r => r.value != null)) {
-        skipped++;
-        return;
-      }
-      const id = uid("rec");
-      newRecords.push({
-        id,
-        date: rowDate,
-        tester: rowTester,
-        testTypeId: selectedTest.id,
-        testTypeName: selectedTest.name,
-        sampleId: sample.id,
-        sampleCode: sample.sampleCode,
-        memberSampleIds: null,
-        memberResults: null,
-        numberOfSamples: 1,
-        values: {},
-        consumption: {},
-        bottleLog: {},
-        gasLog: [],
-        resultInputs: {},
-        results,
-        source: "bulk-result-import",
-        qcCheck: null
-      });
-      sampleLinkUpdates.set(sample.id, [...(sampleLinkUpdates.get(sample.id) || []), id]);
-      created++;
+      return {
+        ...m,
+        results
+      };
     });
-    if (!newRecords.length) {
-      notify?.("Nothing to import — no rows had a matching Sample Code with a value, or a recognized QC row.", "warn");
-      return;
-    }
-    setTestRecords(prev => [...prev, ...newRecords]);
-    if (setSamples && sampleLinkUpdates.size) {
-      setSamples(prev => prev.map(s => sampleLinkUpdates.has(s.id) ? {
-        ...s,
-        linkedTestRecordIds: [...(s.linkedTestRecordIds || []), ...sampleLinkUpdates.get(s.id)]
-      } : s));
-    }
-    notify?.(`Imported ${created} field-sample result(s) and ${qcCreated} QC checkpoint(s)${skipped ? `, skipped ${skipped} row(s) (blank, unmatched, or already tested)` : ""}.`, "ok");
-    setPendingRows(null);
-    setSelectedSampleIds([]);
+    onApply(updatedMembers);
   }
-  return /*#__PURE__*/React.createElement(SectionCard, {
-    title: "Bulk Result Upload (Excel round-trip)",
-    subtitle: "Already have the results on paper or from the instrument? Download a template with the sample IDs, fill in the values, and upload it back — no need to re-enter formula inputs here.",
-    icon: /*#__PURE__*/React.createElement(Icon, {
-      name: "table",
-      size: 15
-    })
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: `Bulk Upload Results — ${testType?.name || record.testTypeName}`,
+    onClose: onClose,
+    wide: true
   }, /*#__PURE__*/React.createElement("div", {
-    className: "grid gap-3 mb-3",
-    style: {
-      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))"
-    }
-  }, /*#__PURE__*/React.createElement(SelectField, {
-    simple: true,
-    label: "Test Type",
-    value: selectedTestId,
-    onChange: v => {
-      setSelectedTestId(v);
-      setSelectedBatchRefs([]);
-      setSelectedSampleIds([]);
-      setPendingRows(null);
-    },
-    options: testTypes.map(t => ({
-      value: t.id,
-      label: t.name
-    })),
-    placeholder: "Select a method"
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Default Tester (used if a row leaves Tester blank)",
-    value: defaultTester,
-    onChange: v => setDefaultTester(v)
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Default Date (used if a row leaves Date blank)",
-    type: "date",
-    value: defaultDate,
-    onChange: v => setDefaultDate(v)
-  })), !selectedTestId ? /*#__PURE__*/React.createElement("div", {
-    className: "text-xs p-3 rounded",
-    style: {
-      background: C.infoBg,
-      color: C.info
-    }
-  }, "Pick a Test Type to see samples awaiting results for it.") : /*#__PURE__*/React.createElement("div", null, batchRefOptions.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "mb-3"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "text-xs font-semibold mb-1.5",
-    style: {
-      color: C.ink
-    }
-  }, "Filter by Registration Batch (optional)"), /*#__PURE__*/React.createElement("div", {
-    className: "flex flex-wrap gap-2"
-  }, batchRefOptions.map(ref => /*#__PURE__*/React.createElement("label", {
-    key: ref,
-    className: "flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer",
-    style: {
-      border: `1px solid ${selectedBatchRefs.includes(ref) ? C.teal : C.border}`,
-      background: selectedBatchRefs.includes(ref) ? `${C.teal}14` : "transparent"
-    }
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "checkbox",
-    checked: selectedBatchRefs.includes(ref),
-    onChange: () => toggleBatchRefFilter(ref)
-  }), ref)))), eligibleSamples.length === 0 ? /*#__PURE__*/React.createElement("div", {
-    className: "text-xs p-3 rounded",
-    style: {
-      background: C.infoBg,
-      color: C.info
-    }
-  }, "No samples are awaiting results for this test (or all already have one).") : /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-between mb-1.5"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "text-xs font-semibold",
-    style: {
-      color: C.ink
-    }
-  }, "Select Samples (", selectedSampleIds.length, " of ", eligibleSamples.length, ")"), /*#__PURE__*/React.createElement("div", {
-    className: "flex gap-2"
-  }, /*#__PURE__*/React.createElement(Button, {
-    variant: "ghost",
-    size: "sm",
-    onClick: () => setSelectedSampleIds(eligibleSamples.map(s => s.id))
-  }, "Select All"), /*#__PURE__*/React.createElement(Button, {
-    variant: "ghost",
-    size: "sm",
-    onClick: () => setSelectedSampleIds([])
-  }, "Clear"))), /*#__PURE__*/React.createElement("div", {
-    className: "grid gap-1 max-h-48 overflow-y-auto p-1 rounded mb-3",
-    style: {
-      border: `1px solid ${C.border}`
-    }
-  }, eligibleSamples.map(s => /*#__PURE__*/React.createElement("label", {
-    key: s.id,
-    className: "flex items-center gap-2 px-2 py-1.5 rounded text-xs cursor-pointer",
-    style: {
-      background: selectedSampleIds.includes(s.id) ? `${C.teal}14` : "transparent"
-    }
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "checkbox",
-    checked: selectedSampleIds.includes(s.id),
-    onChange: () => toggleSample(s.id)
-  }), /*#__PURE__*/React.createElement("span", {
-    className: "font-semibold"
-  }, s.sampleCode), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs mb-3",
     style: {
       color: C.muted
     }
-  }, s.clientName, s.batchRef ? ` · batch: ${s.batchRef}` : "")))), /*#__PURE__*/React.createElement("div", {
-    className: "flex flex-wrap items-center gap-2"
+  }, "This only affects the ", members.length, " sample(s) already in this record (", record.date, "). Download the template, fill in the values you already have, then upload it back — blank cells leave the existing value untouched."), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center gap-2 mb-3"
   }, /*#__PURE__*/React.createElement(Button, {
     variant: "outline",
     size: "sm",
-    onClick: downloadTemplateForSelection
+    onClick: () => downloadRecordResultTemplate(record, testType, samples)
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "download",
     size: 13
-  }), "Download Template (", selectedSampleIds.length, ")"), /*#__PURE__*/React.createElement("label", {
+  }), "Download Template"), /*#__PURE__*/React.createElement("label", {
     className: "inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold cursor-pointer",
     style: {
       border: `1px solid ${C.teal}`,
@@ -1773,36 +1576,53 @@ function BulkResultUpload({
       if (e.target.files[0]) handleFile(e.target.files[0]);
       e.target.value = "";
     }
-  }))), preview && /*#__PURE__*/React.createElement("div", {
-    className: "mt-3 p-3 rounded",
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "grid gap-1 max-h-56 overflow-y-auto p-1 rounded mb-3",
+    style: {
+      border: `1px solid ${C.border}`
+    }
+  }, members.map(m => /*#__PURE__*/React.createElement("div", {
+    key: m.sampleId || m.sampleCode,
+    className: "flex flex-wrap items-center gap-2 px-2 py-1.5 text-xs"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-semibold"
+  }, m.sampleCode), (m.results || []).filter(r => r.value != null).map(r => /*#__PURE__*/React.createElement("span", {
+    key: r.paramId,
+    className: "px-1.5 py-0.5 rounded",
+    style: {
+      background: C.okBg,
+      color: C.ok
+    }
+  }, r.name, ": ", fmtNum(r.value), " ", r.unit)), (m.results || []).every(r => r.value == null) && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.muted
+    }
+  }, "no result yet")))), preview && /*#__PURE__*/React.createElement("div", {
+    className: "p-3 rounded mb-3",
     style: {
       border: `1px solid ${C.border}`,
       background: C.bg
     }
   }, /*#__PURE__*/React.createElement("div", {
-    className: "text-xs font-semibold mb-1.5",
-    style: {
-      color: C.ink
-    }
-  }, "Ready to import:"), /*#__PURE__*/React.createElement("div", {
     className: "text-xs mb-2",
     style: {
       color: C.muted
     }
-  }, preview.fieldMatched, " field sample result(s) · ", preview.qcRows, " QC checkpoint(s)", preview.fieldUnmatched || preview.fieldBlank ? ` · will skip ${preview.fieldUnmatched + preview.fieldBlank} row(s) (${preview.fieldUnmatched} unmatched Sample Code, ${preview.fieldBlank} blank)` : ""), /*#__PURE__*/React.createElement("div", {
+  }, preview.matched, " sample(s) will be updated", preview.unmatched || preview.blank ? ` · skipping ${preview.unmatched + preview.blank} row(s) (${preview.unmatched} unmatched code, ${preview.blank} blank)` : ""), /*#__PURE__*/React.createElement("div", {
     className: "flex gap-2"
   }, /*#__PURE__*/React.createElement(Button, {
     size: "sm",
-    onClick: commitImport
+    onClick: confirmApply
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "check",
     size: 12
-  }), "Confirm Import"), /*#__PURE__*/React.createElement(Button, {
+  }), "Confirm & Apply"), /*#__PURE__*/React.createElement(Button, {
     variant: "outline",
     size: "sm",
     onClick: () => setPendingRows(null)
-  }, "Cancel"))))));
+  }, "Cancel"))));
 }
+
 
 function TestRecordsTab({
   testRecords,
@@ -1818,6 +1638,7 @@ function TestRecordsTab({
   onEditRecord
 }) {
   const [deleteRecord, setDeleteRecord] = useState(null);
+  const [bulkUploadRecord, setBulkUploadRecord] = useState(null);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [expanded, setExpanded] = useState({});
@@ -1825,6 +1646,23 @@ function TestRecordsTab({
     ...prev,
     [id]: !prev[id]
   }));
+  function applyBulkResults(updatedMembers) {
+    const record = bulkUploadRecord;
+    setTestRecords(prev => prev.map(r => {
+      if (r.id !== record.id) return r;
+      if (r.memberResults && r.memberResults.length) return {
+        ...r,
+        memberResults: updatedMembers
+      };
+      // single-sample shape: updatedMembers has exactly one entry
+      return {
+        ...r,
+        results: updatedMembers[0]?.results || r.results
+      };
+    }));
+    notify?.(`Updated results for ${updatedMembers.length} sample(s) on this record.`, "ok");
+    setBulkUploadRecord(null);
+  }
   const PAGE_SIZE = 10;
   function doDelete(rec) {
     setChemicals(prev => markExpiredBatches(restoreConsumption(prev, rec.bottleLog || {})));
@@ -1862,14 +1700,7 @@ function TestRecordsTab({
   }
   return /*#__PURE__*/React.createElement("div", {
     className: "grid gap-4"
-  }, testTypes && samples && /*#__PURE__*/React.createElement(BulkResultUpload, {
-    testTypes: testTypes,
-    samples: samples,
-    setSamples: setSamples,
-    testRecords: testRecords,
-    setTestRecords: setTestRecords,
-    notify: notify
-  }), /*#__PURE__*/React.createElement(SectionCard, {
+  }, /*#__PURE__*/React.createElement(SectionCard, {
     title: `All Test Records (${testRecords.length})`,
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "clipboard",
@@ -1979,6 +1810,11 @@ function TestRecordsTab({
       className: "flex items-center gap-1 ml-auto",
       onClick: e => e.stopPropagation()
     }, /*#__PURE__*/React.createElement(IconButton, {
+      name: "upload",
+      color: C.teal,
+      title: "Bulk upload results for this record's sample(s) from Excel",
+      onClick: () => setBulkUploadRecord(r)
+    }), /*#__PURE__*/React.createElement(IconButton, {
       name: "edit",
       color: C.teal,
       title: "Edit full test record",
@@ -2020,7 +1856,38 @@ function TestRecordsTab({
       style: {
         color: C.ink
       }
-    }, r.feeApplicable === false ? "Free test" : r.revenue != null ? `${r.billedSamples ?? r.numberOfSamples} × ৳${fmtNum(r.unitCost || 0)}` : "—")), (r.results || []).filter(res => res.value !== null).length > 0 && /*#__PURE__*/React.createElement("div", {
+    }, r.feeApplicable === false ? "Free test" : r.revenue != null ? `${r.billedSamples ?? r.numberOfSamples} × ৳${fmtNum(r.unitCost || 0)}` : "—")), (r.memberResults || []).length > 0 && /*#__PURE__*/React.createElement("div", {
+      className: "col-span-2 md:col-span-3"
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        color: C.muted
+      },
+      className: "mb-1"
+    }, "Samples in this Sub-Batch (", r.memberResults.length, ")"), /*#__PURE__*/React.createElement("div", {
+      className: "grid gap-1"
+    }, r.memberResults.map(m => /*#__PURE__*/React.createElement("div", {
+      key: m.sampleId,
+      className: "flex flex-wrap items-center gap-1.5 px-2 py-1 rounded",
+      style: {
+        background: C.bg
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "font-semibold",
+      style: {
+        color: C.ink
+      }
+    }, m.sampleCode), (m.results || []).filter(res => res.value != null).map(res => /*#__PURE__*/React.createElement("span", {
+      key: res.paramId,
+      className: "px-1.5 py-0.5 rounded",
+      style: {
+        background: C.okBg,
+        color: C.ok
+      }
+    }, res.name, ": ", fmtNum(res.value), " ", res.unit)), (m.results || []).every(res => res.value == null) && /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: C.warn
+      }
+    }, "no result yet"))))), (r.results || []).filter(res => res.value !== null).length > 0 && /*#__PURE__*/React.createElement("div", {
       className: "col-span-2 md:col-span-3"
     }, /*#__PURE__*/React.createElement("div", {
       style: {
@@ -2144,5 +2011,12 @@ function TestRecordsTab({
     variant: "outline",
     disabled: pageClamped >= totalPages,
     onClick: () => setPage(pageClamped + 1)
-  }, "Next")))));
+  }, "Next")))), bulkUploadRecord && /*#__PURE__*/React.createElement(RecordBulkUploadModal, {
+    record: bulkUploadRecord,
+    testType: testTypes?.find(t => t.id === bulkUploadRecord.testTypeId),
+    samples: samples,
+    onApply: applyBulkResults,
+    onClose: () => setBulkUploadRecord(null),
+    notify: notify
+  }));
 }
