@@ -1444,6 +1444,9 @@ function AddTestTab({
 function bulkResultParamHeader(p) {
   return `${p.name}${p.unit ? ` (${p.unit})` : ""}`;
 }
+const GENERIC_RESULT_PARAM_ID = "generic_result";
+const GENERIC_VALUE_HEADER = "Result Value";
+const GENERIC_UNIT_HEADER = "Unit (optional)";
 function recordMemberRows(record) {
   // Normalizes both shapes (single-sample vs sub-batch) into one list.
   if (record.memberResults && record.memberResults.length) return record.memberResults;
@@ -1457,10 +1460,19 @@ function recordMemberRows(record) {
 function downloadRecordResultTemplate(record, testType, samples) {
   const members = recordMemberRows(record);
   const params = testType?.resultParameters || [];
-  const paramHeaders = params.map(bulkResultParamHeader);
-  const headers = ["SampleCode", "ClientName", ...paramHeaders];
+  // Most test types here are set up for chemical/inventory tracking only and
+  // don't have Result Parameters configured (that's an optional, separate
+  // setup in Test Types → Calculated Results). Without at least one
+  // parameter there is no column to name — so fall back to one generic
+  // "Result Value" column instead of shipping a template with nothing to
+  // fill in.
+  const headers = params.length ? ["SampleCode", "ClientName", ...params.map(bulkResultParamHeader)] : ["SampleCode", "ClientName", GENERIC_VALUE_HEADER, GENERIC_UNIT_HEADER];
   const rows = members.map(m => {
     const sample = (samples || []).find(s => s.id === m.sampleId);
+    if (!params.length) {
+      const existing = (m.results || []).find(r => r.paramId === GENERIC_RESULT_PARAM_ID);
+      return [m.sampleCode, sample?.clientName || "", existing?.value ?? "", existing?.unit || ""];
+    }
     const byParamId = {};
     (m.results || []).forEach(r => byParamId[r.paramId] = r.value);
     return [m.sampleCode, sample?.clientName || "", ...params.map(p => byParamId[p.id] ?? "")];
@@ -1480,6 +1492,7 @@ function RecordBulkUploadModal({
 }) {
   const members = recordMemberRows(record);
   const params = testType?.resultParameters || [];
+  const isGeneric = params.length === 0;
   const [pendingRows, setPendingRows] = React.useState(null);
   function handleFile(file) {
     readWorkbook(file, (err, rows) => {
@@ -1500,7 +1513,7 @@ function RecordBulkUploadModal({
         unmatched++;
         return;
       }
-      const hasAnyValue = params.some(p => String(row[bulkResultParamHeader(p)] ?? "").trim() !== "");
+      const hasAnyValue = isGeneric ? String(row[GENERIC_VALUE_HEADER] ?? "").trim() !== "" : params.some(p => String(row[bulkResultParamHeader(p)] ?? "").trim() !== "");
       if (!hasAnyValue) blank++;else matched++;
     });
     return {
@@ -1508,32 +1521,50 @@ function RecordBulkUploadModal({
       unmatched,
       blank
     };
-  }, [pendingRows, members, params]);
+  }, [pendingRows, members, params, isGeneric]);
   function confirmApply() {
     const updatedMembers = members.map(m => {
       const row = pendingRows.find(r => String(r.SampleCode || "").trim() === m.sampleCode);
       if (!row) return m;
       const existingByParamId = {};
       (m.results || []).forEach(r => existingByParamId[r.paramId] = r);
-      const results = params.map(p => {
-        const raw = row[bulkResultParamHeader(p)];
-        const existing = existingByParamId[p.id];
-        if (raw === "" || raw == null) return existing || {
-          paramId: p.id,
-          name: p.name,
-          unit: p.unit,
-          value: null,
-          error: "No value provided"
-        };
-        const num = Number(raw);
-        return {
-          paramId: p.id,
-          name: p.name,
-          unit: p.unit,
-          value: Number.isNaN(num) ? null : num,
-          error: Number.isNaN(num) ? "Non-numeric value in upload" : null
-        };
-      });
+      let results;
+      if (isGeneric) {
+        const raw = row[GENERIC_VALUE_HEADER];
+        const existing = existingByParamId[GENERIC_RESULT_PARAM_ID];
+        if (raw === "" || raw == null) {
+          results = existing ? [existing] : [];
+        } else {
+          const num = Number(raw);
+          results = [{
+            paramId: GENERIC_RESULT_PARAM_ID,
+            name: testType?.name || record.testTypeName || "Result",
+            unit: String(row[GENERIC_UNIT_HEADER] || existing?.unit || ""),
+            value: Number.isNaN(num) ? null : num,
+            error: Number.isNaN(num) ? "Non-numeric value in upload" : null
+          }];
+        }
+      } else {
+        results = params.map(p => {
+          const raw = row[bulkResultParamHeader(p)];
+          const existing = existingByParamId[p.id];
+          if (raw === "" || raw == null) return existing || {
+            paramId: p.id,
+            name: p.name,
+            unit: p.unit,
+            value: null,
+            error: "No value provided"
+          };
+          const num = Number(raw);
+          return {
+            paramId: p.id,
+            name: p.name,
+            unit: p.unit,
+            value: Number.isNaN(num) ? null : num,
+            error: Number.isNaN(num) ? "Non-numeric value in upload" : null
+          };
+        });
+      }
       return {
         ...m,
         results
@@ -1545,7 +1576,13 @@ function RecordBulkUploadModal({
     title: `Bulk Upload Results — ${testType?.name || record.testTypeName}`,
     onClose: onClose,
     wide: true
-  }, /*#__PURE__*/React.createElement("div", {
+  }, isGeneric && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs mb-3 p-2 rounded",
+    style: {
+      background: C.infoBg,
+      color: C.info
+    }
+  }, "This test type has no Result Parameters configured yet, so the template uses one generic \"", GENERIC_VALUE_HEADER, "\" column. For multi-parameter methods (e.g. pH + Turbidity), set up named parameters under Test Types \u2192 the method \u2192 Calculated Results, then this template will use those column names instead."), /*#__PURE__*/React.createElement("div", {
     className: "text-xs mb-3",
     style: {
       color: C.muted
