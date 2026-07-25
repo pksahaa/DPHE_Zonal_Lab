@@ -136,6 +136,31 @@ this, which could wrongly hide a sample from parameters it still needed
 once one other parameter moved forward, or wrongly block re-offering a
 parameter that was actually still open.
 
+### Auto status propagation + per-parameter stage (Phase 2)
+
+Previously nothing ever moved `Sample.status` forward automatically — every
+transition (including "all results are in") needed a manual click in
+Sample Detail, even when the underlying work was already done. Now, every
+time a test record is saved (single-sample or via a Sub-Batch), the app
+checks whether *every* parameter the sample requested now has a result; if
+so and the sample is still `in_progress`, it auto-advances to
+`results_entered` via the normal `transitionSample()` state machine (so it
+still respects the allowed-transitions table and still logs a custody
+event) — see the save handler in `13-testrecords-ui.js`.
+
+Review / Approve / Release remain single decisions made on the whole
+Sample (unchanged, same buttons in Sample Detail) — turning those into
+fully independent per-parameter actions would mean rebuilding the
+Review/Approve UI itself around Sub-Batches instead of Samples, which is a
+bigger, separate change from what's implemented here. What IS fully
+per-parameter now is *visibility*: `testStageForSample()` in
+`16-sub-batch.js` reports each requested parameter's real position —
+Pending / In Progress / Result Entered / Under Review / Approved /
+Released / On Hold — shown on the Sample Detail "Requested Tests" chips.
+An un-resulted parameter never shows further along than "Pending"/"In
+Progress" even if the sample itself has been pushed further, since a
+result can't be reviewed/approved before it exists.
+
 ## Custom Report Generator (added)
 
 - Reports tab → "Official Report" group → "Custom Report Generator".

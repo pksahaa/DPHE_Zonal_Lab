@@ -115,3 +115,48 @@ function testStatusForSample(sample, testTypeId, testRecords, subBatches) {
   if (isTestQueuedForSample(sample, testTypeId, subBatches)) return "queued";
   return "pending";
 }
+
+// ---- richer per-parameter STAGE (Phase 2) -------------------------------
+// testStatusForSample() above answers "is this parameter's result in yet?"
+// (done/queued/pending/blocked). This answers the fuller question: "where
+// is this parameter in the whole pipeline right now?" — pending / assigned
+// / in_progress / results_entered / under_review / approved / released.
+//
+// IMPORTANT — what's genuinely per-parameter vs. still whole-sample:
+//   - Whether a result exists (done vs. not) IS tracked per (sample,
+//     testType) pair — that part is fully accurate per parameter.
+//   - Review / Approve / Release are still single decisions made on the
+//     whole Sample today (one set of buttons in Sample Detail, matching
+//     how reviewers actually work through a sample) — rebuilding those to
+//     fire per-parameter would mean reworking the Review/Approve UI itself,
+//     which is a separate, bigger change from "can I see per-parameter
+//     status" (this function's job). So once a sample is formally moved to
+//     under_review/approved/released, every one of its RESULTED parameters
+//     is shown at that same stage — an un-resulted parameter never jumps
+//     ahead of "results_entered" even if the sample itself has been pushed
+//     further, since a result can't be reviewed/approved before it exists.
+const TEST_STAGE_ORDER = ["pending", "queued", "in_progress", "results_entered", "under_review", "approved", "released"];
+function testStageForSample(sample, testTypeId, testRecords, subBatches) {
+  if (sampleBlockedFromTesting(sample)) return "blocked";
+  const basic = testStatusForSample(sample, testTypeId, testRecords, subBatches);
+  if (basic === "pending") return "pending";
+  if (basic === "queued") return "in_progress"; // committed to a pending sub-batch = work has started
+  // basic === "done": a result exists for this specific parameter — now
+  // reflect how far the WHOLE sample has been pushed through
+  // review/approval, capped at "results_entered" if the sample hasn't been
+  // moved past that yet.
+  const wholeSampleStage = ["results_entered", "under_review", "approved", "released"].includes(sample.status) ? sample.status : "results_entered";
+  return wholeSampleStage;
+}
+function testStageLabel(stage) {
+  return {
+    pending: "Pending",
+    queued: "In Progress",
+    in_progress: "In Progress",
+    results_entered: "Result Entered",
+    under_review: "Under Review",
+    approved: "Approved",
+    released: "Released",
+    blocked: "On Hold"
+  }[stage] || stage;
+}

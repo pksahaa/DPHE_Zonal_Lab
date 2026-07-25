@@ -849,41 +849,52 @@ function SampleDetail({
   }, "Requested Tests"), /*#__PURE__*/React.createElement("div", {
     className: "flex flex-wrap gap-1.5"
   }, sample.requestedTests.map(t => {
-    // Per-parameter status — NOT sample.status. A sample with 3 requested
-    // tests can have one Done, one Queued in a pending sub-batch, and one
-    // still fully Pending, all at the same time.
-    const paramStatus = testStatusForSample(sample, t.testTypeId, testRecords, subBatches);
-    const paramStatusStyle = {
-      done: {
+    // Per-parameter STAGE — NOT sample.status. A sample with 3 requested
+    // tests can have one Released, one still In Progress, and one still
+    // fully Pending, all at the same time. See testStageForSample() in
+    // 16-sub-batch.js for exactly what's tracked per-parameter vs. still
+    // decided for the whole sample.
+    const paramStage = testStageForSample(sample, t.testTypeId, testRecords, subBatches);
+    const paramStageStyle = {
+      released: {
         bg: `${C.ok}1A`,
-        fg: C.ok,
-        label: "Done"
+        fg: C.ok
       },
-      queued: {
+      approved: {
+        bg: `${C.ok}1A`,
+        fg: C.ok
+      },
+      under_review: {
         bg: `${C.info}1A`,
-        fg: C.info,
-        label: "Queued"
+        fg: C.info
+      },
+      results_entered: {
+        bg: `${C.info}1A`,
+        fg: C.info
+      },
+      in_progress: {
+        bg: `${C.teal}1A`,
+        fg: C.tealDark
       },
       pending: {
         bg: `${C.teal}1A`,
-        fg: C.tealDark,
-        label: "Pending"
+        fg: C.tealDark
       },
       blocked: {
         bg: `${C.muted}1A`,
-        fg: C.muted,
-        label: "On Hold"
+        fg: C.muted
       }
-    }[paramStatus];
+    }[paramStage];
+    const paramStageLabel = testStageLabel(paramStage);
     return /*#__PURE__*/React.createElement("span", {
       key: t.testTypeId,
       className: "text-[11px] px-2 py-0.5 rounded-full",
       style: {
-        background: paramStatusStyle.bg,
-        color: paramStatusStyle.fg
+        background: paramStageStyle.bg,
+        color: paramStageStyle.fg
       },
-      title: `${t.testTypeName} — ${paramStatusStyle.label}`
-    }, t.testTypeName, " · ", paramStatusStyle.label);
+      title: `${t.testTypeName} — ${paramStageLabel}`
+    }, t.testTypeName, " · ", paramStageLabel);
   })), !!sample.linkedTestRecordIds.length && /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] mt-1.5",
     style: {

@@ -442,6 +442,7 @@ function LabApp({
     setSamples: setSamples,
     subBatches: subBatches,
     setSubBatches: setSubBatches,
+    session: session,
     notify: notify,
     editingRecord: editingRecord,
     onDoneEditing: () => setEditingRecord(null),
