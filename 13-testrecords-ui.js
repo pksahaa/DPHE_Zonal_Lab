@@ -17,10 +17,12 @@ function AddTestTab({
   setTestRecords,
   samples,
   setSamples,
+  references,
   subBatches,
   setSubBatches,
   session,
   notify,
+  goToSample,
   editingRecord,
   onDoneEditing,
   goToTestTypes
@@ -1044,19 +1046,25 @@ function AddTestTab({
   }, "— No sub-batch —"), pendingSubBatches.map(sb => /*#__PURE__*/React.createElement("option", {
     key: sb.id,
     value: sb.id
-  }, sb.label, " — ", sb.testTypeName, " (", sb.memberSampleIds.length, " samples)")))), selectedSample && /*#__PURE__*/React.createElement("div", {
+  }, sb.label, " — ", sb.testTypeName, " (", sb.memberSampleIds.length, " samples)")))), selectedSample && /*#__PURE__*/React.createElement(SampleMiniCard, {
+    sample: selectedSample,
+    references: references,
+    testRecords: testRecords,
+    subBatches: subBatches,
+    goToSample: goToSample
+  }), selectedSubBatch && /*#__PURE__*/React.createElement("div", {
     className: "mx-4 mt-2 p-2 rounded text-xs",
     style: {
       background: C.infoBg,
       color: C.info
     }
-  }, "Batch of ", selectedSample.numberOfSamples || 1, " sample(s) from ", selectedSample.siteLocation, ". Requested tests: ", selectedSample.requestedTests.map(rt => rt.testTypeName).join(", "), "."), selectedSubBatch && /*#__PURE__*/React.createElement("div", {
-    className: "mx-4 mt-2 p-2 rounded text-xs",
-    style: {
-      background: C.infoBg,
-      color: C.info
-    }
-  }, selectedSubBatch.label, ": ", subBatchMembers.length, " sample(s) — ", subBatchMembers.map(s => s.sampleCode).join(", "), ". Test Type locked to ", selectedSubBatch.testTypeName, ".")), /*#__PURE__*/React.createElement("div", {
+  }, selectedSubBatch.label, ": ", subBatchMembers.length, " sample(s) — ", subBatchMembers.map((s, i) => /*#__PURE__*/React.createElement(React.Fragment, {
+    key: s.id
+  }, i > 0 && ", ", goToSample ? /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "underline",
+    onClick: () => goToSample(s.id)
+  }, s.sampleCode) : s.sampleCode)), ". Test Type locked to ", selectedSubBatch.testTypeName, ".")), /*#__PURE__*/React.createElement("div", {
     className: "p-4 grid gap-3.5",
     style: {
       gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))"

@@ -215,6 +215,30 @@ backfilled once, on load, by `backfillRequestedTestStatuses()` in
 `16-sub-batch.js` — same idempotent-migration pattern as the Reference
 backfill in Phase 1.
 
+### Sample Detail as the single source of truth (observation #4)
+
+Add Test Record and the Report Generator used to each show their own
+ad-hoc slice of a sample (a bare sentence of text, independently
+formatted). Sample Detail (in the Samples tab) is the real record — full
+registration info, Reference, custody log, and every requested parameter's
+own status. Two small, shared pieces now connect everything to it instead
+of duplicating it:
+
+- **`SampleMiniCard`** (`21-sample-ui.js`) — a shared summary component
+  (code, client, site, Reference, per-parameter status chips) that Add
+  Test Record renders instead of its own one-line summary. Report
+  Generator's sample picker gets a lighter "↗" deep-link per row instead
+  (a full card per row would be too heavy for a 50-sample checklist).
+- **`goToSample(id)`** (`99-app.js`) — switches to the Samples tab and
+  opens that sample's Sample Detail directly. `focusSampleId` is lifted
+  out of `SamplesTab` into the app root so any tab can drive it (`SamplesTab`
+  still falls back to its own internal state if used without these props,
+  so it stays usable standalone). Wired into Add Test Record's sample/
+  sub-batch pickers and the Report Generator's sample list.
+
+QC Module doesn't reference individual samples directly, so it didn't need
+this.
+
 ## Custom Report Generator (added)
 
 - Reports tab → "Official Report" group → "Custom Report Generator".

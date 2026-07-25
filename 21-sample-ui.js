@@ -233,6 +233,67 @@ function ReferencePicker({
   }, "Create Reference")))));
 }
 
+// ============================================================================
+// SAMPLE MINI CARD — the shared "here's this sample, and here's where the
+// full record lives" component. Sample Detail (below) is the single source
+// of truth for everything about a sample; every OTHER screen that needs to
+// show sample info (Add Test Record, Report Generator) renders this instead
+// of inventing its own ad-hoc summary, and links back with `goToSample`.
+// ============================================================================
+function SampleMiniCard({
+  sample,
+  references,
+  testRecords,
+  subBatches,
+  goToSample,
+  note
+}) {
+  if (!sample) return null;
+  const ref = sample.referenceId ? findReferenceById(references, sample.referenceId) : null;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "mx-4 mt-2 p-3 rounded",
+    style: {
+      background: C.infoBg,
+      border: `1px solid ${C.info}33`
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-2 flex-wrap"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-sm font-semibold",
+    style: {
+      color: C.ink
+    }
+  }, sample.sampleCode, " — ", sample.clientName), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs ml-2",
+    style: {
+      color: C.muted
+    }
+  }, sample.siteLocation, ref ? ` · ${referenceSourceMeta(ref.sourceType).label}: ${referenceDisplayLabel(ref)}` : "")), goToSample && /*#__PURE__*/React.createElement(Button, {
+    size: "sm",
+    variant: "outline",
+    onClick: () => goToSample(sample.id)
+  }, "View Full Sample →")), note && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs mt-1",
+    style: {
+      color: C.info
+    }
+  }, note), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-1.5 mt-1.5"
+  }, (sample.requestedTests || []).map(t => {
+    const stage = testStageForSample(sample, t.testTypeId, testRecords, subBatches);
+    const style = testStageChipStyle(stage);
+    return /*#__PURE__*/React.createElement("span", {
+      key: t.testTypeId,
+      className: "text-[11px] px-2 py-0.5 rounded-full",
+      style: {
+        background: style.bg,
+        color: style.fg
+      },
+      title: `${t.testTypeName} — ${testStageLabel(stage)}`
+    }, t.testTypeName, " · ", testStageLabel(stage));
+  })));
+}
+
 function SampleRegistrationForm({
   testTypes,
   onCreate,
@@ -860,36 +921,7 @@ function SampleDetail({
     // 16-sub-batch.js for exactly what's tracked per-parameter vs. still
     // decided for the whole sample.
     const paramStage = testStageForSample(sample, t.testTypeId, testRecords, subBatches);
-    const paramStageStyle = {
-      released: {
-        bg: `${C.ok}1A`,
-        fg: C.ok
-      },
-      approved: {
-        bg: `${C.ok}1A`,
-        fg: C.ok
-      },
-      under_review: {
-        bg: `${C.info}1A`,
-        fg: C.info
-      },
-      results_entered: {
-        bg: `${C.info}1A`,
-        fg: C.info
-      },
-      in_progress: {
-        bg: `${C.teal}1A`,
-        fg: C.tealDark
-      },
-      pending: {
-        bg: `${C.teal}1A`,
-        fg: C.tealDark
-      },
-      blocked: {
-        bg: `${C.muted}1A`,
-        fg: C.muted
-      }
-    }[paramStage];
+    const paramStageStyle = testStageChipStyle(paramStage);
     const paramStageLabel = testStageLabel(paramStage);
     return /*#__PURE__*/React.createElement("span", {
       key: t.testTypeId,
@@ -1359,12 +1391,16 @@ function SamplesTab({
   equipment,
   users,
   session,
-  notify
+  notify,
+  focusSampleId,
+  setFocusSampleId
 }) {
   const [sampleSubTab, setSampleSubTab] = React.useState("samples");
   const [showBatchForm, setShowBatchForm] = React.useState(false);
   const bulkUploadInputRef = React.useRef(null);
-  const [openId, setOpenId] = React.useState(null);
+  const [internalOpenId, setInternalOpenId] = React.useState(null);
+  const openId = focusSampleId !== undefined ? focusSampleId : internalOpenId;
+  const setOpenId = setFocusSampleId || setInternalOpenId;
   const [statusFilter, setStatusFilter] = React.useState("");
   const [q, setQ] = React.useState("");
   const [expandedBatches, setExpandedBatches] = React.useState(new Set());

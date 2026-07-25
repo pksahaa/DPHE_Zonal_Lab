@@ -1963,6 +1963,7 @@ function ReportsTab({
   users,
   session,
   notify,
+  goToSample,
   onLoadDemoData
 }) {
   const [filters, setFilters] = React.useState(DEFAULT_FILTERS);
@@ -2046,6 +2047,7 @@ function ReportsTab({
     references,
     users,
     session,
+    goToSample,
     notify
   };
   function printReport() {

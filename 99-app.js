@@ -56,6 +56,16 @@ function LabApp({
 }) {
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState("dashboard");
+  // Sample Detail (in the Samples tab) is the single source of truth for
+  // "everything about this sample" — Test Record UI, QC Module, and the
+  // Report Generator each used to show their own ad-hoc slice of a sample
+  // instead of linking to it. This is the shared piece of navigation state
+  // that lets any of them jump straight there.
+  const [focusSampleId, setFocusSampleId] = useState(null);
+  function goToSample(sampleId) {
+    setFocusSampleId(sampleId);
+    setTab("samples");
+  }
   const [invTab, setInvTab] = useState("equipment");
   const [reportTab, setReportTab] = useState("executive");
   const [theme, setTheme] = useState(() => loadKey("theme", "light"));
@@ -402,7 +412,9 @@ function LabApp({
     equipment: equipment,
     users: users,
     session: session,
-    notify: notify
+    notify: notify,
+    focusSampleId: focusSampleId,
+    setFocusSampleId: setFocusSampleId
   }) : /*#__PURE__*/React.createElement("div", {
     className: "p-8 text-sm",
     style: {
@@ -448,10 +460,12 @@ function LabApp({
     setTestRecords: setTestRecords,
     samples: samples,
     setSamples: setSamples,
+    references: references,
     subBatches: subBatches,
     setSubBatches: setSubBatches,
     session: session,
     notify: notify,
+    goToSample: goToSample,
     editingRecord: editingRecord,
     onDoneEditing: () => setEditingRecord(null),
     goToTestTypes: () => setTab("testTypes")
@@ -485,6 +499,7 @@ function LabApp({
     users: users,
     session: session,
     notify: notify,
+    goToSample: goToSample,
     onLoadDemoData: loadDemoReportData
   }), tab === "qc" && /*#__PURE__*/React.createElement(QcModuleTab, {
     testTypes: testTypes,

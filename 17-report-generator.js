@@ -181,6 +181,7 @@ function CustomReportGeneratorPage({
   testRecords,
   users,
   session,
+  goToSample,
   notify
 }) {
   const [q, setQ] = React.useState("");
@@ -375,7 +376,19 @@ function CustomReportGeneratorPage({
     style: {
       color: C.muted
     }
-  }, s.clientName, " · ", s.siteLocation, s.village ? ` · ${s.village}` : "")))), /*#__PURE__*/React.createElement("div", {
+  }, s.clientName, " · ", s.siteLocation, s.village ? ` · ${s.village}` : ""), goToSample && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    title: "View full sample record",
+    className: "ml-auto",
+    style: {
+      color: C.info
+    },
+    onClick: e => {
+      e.preventDefault();
+      e.stopPropagation();
+      goToSample(s.id);
+    }
+  }, "↗")))), /*#__PURE__*/React.createElement("div", {
     className: "text-xs mt-2 font-semibold",
     style: {
       color: C.teal

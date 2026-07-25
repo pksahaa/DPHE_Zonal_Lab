@@ -160,6 +160,41 @@ function testStageLabel(stage) {
     blocked: "On Hold"
   }[stage] || stage;
 }
+function testStageChipStyle(stage) {
+  return {
+    released: {
+      bg: `${C.ok}1A`,
+      fg: C.ok
+    },
+    approved: {
+      bg: `${C.ok}1A`,
+      fg: C.ok
+    },
+    under_review: {
+      bg: `${C.info}1A`,
+      fg: C.info
+    },
+    results_entered: {
+      bg: `${C.info}1A`,
+      fg: C.info
+    },
+    in_progress: {
+      bg: `${C.teal}1A`,
+      fg: C.tealDark
+    },
+    pending: {
+      bg: `${C.teal}1A`,
+      fg: C.tealDark
+    },
+    blocked: {
+      bg: `${C.muted}1A`,
+      fg: C.muted
+    }
+  }[stage] || {
+    bg: `${C.muted}1A`,
+    fg: C.muted
+  };
+}
 
 // ---- migration: samples registered before Phase 3 have requestedTests
 // with no `status` field. Backfill it once from the same derivation logic
