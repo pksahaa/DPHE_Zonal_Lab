@@ -69,6 +69,170 @@ function BatchStatusSummary({
 }
 
 // ---- Registration form ----
+// ============================================================================
+// REFERENCE PICKER — pick an existing Reference (source paperwork: DPHE /
+// institution / walk-in, letter no./date, org, contact) or create a new one
+// inline without leaving the registration form. Used by both
+// SampleRegistrationForm and BatchRegistrationForm so a sample is always
+// created already pointing at a real Reference instead of a loose
+// free-text batchRef string.
+// ============================================================================
+function ReferencePicker({
+  references,
+  setReferences,
+  value,
+  onChange,
+  session,
+  notify,
+  label,
+  helpText
+}) {
+  const [showNew, setShowNew] = React.useState(false);
+  const [newForm, setNewForm] = React.useState({
+    sourceType: "walkin",
+    refNo: "",
+    organizationName: "",
+    letterDate: "",
+    contactPerson: "",
+    contactPhone: "",
+    address: "",
+    notes: ""
+  });
+  const sorted = [...(references || [])].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+  async function createNew() {
+    const ref = createReference(newForm, references, session);
+    await setReferences(prev => [...prev, ref], ref);
+    onChange(ref.id);
+    setShowNew(false);
+    notify?.(`Reference ${ref.refNo} created.`, "ok");
+    setNewForm({
+      sourceType: "walkin",
+      refNo: "",
+      organizationName: "",
+      letterDate: "",
+      contactPerson: "",
+      contactPhone: "",
+      address: "",
+      notes: ""
+    });
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-1 text-xs"
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      color: C.muted
+    }
+  }, label || "Reference (Source)"), helpText && /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px]",
+    style: {
+      color: C.muted
+    }
+  }, helpText), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2"
+  }, /*#__PURE__*/React.createElement("select", {
+    className: "border rounded px-2 py-1.5 text-sm flex-1",
+    style: {
+      borderColor: C.border,
+      color: C.ink
+    },
+    value: value || "",
+    onChange: e => onChange(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "No reference selected yet…"), sorted.map(r => /*#__PURE__*/React.createElement("option", {
+    key: r.id,
+    value: r.id
+  }, referenceSourceMeta(r.sourceType).label, " — ", referenceDisplayLabel(r)))), /*#__PURE__*/React.createElement(Button, {
+    variant: "outline",
+    size: "sm",
+    onClick: () => setShowNew(true)
+  }, "+ New")), showNew && /*#__PURE__*/React.createElement(Modal, {
+    title: "New Reference",
+    onClose: () => setShowNew(false)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid gap-3"
+  }, /*#__PURE__*/React.createElement(SelectField, {
+    simple: true,
+    label: "Source Type",
+    value: newForm.sourceType,
+    onChange: v => setNewForm({
+      ...newForm,
+      sourceType: v
+    }),
+    options: REFERENCE_SOURCE_TYPES.map(s => ({
+      value: s.key,
+      label: s.label
+    }))
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Reference / Memo No. (leave blank for walk-in with no letter — one will be auto-generated)",
+    value: newForm.refNo,
+    onChange: v => setNewForm({
+      ...newForm,
+      refNo: v
+    })
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Organization Name",
+    value: newForm.organizationName,
+    onChange: v => setNewForm({
+      ...newForm,
+      organizationName: v
+    })
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    type: "date",
+    label: "Letter Date",
+    value: newForm.letterDate,
+    onChange: v => setNewForm({
+      ...newForm,
+      letterDate: v
+    })
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Contact Person",
+    value: newForm.contactPerson,
+    onChange: v => setNewForm({
+      ...newForm,
+      contactPerson: v
+    })
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Contact Phone",
+    value: newForm.contactPhone,
+    onChange: v => setNewForm({
+      ...newForm,
+      contactPhone: v
+    })
+  })), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Address",
+    value: newForm.address,
+    onChange: v => setNewForm({
+      ...newForm,
+      address: v
+    })
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    textarea: true,
+    label: "Notes",
+    value: newForm.notes,
+    onChange: v => setNewForm({
+      ...newForm,
+      notes: v
+    })
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end gap-2"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "ghost",
+    onClick: () => setShowNew(false)
+  }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
+    onClick: createNew
+  }, "Create Reference")))));
+}
+
 function SampleRegistrationForm({
   testTypes,
   onCreate,
@@ -427,6 +591,8 @@ function SampleDetail({
   testTypes,
   testRecords,
   subBatches,
+  references,
+  setReferences,
   onClose,
   onUpdate,
   onDelete,
@@ -452,6 +618,7 @@ function SampleDetail({
       caretakerName: sample.caretakerName,
       sampleSourceId: sample.sampleSourceId,
       batchRef: sample.batchRef,
+      referenceId: sample.referenceId,
       matrix: sample.matrix,
       collectionDate: sample.collectionDate,
       collectedBy: sample.collectedBy,
@@ -500,11 +667,24 @@ function SampleDetail({
       color: C.ink
     }
   }, "Correct Registration Details"), /*#__PURE__*/React.createElement("div", {
+    className: "mb-2"
+  }, /*#__PURE__*/React.createElement(ReferencePicker, {
+    references: references,
+    setReferences: setReferences,
+    value: editForm?.referenceId,
+    onChange: v => setEditForm(prev => ({
+      ...prev,
+      referenceId: v
+    })),
+    session: session,
+    notify: notify,
+    label: "Reference (Source)"
+  })), /*#__PURE__*/React.createElement("div", {
     className: "grid gap-2",
     style: {
       gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))"
     }
-  }, [["clientName", "Client / Requester"], ["siteLocation", "Site / Location"], ["district", "District"], ["upazila", "Upazila / City Corp"], ["union", "Union / Pourashava"], ["village", "Village / Ward"], ["caretakerName", "Caretaker Name"], ["sampleSourceId", "Sample Source"], ["batchRef", "Batch Ref"], ["collectedBy", "Collected By"], ["notes", "Notes"]].map(([field, fieldLabel]) => /*#__PURE__*/React.createElement("label", {
+  }, [["clientName", "Client / Requester"], ["siteLocation", "Site / Location"], ["district", "District"], ["upazila", "Upazila / City Corp"], ["union", "Union / Pourashava"], ["village", "Village / Ward"], ["caretakerName", "Caretaker Name"], ["sampleSourceId", "Sample Source"], ["collectedBy", "Collected By"], ["notes", "Notes"]].map(([field, fieldLabel]) => /*#__PURE__*/React.createElement("label", {
     key: field,
     className: "flex flex-col gap-0.5 text-xs",
     style: {
@@ -619,7 +799,14 @@ function SampleDetail({
     status: sample.status
   }), /*#__PURE__*/React.createElement(PriorityBadge, {
     priority: sample.priority
-  }), /*#__PURE__*/React.createElement("span", {
+  }), sample.referenceId && findReferenceById(references, sample.referenceId) && /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] px-2 py-0.5 rounded-full",
+    style: {
+      background: `${C.info}1A`,
+      color: C.info
+    },
+    title: "Source reference"
+  }, referenceSourceMeta(findReferenceById(references, sample.referenceId).sourceType).label, ": ", referenceDisplayLabel(findReferenceById(references, sample.referenceId))), /*#__PURE__*/React.createElement("span", {
     className: "text-xs",
     style: {
       color: C.muted
@@ -812,6 +999,10 @@ function SampleDetail({
 // ---- manual batch registration: shared fields once + repeatable per-sample rows ----
 function BatchRegistrationForm({
   testTypes,
+  references,
+  setReferences,
+  session,
+  notify,
   onCreate,
   onClose
 }) {
@@ -825,7 +1016,7 @@ function BatchRegistrationForm({
     collectedBy: "",
     receivedDate: todayStr(),
     priority: "Routine",
-    batchRef: ""
+    referenceId: ""
   });
   const [selectedTests, setSelectedTests] = React.useState([]);
   const [rows, setRows] = React.useState([{
@@ -866,6 +1057,10 @@ function BatchRegistrationForm({
       setErr("Client / requester is required.");
       return;
     }
+    if (!shared.referenceId) {
+      setErr("Select or create a Reference (source) first.");
+      return;
+    }
     if (rows.every(r => !r.village.trim() && !r.caretakerName.trim())) {
       setErr("Fill in at least one sample row (Village/Ward or Caretaker Name).");
       return;
@@ -892,6 +1087,20 @@ function BatchRegistrationForm({
       color: C.ink
     }
   }, "Shared Info (applies to every sample in this batch)"), /*#__PURE__*/React.createElement("div", {
+    className: "mb-3"
+  }, /*#__PURE__*/React.createElement(ReferencePicker, {
+    references: references,
+    setReferences: setReferences,
+    value: shared.referenceId,
+    onChange: v => setShared({
+      ...shared,
+      referenceId: v
+    }),
+    session: session,
+    notify: notify,
+    label: "Reference (Source) — required",
+    helpText: "DPHE / institution letter+ref no., or a walk-in with no letter (one will be auto-generated)."
+  })), /*#__PURE__*/React.createElement("div", {
     className: "grid gap-3 mb-3",
     style: {
       gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))"
@@ -903,14 +1112,6 @@ function BatchRegistrationForm({
     onChange: v => setShared({
       ...shared,
       clientName: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Batch Ref (e.g. Memo No.)",
-    value: shared.batchRef,
-    onChange: v => setShared({
-      ...shared,
-      batchRef: v
     })
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
@@ -1133,6 +1334,8 @@ function ImportTestPickerModal({
 function SamplesTab({
   samples,
   setSamples,
+  references,
+  setReferences,
   testTypes,
   testRecords,
   subBatches,
@@ -1165,23 +1368,24 @@ function SamplesTab({
       return next;
     });
   }
-  // Group filtered samples by batchRef (bulk upload / Register Batch) while
-  // keeping individually-registered samples (no batchRef) as plain rows, all
+  // Group filtered samples by Reference (bulk upload / Register Batch) while
+  // keeping individually-registered samples (no reference) as plain rows, all
   // in original sort order (position = first/most-recent member encountered).
   const batchGroups = {};
   filtered.forEach(s => {
-    if (s.batchRef) (batchGroups[s.batchRef] = batchGroups[s.batchRef] || []).push(s);
+    if (s.referenceId) (batchGroups[s.referenceId] = batchGroups[s.referenceId] || []).push(s);
   });
   const listItems = [];
-  const seenBatchRefs = new Set();
+  const seenReferenceIds = new Set();
   filtered.forEach(s => {
-    if (s.batchRef) {
-      if (seenBatchRefs.has(s.batchRef)) return;
-      seenBatchRefs.add(s.batchRef);
+    if (s.referenceId) {
+      if (seenReferenceIds.has(s.referenceId)) return;
+      seenReferenceIds.add(s.referenceId);
       listItems.push({
         type: "batch",
-        batchRef: s.batchRef,
-        members: batchGroups[s.batchRef]
+        referenceId: s.referenceId,
+        reference: findReferenceById(references, s.referenceId),
+        members: batchGroups[s.referenceId]
       });
     } else {
       listItems.push({
@@ -1214,8 +1418,22 @@ function SamplesTab({
   // physical manifest sheet requesting the same panel for the whole batch.
   async function confirmImportSamples(requestedTests) {
     let runningSamples = [...samples];
+    let runningReferences = [...references];
+    const refNoToReference = new Map(runningReferences.map(r => [r.refNo, r]));
     let count = 0;
     for (const row of pendingImportRows) {
+      const rawRef = String(row.BatchRef || row["Batch Ref"] || "").trim();
+      let ref = rawRef ? refNoToReference.get(rawRef) : null;
+      if (!ref) {
+        ref = createReference({
+          refNo: rawRef,
+          sourceType: rawRef ? "institution" : "walkin",
+          notes: "Auto-created from bulk manifest import — please verify source type and add organization/contact details."
+        }, runningReferences, session);
+        runningReferences = [...runningReferences, ref];
+        if (rawRef) refNoToReference.set(rawRef, ref);
+        await setReferences(prev => [...prev, ref], ref);
+      }
       const sample = createSample({
         clientName: String(row.ClientName || row["Client Name"] || "").trim(),
         siteLocation: String(row.SiteLocation || row["Site Location"] || "").trim(),
@@ -1225,7 +1443,8 @@ function SamplesTab({
         village: String(row.Village || row["Village/Ward"] || "").trim(),
         caretakerName: String(row.CaretakerName || row["Caretaker Name"] || "").trim(),
         sampleSourceId: String(row.SampleSource || row["Sample Source"] || "").trim(),
-        batchRef: String(row.BatchRef || row["Batch Ref"] || "").trim(),
+        referenceId: ref.id,
+        batchRef: ref.refNo,
         matrix: String(row.Matrix || "Drinking Water").trim(),
         collectionDate: String(row.CollectionDate || todayStr()),
         collectedBy: String(row.CollectedBy || "").trim(),
@@ -1251,11 +1470,14 @@ function SamplesTab({
     notify?.(`${sample.sampleCode} deleted.`, "ok");
   }
   async function handleBatchCreate(shared, rows) {
+    const ref = findReferenceById(references, shared.referenceId);
     let runningSamples = [...samples];
     let count = 0;
     for (const row of rows) {
       const sample = createSample({
         ...shared,
+        // legacy display fallback — the real source of truth is referenceId
+        batchRef: ref ? ref.refNo : "",
         village: row.village,
         caretakerName: row.caretakerName,
         sampleSourceId: row.sampleSourceId,
@@ -1266,7 +1488,7 @@ function SamplesTab({
       count++;
     }
     setShowBatchForm(false);
-    notify?.(`${count} sample(s) registered under batch ${shared.batchRef || "(no ref)"}.`, "ok");
+    notify?.(`${count} sample(s) registered under Reference ${ref ? referenceDisplayLabel(ref) : "(none)"}.`, "ok");
   }
   const stats = sampleLifecycleStats(samples);
   function renderSampleRow(s, indented) {
@@ -1452,16 +1674,16 @@ function SamplesTab({
     }
   }, h)))), /*#__PURE__*/React.createElement("tbody", null, listItems.map(item => {
     if (item.type === "single") return renderSampleRow(item.sample, false);
-    const isOpen = expandedBatches.has(item.batchRef);
+    const isOpen = expandedBatches.has(item.referenceId);
     return /*#__PURE__*/React.createElement(React.Fragment, {
-      key: "batch-" + item.batchRef
+      key: "batch-" + item.referenceId
     }, /*#__PURE__*/React.createElement("tr", {
       className: "cursor-pointer",
       style: {
         borderTop: `1px solid ${C.border}`,
         background: C.bg
       },
-      onClick: () => toggleBatchExpand(item.batchRef)
+      onClick: () => toggleBatchExpand(item.referenceId)
     }, /*#__PURE__*/React.createElement("td", {
       colSpan: 8,
       className: "px-3 py-2"
@@ -1480,7 +1702,7 @@ function SamplesTab({
       style: {
         color: C.ink
       }
-    }, "Batch: ", item.batchRef), /*#__PURE__*/React.createElement("span", {
+    }, item.reference ? `${referenceSourceMeta(item.reference.sourceType).label}: ${referenceDisplayLabel(item.reference)}` : "Reference: (unknown)"), /*#__PURE__*/React.createElement("span", {
       className: "text-xs",
       style: {
         color: C.muted
@@ -1502,10 +1724,15 @@ function SamplesTab({
     subBatches: subBatches,
     setSubBatches: setSubBatches,
     testRecords: testRecords,
+    references: references,
     users: users,
     notify: notify
   }), showBatchForm && /*#__PURE__*/React.createElement(BatchRegistrationForm, {
     testTypes: testTypes,
+    references: references,
+    setReferences: setReferences,
+    session: session,
+    notify: notify,
     onCreate: handleBatchCreate,
     onClose: () => setShowBatchForm(false)
   }), pendingImportRows && /*#__PURE__*/React.createElement(ImportTestPickerModal, {
@@ -1523,6 +1750,8 @@ function SamplesTab({
     testTypes: testTypes,
     testRecords: testRecords,
     subBatches: subBatches,
+    references: references,
+    setReferences: setReferences,
     onClose: () => setOpenId(null),
     onUpdate: handleUpdate,
     onDelete: handleDeleteSample,
@@ -1552,11 +1781,12 @@ function SubBatchBuilder({
   subBatches,
   setSubBatches,
   testRecords,
+  references,
   users,
   notify
 }) {
   const [selectedTestId, setSelectedTestId] = React.useState("");
-  const [selectedBatchRefs, setSelectedBatchRefs] = React.useState([]);
+  const [selectedReferenceIds, setSelectedReferenceIds] = React.useState([]);
   const [selectedSampleIds, setSelectedSampleIds] = React.useState([]);
   const [label, setLabel] = React.useState("");
   const [assignedTester, setAssignedTester] = React.useState("");
@@ -1575,17 +1805,17 @@ function SubBatchBuilder({
     const subBatchesForCheck = editingSubBatchId ? subBatches.filter(sb => sb.id !== editingSubBatchId) : subBatches;
     return pendingTestTypeIdsForSample(s, testRecords, subBatchesForCheck).includes(selectedTestId);
   }) : [];
-  // Registration batches (BatchRef) available to filter by, scoped to the
-  // Test Type above — a batch can carry several test types, so this narrows
-  // to only batches that actually have samples requesting THIS test.
-  const batchRefOptions = Array.from(new Set(eligibleForTest.map(s => s.batchRef).filter(Boolean))).sort();
-  const eligibleSamples = selectedBatchRefs.length ? eligibleForTest.filter(s => selectedBatchRefs.includes(s.batchRef)) : eligibleForTest;
-  const distinctBatchRefs = Array.from(new Set(samples.filter(s => selectedSampleIds.includes(s.id)).map(s => s.batchRef).filter(Boolean)));
+  // References available to filter by, scoped to the Test Type above — a
+  // Reference (source batch) can carry several test types, so this narrows
+  // to only References that actually have samples requesting THIS test.
+  const referenceFilterOptions = Array.from(new Set(eligibleForTest.map(s => s.referenceId).filter(Boolean))).map(id => findReferenceById(references, id)).filter(Boolean).sort((a, b) => (a.refNo || "").localeCompare(b.refNo || ""));
+  const eligibleSamples = selectedReferenceIds.length ? eligibleForTest.filter(s => selectedReferenceIds.includes(s.referenceId)) : eligibleForTest;
+  const distinctReferences = Array.from(new Set(samples.filter(s => selectedSampleIds.includes(s.id)).map(s => s.referenceId).filter(Boolean))).map(id => findReferenceById(references, id)).filter(Boolean);
   function toggleMember(id) {
     setSelectedSampleIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   }
-  function toggleBatchRefFilter(ref) {
-    setSelectedBatchRefs(prev => prev.includes(ref) ? prev.filter(x => x !== ref) : [...prev, ref]);
+  function toggleReferenceFilter(id) {
+    setSelectedReferenceIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   }
   // "No. of samples" auto-pick — takes that many not-yet-selected eligible
   // samples (in list order). If fewer are available (odd/short batch), it
@@ -1741,7 +1971,7 @@ function SubBatchBuilder({
     placeholder: "Unassigned"
   }));
 
-  const batchFilterBlock = batchRefOptions.length > 0 ? /*#__PURE__*/React.createElement("details", {
+  const batchFilterBlock = referenceFilterOptions.length > 0 ? /*#__PURE__*/React.createElement("details", {
     className: "mb-3 rounded",
     style: {
       border: `1px solid ${C.border}`
@@ -1751,20 +1981,20 @@ function SubBatchBuilder({
     style: {
       color: C.ink
     }
-  }, "Filter by Registration Batch ", selectedBatchRefs.length ? `(${selectedBatchRefs.length} selected)` : "(optional — pick one or more)"), /*#__PURE__*/React.createElement("div", {
+  }, "Filter by Reference ", selectedReferenceIds.length ? `(${selectedReferenceIds.length} selected)` : "(optional — pick one or more)"), /*#__PURE__*/React.createElement("div", {
     className: "flex flex-wrap gap-2 px-2 pb-2"
-  }, batchRefOptions.map(ref => /*#__PURE__*/React.createElement("label", {
-    key: ref,
+  }, referenceFilterOptions.map(ref => /*#__PURE__*/React.createElement("label", {
+    key: ref.id,
     className: "flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer",
     style: {
-      border: `1px solid ${selectedBatchRefs.includes(ref) ? C.teal : C.border}`,
-      background: selectedBatchRefs.includes(ref) ? `${C.teal}14` : "transparent"
+      border: `1px solid ${selectedReferenceIds.includes(ref.id) ? C.teal : C.border}`,
+      background: selectedReferenceIds.includes(ref.id) ? `${C.teal}14` : "transparent"
     }
   }, /*#__PURE__*/React.createElement("input", {
     type: "checkbox",
-    checked: selectedBatchRefs.includes(ref),
-    onChange: () => toggleBatchRefFilter(ref)
-  }), ref)))) : null;
+    checked: selectedReferenceIds.includes(ref.id),
+    onChange: () => toggleReferenceFilter(ref.id)
+  }), referenceSourceMeta(ref.sourceType).label, ": ", referenceDisplayLabel(ref))))) : null;
 
   const pickerHeaderRow = /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between mb-1.5 flex-wrap gap-2"
@@ -1834,15 +2064,15 @@ function SubBatchBuilder({
     style: {
       color: C.muted
     }
-  }, s.clientName, s.batchRef ? ` · batch: ${s.batchRef}` : ""))));
+  }, s.clientName, s.referenceId ? ` · ref: ${referenceDisplayLabel(findReferenceById(references, s.referenceId))}` : ""))));
 
-  const mixedBatchWarning = distinctBatchRefs.length > 1 ? /*#__PURE__*/React.createElement("div", {
+  const mixedBatchWarning = distinctReferences.length > 1 ? /*#__PURE__*/React.createElement("div", {
     className: "text-xs p-2 rounded mt-2",
     style: {
       background: C.warnBg,
       color: C.warn
     }
-  }, "Heads up: this sub-batch mixes samples from ", distinctBatchRefs.length, " different registration batches (", distinctBatchRefs.join(", "), "). That's fine for testing — each sample keeps its own batch reference for reporting.") : null;
+  }, "Heads up: this sub-batch mixes samples from ", distinctReferences.length, " different References (", distinctReferences.map(r => r.refNo).join(", "), "). That's fine for testing — each sample keeps its own Reference for reporting.") : null;
 
   const actionRow = /*#__PURE__*/React.createElement("div", {
     className: "flex justify-end gap-2 mt-3"
@@ -1870,7 +2100,7 @@ function SubBatchBuilder({
       background: C.infoBg,
       color: C.info
     }
-  }, "No pending samples match this Test Type", selectedBatchRefs.length ? " + Batch filter" : "", " (or all are already in another pending sub-batch).") : /*#__PURE__*/React.createElement("div", null, pickerHeaderRow, pickerListBox, mixedBatchWarning, actionRow));
+  }, "No pending samples match this Test Type", selectedReferenceIds.length ? " + Reference filter" : "", " (or all are already in another pending sub-batch).") : /*#__PURE__*/React.createElement("div", null, pickerHeaderRow, pickerListBox, mixedBatchWarning, actionRow));
 
   const createCard = /*#__PURE__*/React.createElement(SectionCard, {
     title: editingSubBatchId ? "Edit Sub-Batch" : "Create a Sub-Batch",

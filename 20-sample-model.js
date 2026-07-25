@@ -171,6 +171,11 @@ function createSample(fields, existingSamples, user) {
     // e.g. "STW-6"
     batchRef: fields.batchRef || "",
     // shared reference (e.g. office memo no.) linking samples uploaded together
+    referenceId: fields.referenceId || "",
+    // FK -> Reference (19-reference-model.js) — the real source-of-truth for
+    // who this sample came from (DPHE / institution / walk-in) and what
+    // paperwork it arrived with. batchRef above is kept only as a legacy
+    // display fallback for pre-migration data.
     matrix: fields.matrix || "Drinking Water",
     collectionDate: fields.collectionDate || todayStr(),
     collectedBy: fields.collectedBy || "",
@@ -252,7 +257,7 @@ function transitionSample(sample, newStatus, meta, user) {
 // only the registration fields are editable, never status/results/custody
 // history itself; every edit is logged as its own custody event so the
 // correction is auditable rather than silently overwritten.
-const SAMPLE_EDITABLE_FIELDS = ["clientName", "siteLocation", "district", "upazila", "union", "village", "caretakerName", "sampleSourceId", "batchRef", "matrix", "collectionDate", "collectedBy", "receivedDate", "priority", "numberOfSamples", "requestedTests", "notes"];
+const SAMPLE_EDITABLE_FIELDS = ["clientName", "siteLocation", "district", "upazila", "union", "village", "caretakerName", "sampleSourceId", "batchRef", "referenceId", "matrix", "collectionDate", "collectedBy", "receivedDate", "priority", "numberOfSamples", "requestedTests", "notes"];
 function editSample(sample, patch, user) {
   const changes = [];
   const cleanPatch = {};

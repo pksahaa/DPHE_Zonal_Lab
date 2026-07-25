@@ -1958,6 +1958,7 @@ function ReportsTab({
   testTypes,
   testRecords,
   samples,
+  references,
   users,
   notify,
   onLoadDemoData
@@ -2039,6 +2040,7 @@ function ReportsTab({
     rangeDays,
     batchNameById,
     samples,
+    references,
     users,
     notify
   };

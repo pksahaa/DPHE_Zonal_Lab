@@ -111,6 +111,43 @@ function LabApp({
       });
     }
   }, [session.name, session.role]);
+
+  // >>> PHASE 1: Reference collection — the real source-of-truth for who a
+  // sample came from (DPHE / institution / walk-in) + their letter/ref no.,
+  // replacing the old free-text Sample.batchRef. Same DataService pattern
+  // as samples above.
+  const [references, setReferencesState] = useState([]);
+  const [referencesLoaded, setReferencesLoaded] = useState(false);
+  useEffect(() => {
+    DataService.list("references").then(list => {
+      setReferencesState(list);
+      setReferencesLoaded(true);
+    });
+  }, []);
+  const setReferences = useCallback(async (updater, changedRecord) => {
+    setReferencesState(prev => updater(prev));
+    if (changedRecord) {
+      await DataService.save("references", changedRecord);
+    }
+  }, []);
+  // One-time, idempotent migration: any sample already carrying a
+  // referenceId is left untouched. Runs once both collections have loaded,
+  // and only writes anything if there's actually legacy data to migrate.
+  const [migrationChecked, setMigrationChecked] = useState(false);
+  useEffect(() => {
+    if (!samplesLoaded || !referencesLoaded || migrationChecked) return;
+    setMigrationChecked(true);
+    const needsMigration = samples.some(s => !s.referenceId);
+    if (!needsMigration) return;
+    const {
+      references: migratedReferences,
+      samples: migratedSamples
+    } = migrateBatchRefsToReferences(samples, references);
+    setReferencesState(migratedReferences);
+    setSamplesState(migratedSamples);
+    DataService.bulkSet("references", migratedReferences);
+    DataService.bulkSet("samples", migratedSamples);
+  }, [samplesLoaded, referencesLoaded, migrationChecked, samples, references]);
   useEffect(() => {
     const chems = markExpiredBatches(normalizeChemicals(loadKey("chemicals", seedChemicals())));
     const equip = normalizeEquipment(loadKey("equipment", seedEquipment()));
@@ -348,6 +385,8 @@ function LabApp({
   })), tab === "samples" && (samplesLoaded ? /*#__PURE__*/React.createElement(SamplesTab, {
     samples: samples,
     setSamples: setSamples,
+    references: references,
+    setReferences: setReferences,
     testTypes: testTypes,
     testRecords: testRecords,
     subBatches: subBatches,
@@ -432,6 +471,7 @@ function LabApp({
     testTypes: testTypes,
     testRecords: testRecords,
     samples: samples,
+    references: references,
     users: users,
     notify: notify,
     onLoadDemoData: loadDemoReportData
