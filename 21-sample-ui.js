@@ -600,6 +600,11 @@ function SampleDetail({
 }) {
   const perms = permissionsFor(session.role);
   const allowedNext = nextAllowedStatuses(sample);
+  // results_entered/under_review/approved/released are governed elsewhere
+  // now (auto-rollup, Sub-Batch review, or the signature-gated approval
+  // flow) — the plain "Move Status" buttons only ever offer genuine
+  // whole-sample custody moves (on_hold/cancelled/rejected/starting testing).
+  const manualAllowedNext = allowedNext.filter(s => !["results_entered", "under_review", "approved", "released"].includes(s));
   const technicians = users.filter(u => u.role === "Technician" || u.role === "Administrator");
   const [assignee, setAssignee] = React.useState(sample.assignedTo || "");
   const [editing, setEditing] = React.useState(false);
@@ -960,14 +965,14 @@ function SampleDetail({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "user",
     size: 12
-  }), "Assign")), !!allowedNext.length && !["received", "results_entered", "under_review"].includes(sample.status) && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }), "Assign")), !!manualAllowedNext.length && !["received", "results_entered", "under_review"].includes(sample.status) && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "text-xs font-semibold mb-1",
     style: {
       color: C.ink
     }
   }, "Move Status"), /*#__PURE__*/React.createElement("div", {
     className: "flex flex-wrap gap-1.5"
-  }, allowedNext.map(s => /*#__PURE__*/React.createElement(Button, {
+  }, manualAllowedNext.map(s => /*#__PURE__*/React.createElement(Button, {
     key: s,
     size: "sm",
     variant: "outline",
@@ -1731,12 +1736,14 @@ function SamplesTab({
     }
   }, "No samples match. Register one to get started.")))))), sampleSubTab === "subBatches" && /*#__PURE__*/React.createElement(SubBatchBuilder, {
     samples: samples,
+    setSamples: setSamples,
     testTypes: testTypes,
     subBatches: subBatches,
     setSubBatches: setSubBatches,
     testRecords: testRecords,
     references: references,
     users: users,
+    session: session,
     notify: notify
   }), showBatchForm && /*#__PURE__*/React.createElement(BatchRegistrationForm, {
     testTypes: testTypes,
@@ -1773,12 +1780,18 @@ function SamplesTab({
 // ---- Sub-Batches sub-view: group pending samples for one method into a
 // persistent, named batch that Add Test Record can later consume as a unit ----
 function SUB_BATCH_STATUS_BADGE(status) {
-  if (status === "tested") return /*#__PURE__*/React.createElement(Badge, {
+  if (status === "reviewed") return /*#__PURE__*/React.createElement(Badge, {
     tone: "ok"
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "check",
     size: 11
-  }), " Tested");
+  }), " Reviewed");
+  if (status === "tested") return /*#__PURE__*/React.createElement(Badge, {
+    tone: "warn"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "clipboard",
+    size: 11
+  }), " Awaiting Review");
   return /*#__PURE__*/React.createElement(Badge, {
     tone: "info"
   }, /*#__PURE__*/React.createElement(Icon, {
@@ -1788,12 +1801,14 @@ function SUB_BATCH_STATUS_BADGE(status) {
 }
 function SubBatchBuilder({
   samples,
+  setSamples,
   testTypes,
   subBatches,
   setSubBatches,
   testRecords,
   references,
   users,
+  session,
   notify
 }) {
   const [selectedTestId, setSelectedTestId] = React.useState("");
@@ -1805,6 +1820,8 @@ function SubBatchBuilder({
   const [autoBatchCount, setAutoBatchCount] = React.useState("");
   const [editingSubBatchId, setEditingSubBatchId] = React.useState(null);
   const [deleteSubBatchId, setDeleteSubBatchId] = React.useState(null);
+  const [returningSubBatchId, setReturningSubBatchId] = React.useState(null);
+  const [returnNote, setReturnNote] = React.useState("");
 
   // Samples eligible for the chosen Test Type — ignoring the sub-batch's own
   // current membership while it's being edited (otherwise its members would
@@ -1882,6 +1899,7 @@ function SubBatchBuilder({
       notify?.("No eligible samples were available to create any batch.", "warn");
       return;
     }
+    markMembersInProgress(pool.slice(0, cursor).map(s => s.id), selectedTestId);
     const shortBy = numBatches - createdLabels.length;
     notify?.(`Created ${createdLabels.length} sub-batch(es): ${createdLabels.join(", ")}.${shortBy > 0 ? ` Only enough samples for ${createdLabels.length} of the ${numBatches} requested — the last one may have fewer than ${perBatch}.` : ""}`, "ok");
     setAutoCount("");
@@ -1904,6 +1922,17 @@ function SubBatchBuilder({
     setAssignedTester(sb.assignedTester || "");
     setEditingSubBatchId(sb.id);
   }
+  function markMembersInProgress(memberIds, testTypeId) {
+    if (!setSamples) return;
+    memberIds.forEach(id => {
+      const member = (samples || []).find(s => s.id === id);
+      if (!member) return;
+      const rt = (member.requestedTests || []).find(r => r.testTypeId === testTypeId);
+      if (!rt || rt.status !== "pending") return; // already past pending, or edit removed it — leave alone
+      const updated = setRequestedTestStatus(member, testTypeId, "in_progress", session);
+      setSamples(prev => prev.map(s => s.id === id ? updated : s), updated);
+    });
+  }
   function createGroup() {
     if (!selectedTestId || selectedSampleIds.length === 0) {
       notify?.("Pick a test type and at least one sample.", "warn");
@@ -1919,6 +1948,7 @@ function SubBatchBuilder({
         memberSampleIds: selectedSampleIds,
         assignedTester
       } : sb));
+      markMembersInProgress(selectedSampleIds, selectedTestId);
       notify?.(`${label.trim() || "Sub-batch"} updated — now ${selectedSampleIds.length} sample(s).`, "ok");
     } else {
       const sb = createSubBatch({
@@ -1929,6 +1959,7 @@ function SubBatchBuilder({
         assignedTester
       }, subBatches);
       setSubBatches(prev => [sb, ...prev]);
+      markMembersInProgress(selectedSampleIds, selectedTestId);
       notify?.(`${sb.label} created with ${selectedSampleIds.length} sample(s).`, "ok");
     }
     resetForm();
@@ -1944,6 +1975,56 @@ function SubBatchBuilder({
     setDeleteSubBatchId(null);
     if (editingSubBatchId === sb.id) resetForm();
     notify?.(`${sb.label} deleted.`, "ok");
+  }
+  // ---- Review (Phase 3) — approving/returning a Sub-Batch only ever
+  // touches the ONE parameter it represents (sb.testTypeId), for its member
+  // samples. A sample with 3 requested parameters can have one approved via
+  // its Sub-Batch while the other two are still untouched. ----
+  // ---- Review (Phase 3) — this is the bulk TECHNICAL review pass
+  // (results_entered -> under_review) for the one parameter this Sub-Batch
+  // represents, for its member samples. Final Approval/Release stay
+  // signature-gated on the whole sample (see addApproval/releaseResults in
+  // 20-sample-model.js) — a Sub-Batch can't skip past that; it only brings
+  // its own parameter up to "ready for the signed-off approval step",
+  // exactly like the workflow doc's "Review is performed at batch level".
+  function approveSubBatch(sb) {
+    if (!setSamples) return;
+    sb.memberSampleIds.forEach(id => {
+      const member = (samples || []).find(s => s.id === id);
+      if (!member) return;
+      const rt = (member.requestedTests || []).find(r => r.testTypeId === sb.testTypeId);
+      if (!rt || rt.status !== "results_entered") return; // already reviewed/approved elsewhere, or not resulted yet — leave alone
+      const updated = setRequestedTestStatus(member, sb.testTypeId, "under_review", session);
+      setSamples(prev => prev.map(s => s.id === id ? updated : s), updated);
+    });
+    setSubBatches(prev => prev.map(x => x.id === sb.id ? {
+      ...x,
+      status: "reviewed"
+    } : x));
+    notify?.(`${sb.label} marked reviewed — ${sb.memberSampleIds.length} sample(s) ready for final approval on ${sb.testTypeName}.`, "ok");
+  }
+  function confirmReturnSubBatch(sb) {
+    if (!setSamples) return;
+    const note = returnNote.trim() || `Returned to analyst for ${sb.testTypeName}.`;
+    sb.memberSampleIds.forEach(id => {
+      const member = (samples || []).find(s => s.id === id);
+      if (!member) return;
+      const rt = (member.requestedTests || []).find(r => r.testTypeId === sb.testTypeId);
+      if (!rt || !["results_entered", "under_review"].includes(rt.status)) return; // already approved/released elsewhere — don't undo that
+      const updated = setRequestedTestStatus(member, sb.testTypeId, "in_progress", session, note);
+      setSamples(prev => prev.map(s => s.id === id ? updated : s), updated);
+    });
+    // Back to "pending" so it naturally reappears in Add Test Record's
+    // sub-batch picker for re-testing — the previous test record stays
+    // linked (audit trail preserved); resubmitting adds a NEW record on top
+    // rather than overwriting it.
+    setSubBatches(prev => prev.map(x => x.id === sb.id ? {
+      ...x,
+      status: "pending"
+    } : x));
+    notify?.(`${sb.label} returned to analyst.`, "warn");
+    setReturningSubBatchId(null);
+    setReturnNote("");
   }
   const filterFields = /*#__PURE__*/React.createElement("div", {
     className: "grid gap-3",
@@ -2161,7 +2242,18 @@ function SubBatchBuilder({
       }
     }, sb.memberSampleIds.length, " samples · created ", new Date(sb.createdAt).toLocaleDateString())), /*#__PURE__*/React.createElement("div", {
       className: "flex items-center gap-2"
-    }, testerControl, SUB_BATCH_STATUS_BADGE(sb.status), /*#__PURE__*/React.createElement(IconButton, {
+    }, testerControl, SUB_BATCH_STATUS_BADGE(sb.status), sb.status === "tested" && /*#__PURE__*/React.createElement(Button, {
+      variant: "outline",
+      size: "sm",
+      onClick: () => approveSubBatch(sb)
+    }, "Mark Reviewed"), sb.status === "tested" && /*#__PURE__*/React.createElement(Button, {
+      variant: "ghost",
+      size: "sm",
+      onClick: () => {
+        setReturningSubBatchId(sb.id);
+        setReturnNote("");
+      }
+    }, "Return to Analyst"), /*#__PURE__*/React.createElement(IconButton, {
       name: "edit",
       color: C.teal,
       title: sb.status === "pending" ? "Edit sub-batch" : "Only pending sub-batches can be edited (this one is already tested)",
@@ -2177,7 +2269,29 @@ function SubBatchBuilder({
       text: `Delete sub-batch "${sb.label}"? Its ${sb.memberSampleIds.length} member sample(s) become available for another sub-batch again.`,
       onConfirm: () => doDeleteSubBatch(sb),
       onCancel: () => setDeleteSubBatchId(null)
-    }));
+    }), returningSubBatchId === sb.id && /*#__PURE__*/React.createElement("div", {
+      className: "mt-2 p-2 rounded",
+      style: {
+        background: C.warnBg
+      }
+    }, /*#__PURE__*/React.createElement(TextField, {
+      simple: true,
+      label: `Note for the analyst (optional) — why is "${sb.testTypeName}" being returned?`,
+      value: returnNote,
+      onChange: setReturnNote
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "flex justify-end gap-2 mt-2"
+    }, /*#__PURE__*/React.createElement(Button, {
+      variant: "ghost",
+      size: "sm",
+      onClick: () => {
+        setReturningSubBatchId(null);
+        setReturnNote("");
+      }
+    }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
+      size: "sm",
+      onClick: () => confirmReturnSubBatch(sb)
+    }, "Confirm Return"))));
   }
 
   const listCard = /*#__PURE__*/React.createElement(SectionCard, {

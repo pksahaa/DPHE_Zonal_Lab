@@ -1958,8 +1958,10 @@ function ReportsTab({
   testTypes,
   testRecords,
   samples,
+  setSamples,
   references,
   users,
+  session,
   notify,
   onLoadDemoData
 }) {
@@ -2040,8 +2042,10 @@ function ReportsTab({
     rangeDays,
     batchNameById,
     samples,
+    setSamples,
     references,
     users,
+    session,
     notify
   };
   function printReport() {

@@ -175,10 +175,12 @@ function SignatorySlot({
 }
 function CustomReportGeneratorPage({
   samples,
+  setSamples,
   references,
   testTypes,
   testRecords,
   users,
+  session,
   notify
 }) {
   const [q, setQ] = React.useState("");
@@ -264,6 +266,30 @@ function CustomReportGeneratorPage({
       signatories
     });
     printOfficialReport(html);
+    // Per the workflow doc, a report should only be generated after
+    // approval — this is a soft check (warn, don't block) since not every
+    // lab necessarily runs every parameter through the formal review step.
+    if (setSamples) {
+      const notYetApproved = [];
+      selectedSamples.forEach(sample => {
+        let updated = sample;
+        selectedTests.forEach(t => {
+          const rt = (sample.requestedTests || []).find(r => r.testTypeId === t.id);
+          if (!rt) return; // this sample didn't request this column
+          if (rt.status === "approved") {
+            updated = setRequestedTestStatus(updated, t.id, "released", session);
+          } else if (rt.status !== "released") {
+            notYetApproved.push(`${sample.sampleCode} — ${t.name}`);
+          }
+        });
+        if (updated !== sample) {
+          setSamples(prev => prev.map(s => s.id === sample.id ? updated : s), updated);
+        }
+      });
+      if (notYetApproved.length) {
+        notify?.(`Report generated — but ${notYetApproved.length} parameter(s) hadn't been through final approval yet, so they weren't marked Released: ${notYetApproved.slice(0, 5).join(", ")}${notYetApproved.length > 5 ? "…" : ""}.`, "warn");
+      }
+    }
   }
   return /*#__PURE__*/React.createElement("div", {
     className: "grid gap-4"

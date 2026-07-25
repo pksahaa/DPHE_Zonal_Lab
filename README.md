@@ -161,6 +161,60 @@ An un-resulted parameter never shows further along than "Pending"/"In
 Progress" even if the sample itself has been pushed further, since a
 result can't be reviewed/approved before it exists.
 
+### Per-parameter Review / Approve / Release (Phase 3)
+
+`requestedTests[].status` is now the real, stored source of truth for each
+parameter's pipeline position (`pending → in_progress → results_entered →
+under_review → approved → released`), not just a display-time derivation.
+`Sample.status` is a **rollup** of these — the least-advanced ("bottleneck")
+parameter decides where the sample as a whole shows up — computed by
+`rollupSampleStatus()` / applied via `setRequestedTestStatus()` in
+`20-sample-model.js`, every time any parameter's status changes.
+
+**Sub-Batch review** (`21-sample-ui.js`, `SubBatchBuilder`) — a "tested"
+Sub-Batch can be **Marked Reviewed** (bulk-moves that one parameter,
+`results_entered → under_review`, for all its member samples) or **Returned
+to Analyst** (back to `in_progress`, with an optional note; the Sub-Batch
+itself goes back to `pending` so it naturally reappears in Add Test
+Record's picker — the previous test record stays linked, a resubmit adds a
+new one on top rather than overwriting it). This is the doc's "Review is
+performed at batch level" — except the "batch" it now correctly means is
+the Sub-Batch (one parameter), not the whole sample.
+
+**Final Approval / Release stay exactly where they were** — the existing
+e-signature/attestation flow (`addApproval()` in `20-sample-model.js`,
+triggered from Sample Detail's `SignatureCapture`) and `releaseResults()`.
+Nothing routes around that on purpose: it's a real compliance gate
+(typed name + attestation), so Sub-Batch review deliberately stops one
+step short of it. What changed is that both functions now also call
+`syncRequestedTestsToStage()` after a signed decision, bringing every
+parameter waiting at the stage just cleared up to match — so the signed
+whole-sample decision and the per-parameter record can never disagree.
+Because the rollup only lets `Sample.status` reach `results_entered` /
+`under_review` once *every* requested parameter has independently reached
+that stage, the signature step was always effectively deciding for all of
+them at once anyway — this just makes that explicit in the data.
+
+The old generic "Move Status" buttons in Sample Detail no longer offer
+`results_entered` / `under_review` / `approved` / `released` as manual
+targets (those are exclusively reached through the mechanisms above now);
+they still handle genuine whole-sample custody moves — `on_hold`,
+`cancelled`, `rejected`, and starting testing (`assigned → in_progress`) —
+which have no automated equivalent.
+
+**Release** (`17-report-generator.js`) — generating a report marks
+`released` on exactly the (sample, testType) pairs actually included,
+*if* they were already `approved`. Per the workflow doc, a report should
+only be generated after approval — this is enforced as a **soft** gate
+(warns and lists which parameters weren't approved yet, but still lets the
+report print) rather than a hard block, since not every lab necessarily
+runs every parameter through the formal review step.
+
+A pre-Phase-3 sample (`requestedTests[]` with no `status` field yet) is
+backfilled once, on load, by `backfillRequestedTestStatuses()` in
+`16-sub-batch.js` — same idempotent-migration pattern as the Reference
+backfill in Phase 1.
+
 ## Custom Report Generator (added)
 
 - Reports tab → "Official Report" group → "Custom Report Generator".

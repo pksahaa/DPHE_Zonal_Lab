@@ -645,55 +645,30 @@ function AddTestTab({
         ...recordPayload
       };
       setTestRecords(prev => [...prev, newRecord]);
-      // Include the just-created record when checking "are all this sample's
-      // parameters resulted now?" — testRecords state won't reflect it until
-      // the next render, but the sample-status decision needs to be made
-      // right now, in this same save.
-      const testRecordsWithNew = [...(testRecords || []), newRecord];
-      // Once every requested parameter on a sample has a result AND the
-      // sample hasn't been manually pushed further already, move it forward
-      // on its own — this is the auto status propagation that was
-      // previously missing entirely (every status change needed a manual
-      // click, even when the underlying work was already done).
-      function withAutoAdvance(sampleToCheck, subBatchesForCheck) {
-        if (sampleToCheck.status !== "in_progress") return sampleToCheck;
-        const stillPending = pendingTestTypeIdsForSample(sampleToCheck, testRecordsWithNew, subBatchesForCheck, {
-          includeQueued: true
-        });
-        if (stillPending.length > 0) return sampleToCheck;
-        try {
-          return transitionSample(sampleToCheck, "results_entered", {
-            notes: "Auto-advanced: every requested parameter now has a result."
-          }, session || {
-            name: tester || "System",
-            role: "Technician"
-          });
-        } catch (e) {
-          return sampleToCheck; // shouldn't happen (in_progress -> results_entered is always allowed) but never block a save over it
-        }
-      }
+      const actingUser = session || {
+        name: tester || "System",
+        role: "Technician"
+      };
+      // The specific parameter this record is FOR — only that parameter's
+      // status moves to results_entered; every other requested parameter on
+      // the sample is untouched. setRequestedTestStatus() re-syncs the
+      // whole-sample `status` as a bottleneck rollup on its own (Phase 3) —
+      // no separate "check if everything's done" logic needed here anymore.
       if (selectedSampleId && setSamples && selectedSample) {
-        const updatedSample = withAutoAdvance({
+        const updatedSample = setRequestedTestStatus({
           ...selectedSample,
           linkedTestRecordIds: [...(selectedSample.linkedTestRecordIds || []), newRecordId]
-        }, subBatches);
+        }, selectedTest.id, "results_entered", actingUser);
         setSamples(prev => prev.map(s => s.id === selectedSampleId ? updatedSample : s), updatedSample);
       }
       if (selectedSubBatch && setSamples) {
-        // The sub-batch being saved right now is about to flip to "tested"
-        // below — pretend it's already gone when checking "still queued
-        // elsewhere?" for its own members, same as the eligibility fix.
-        const subBatchesForCheck = subBatches.map(sb => sb.id === selectedSubBatch.id ? {
-          ...sb,
-          status: "tested"
-        } : sb);
         for (const memberId of selectedSubBatch.memberSampleIds) {
           const member = (samples || []).find(s => s.id === memberId);
           if (!member) continue;
-          const updatedMember = withAutoAdvance({
+          const updatedMember = setRequestedTestStatus({
             ...member,
             linkedTestRecordIds: [...(member.linkedTestRecordIds || []), newRecordId]
-          }, subBatchesForCheck);
+          }, selectedSubBatch.testTypeId, "results_entered", actingUser);
           setSamples(prev => prev.map(s => s.id === memberId ? updatedMember : s), updatedMember);
         }
         if (setSubBatches) {

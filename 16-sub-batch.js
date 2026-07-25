@@ -135,18 +135,18 @@ function testStatusForSample(sample, testTypeId, testRecords, subBatches) {
 //     is shown at that same stage — an un-resulted parameter never jumps
 //     ahead of "results_entered" even if the sample itself has been pushed
 //     further, since a result can't be reviewed/approved before it exists.
-const TEST_STAGE_ORDER = ["pending", "queued", "in_progress", "results_entered", "under_review", "approved", "released"];
+const TEST_STAGE_ORDER = ["pending", "in_progress", "results_entered", "under_review", "approved", "released"];
 function testStageForSample(sample, testTypeId, testRecords, subBatches) {
   if (sampleBlockedFromTesting(sample)) return "blocked";
+  const target = (sample.requestedTests || []).find(rt => rt.testTypeId === testTypeId);
+  // Phase 3: requestedTests[].status is the real, stored source of truth —
+  // just read it. Fall back to the old derived logic only for data that
+  // predates Phase 3 (a requestedTest with no `status` field yet).
+  if (target && target.status) return target.status;
   const basic = testStatusForSample(sample, testTypeId, testRecords, subBatches);
   if (basic === "pending") return "pending";
-  if (basic === "queued") return "in_progress"; // committed to a pending sub-batch = work has started
-  // basic === "done": a result exists for this specific parameter — now
-  // reflect how far the WHOLE sample has been pushed through
-  // review/approval, capped at "results_entered" if the sample hasn't been
-  // moved past that yet.
-  const wholeSampleStage = ["results_entered", "under_review", "approved", "released"].includes(sample.status) ? sample.status : "results_entered";
-  return wholeSampleStage;
+  if (basic === "queued") return "in_progress";
+  return ["results_entered", "under_review", "approved", "released"].includes(sample.status) ? sample.status : "results_entered";
 }
 function testStageLabel(stage) {
   return {
@@ -159,4 +159,29 @@ function testStageLabel(stage) {
     released: "Released",
     blocked: "On Hold"
   }[stage] || stage;
+}
+
+// ---- migration: samples registered before Phase 3 have requestedTests
+// with no `status` field. Backfill it once from the same derivation logic
+// testStageForSample() used to fall back on, so every sample ends up with
+// real, stored per-parameter status going forward. Idempotent — a
+// requestedTest that already has a status is left untouched. ----
+function backfillRequestedTestStatuses(samples, testRecords, subBatches) {
+  return (samples || []).map(sample => {
+    if ((sample.requestedTests || []).every(rt => rt.status)) return sample;
+    return {
+      ...sample,
+      requestedTests: (sample.requestedTests || []).map(rt => {
+        if (rt.status) return rt;
+        const basic = testStatusForSample(sample, rt.testTypeId, testRecords, subBatches);
+        let status;
+        if (basic === "pending") status = "pending";else if (basic === "queued") status = "in_progress";else if (basic === "blocked") status = "pending"; // blocked is a custody overlay, not a real stage
+        else status = ["results_entered", "under_review", "approved", "released"].includes(sample.status) ? sample.status : "results_entered";
+        return {
+          ...rt,
+          status
+        };
+      })
+    };
+  });
 }

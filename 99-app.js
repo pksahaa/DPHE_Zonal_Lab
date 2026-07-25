@@ -131,23 +131,31 @@ function LabApp({
     }
   }, []);
   // One-time, idempotent migration: any sample already carrying a
-  // referenceId is left untouched. Runs once both collections have loaded,
-  // and only writes anything if there's actually legacy data to migrate.
+  // referenceId (and requestedTests already carrying a status) is left
+  // untouched. Runs once every collection involved has loaded, and only
+  // writes anything if there's actually legacy data to migrate.
   const [migrationChecked, setMigrationChecked] = useState(false);
   useEffect(() => {
-    if (!samplesLoaded || !referencesLoaded || migrationChecked) return;
+    if (!samplesLoaded || !referencesLoaded || !loaded || migrationChecked) return;
     setMigrationChecked(true);
-    const needsMigration = samples.some(s => !s.referenceId);
-    if (!needsMigration) return;
-    const {
-      references: migratedReferences,
-      samples: migratedSamples
-    } = migrateBatchRefsToReferences(samples, references);
-    setReferencesState(migratedReferences);
-    setSamplesState(migratedSamples);
-    DataService.bulkSet("references", migratedReferences);
-    DataService.bulkSet("samples", migratedSamples);
-  }, [samplesLoaded, referencesLoaded, migrationChecked, samples, references]);
+    const needsReferenceMigration = samples.some(s => !s.referenceId);
+    const needsStatusBackfill = samples.some(s => (s.requestedTests || []).some(rt => !rt.status));
+    if (!needsReferenceMigration && !needsStatusBackfill) return;
+    let workingSamples = samples;
+    let workingReferences = references;
+    if (needsReferenceMigration) {
+      const migrated = migrateBatchRefsToReferences(workingSamples, workingReferences);
+      workingReferences = migrated.references;
+      workingSamples = migrated.samples;
+    }
+    if (needsStatusBackfill) {
+      workingSamples = backfillRequestedTestStatuses(workingSamples, testRecords, subBatches);
+    }
+    setReferencesState(workingReferences);
+    setSamplesState(workingSamples);
+    DataService.bulkSet("references", workingReferences);
+    DataService.bulkSet("samples", workingSamples);
+  }, [samplesLoaded, referencesLoaded, loaded, migrationChecked, samples, references, testRecords, subBatches]);
   useEffect(() => {
     const chems = markExpiredBatches(normalizeChemicals(loadKey("chemicals", seedChemicals())));
     const equip = normalizeEquipment(loadKey("equipment", seedEquipment()));
@@ -472,8 +480,10 @@ function LabApp({
     testTypes: testTypes,
     testRecords: testRecords,
     samples: samples,
+    setSamples: setSamples,
     references: references,
     users: users,
+    session: session,
     notify: notify,
     onLoadDemoData: loadDemoReportData
   }), tab === "qc" && /*#__PURE__*/React.createElement(QcModuleTab, {
