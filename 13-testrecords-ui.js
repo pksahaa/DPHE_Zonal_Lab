@@ -1836,7 +1836,33 @@ function TestRecordsTab({
         results: updatedMembers[0]?.results || r.results
       };
     }));
-    notify?.(`Updated results for ${updatedMembers.length} sample(s) on this record.`, "ok");
+    // This bulk-fill path was bypassing the normal save flow entirely — a
+    // sample whose result got filled in here never got its
+    // requestedTests[].status moved to results_entered, so Sample Detail
+    // kept showing Pending/In Progress even though the value was right
+    // there in the record. Same setRequestedTestStatus() used everywhere
+    // else, so the rollup and Sub-Batch review queue stay consistent too.
+    if (setSamples) {
+      const actingUser = session || {
+        name: "System",
+        role: "Technician"
+      };
+      let advancedCount = 0;
+      updatedMembers.forEach(m => {
+        const hasValue = (m.results || []).some(res => res.value != null);
+        if (!hasValue) return;
+        const sample = (samples || []).find(s => s.id === m.sampleId);
+        if (!sample) return;
+        const rt = (sample.requestedTests || []).find(x => x.testTypeId === record.testTypeId);
+        if (!rt || rt.status !== "pending" && rt.status !== "in_progress") return; // already results_entered or further along — don't move it backward or re-log
+        const updated = setRequestedTestStatus(sample, record.testTypeId, "results_entered", actingUser, "Result filled in via bulk upload.");
+        setSamples(prev => prev.map(s => s.id === sample.id ? updated : s), updated);
+        advancedCount++;
+      });
+      notify?.(`Updated results for ${updatedMembers.length} sample(s) on this record.${advancedCount ? ` ${advancedCount} sample(s) marked Result Entered.` : ""}`, "ok");
+    } else {
+      notify?.(`Updated results for ${updatedMembers.length} sample(s) on this record.`, "ok");
+    }
     setBulkUploadRecord(null);
   }
   const PAGE_SIZE = 10;

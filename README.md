@@ -304,6 +304,37 @@ haven't been tested yet. The softer "not approved yet, so not marked
 Released" warning still applies afterward for columns that do have a
 result but haven't cleared final approval.
 
+### Bug fix: Bulk Upload Results (into an existing record) never updated sample status
+
+`RecordBulkUploadModal` (Test Records → row → "Bulk upload results from
+Excel") fills in result values for an already-created record's member
+samples — a separate path from the normal Add Test Record save, and it
+was only ever writing to `testRecords`. It never called
+`setRequestedTestStatus()`, so a sample whose result got filled in this
+way stayed stuck at `Pending`/`In Progress` on Sample Detail even though
+the actual value was sitting right there in the record — exactly the "I
+uploaded a result and the sample still shows manual/pending" symptom.
+Fixed in `applyBulkResults()` (`13-testrecords-ui.js`): any member that
+now has a non-null value gets its parameter moved to `results_entered`,
+same as every other results-entry path, with the rollup keeping
+`Sample.status` in sync automatically.
+
+(There's also a `bulk-result-import` badge referenced in the row display
+for a "create whole new records from an Excel sheet" style import — that
+`source` value is never actually set anywhere in the code, so it's inert/
+vestigial, not a live path that needed the same fix.)
+
+### Sample Detail now shows actual result values, not just a status count
+
+Previously the "Requested Tests" section only showed a status chip per
+parameter, plus a bare "Linked test records: N (see Test Records tab)"
+line — the actual measured values were never shown on the sample's own
+page, only in Test Records. Each parameter row now also shows its real
+value(s) and the record date once results exist, via the existing
+`getSampleResultForTest()` helper (`16-sub-batch.js`) — no reason to make
+someone leave the single source of truth to see the number that's
+supposedly already "entered."
+
 ## Custom Report Generator (added)
 
 - Reports tab → "Official Report" group → "Custom Report Generator".

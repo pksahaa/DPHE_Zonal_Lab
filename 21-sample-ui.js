@@ -913,7 +913,7 @@ function SampleDetail({
       color: C.ink
     }
   }, "Requested Tests"), /*#__PURE__*/React.createElement("div", {
-    className: "flex flex-wrap gap-1.5"
+    className: "grid gap-1.5"
   }, sample.requestedTests.map(t => {
     // Per-parameter STAGE — NOT sample.status. A sample with 3 requested
     // tests can have one Released, one still In Progress, and one still
@@ -923,15 +923,26 @@ function SampleDetail({
     const paramStage = testStageForSample(sample, t.testTypeId, testRecords, subBatches);
     const paramStageStyle = testStageChipStyle(paramStage);
     const paramStageLabel = testStageLabel(paramStage);
-    return /*#__PURE__*/React.createElement("span", {
+    // The actual measured value(s) — previously Sample Detail only ever
+    // showed a bare "Linked test records: N" count, never the results
+    // themselves, even after they'd been entered (or bulk-uploaded).
+    const resultInfo = getSampleResultForTest(sample, t.testTypeId, testRecords);
+    return /*#__PURE__*/React.createElement("div", {
       key: t.testTypeId,
+      className: "flex flex-wrap items-center gap-1.5"
+    }, /*#__PURE__*/React.createElement("span", {
       className: "text-[11px] px-2 py-0.5 rounded-full",
       style: {
         background: paramStageStyle.bg,
         color: paramStageStyle.fg
       },
       title: `${t.testTypeName} — ${paramStageLabel}`
-    }, t.testTypeName, " · ", paramStageLabel);
+    }, t.testTypeName, " · ", paramStageLabel), resultInfo && resultInfo.results.length > 0 && /*#__PURE__*/React.createElement("span", {
+      className: "text-[11px]",
+      style: {
+        color: C.muted
+      }
+    }, resultInfo.results.filter(r => r.value != null).map(r => `${r.name}: ${fmtNum(r.value)}${r.unit ? ` ${r.unit}` : ""}`).join(", ") || "no value yet", resultInfo.date ? ` (${resultInfo.date})` : ""));
   })), !!sample.linkedTestRecordIds.length && /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] mt-1.5",
     style: {
