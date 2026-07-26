@@ -69,9 +69,233 @@ function BatchStatusSummary({
 }
 
 // ---- Registration form ----
+// ============================================================================
+// REFERENCE PICKER — pick an existing Reference (source paperwork: DPHE /
+// institution / walk-in, letter no./date, org, contact) or create a new one
+// inline without leaving the registration form. Used by both
+// SampleRegistrationForm and BatchRegistrationForm so a sample is always
+// created already pointing at a real Reference instead of a loose
+// free-text batchRef string.
+// ============================================================================
+function ReferencePicker({
+  references,
+  setReferences,
+  value,
+  onChange,
+  session,
+  notify,
+  label,
+  helpText
+}) {
+  const [showNew, setShowNew] = React.useState(false);
+  const [newForm, setNewForm] = React.useState({
+    sourceType: "walkin",
+    refNo: "",
+    organizationName: "",
+    letterDate: "",
+    contactPerson: "",
+    contactPhone: "",
+    address: "",
+    notes: ""
+  });
+  const sorted = [...(references || [])].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+  async function createNew() {
+    const ref = createReference(newForm, references, session);
+    await setReferences(prev => [...prev, ref], ref);
+    onChange(ref.id);
+    setShowNew(false);
+    notify?.(`Reference ${ref.refNo} created.`, "ok");
+    setNewForm({
+      sourceType: "walkin",
+      refNo: "",
+      organizationName: "",
+      letterDate: "",
+      contactPerson: "",
+      contactPhone: "",
+      address: "",
+      notes: ""
+    });
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-1 text-xs"
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      color: C.muted
+    }
+  }, label || "Reference (Source)"), helpText && /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px]",
+    style: {
+      color: C.muted
+    }
+  }, helpText), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2"
+  }, /*#__PURE__*/React.createElement("select", {
+    className: "border rounded px-2 py-1.5 text-sm flex-1",
+    style: {
+      borderColor: C.border,
+      color: C.ink
+    },
+    value: value || "",
+    onChange: e => onChange(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "No reference selected yet…"), sorted.map(r => /*#__PURE__*/React.createElement("option", {
+    key: r.id,
+    value: r.id
+  }, referenceSourceMeta(r.sourceType).label, " — ", referenceDisplayLabel(r)))), /*#__PURE__*/React.createElement(Button, {
+    variant: "outline",
+    size: "sm",
+    onClick: () => setShowNew(true)
+  }, "+ New")), showNew && /*#__PURE__*/React.createElement(Modal, {
+    title: "New Reference",
+    onClose: () => setShowNew(false)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid gap-3"
+  }, /*#__PURE__*/React.createElement(SelectField, {
+    simple: true,
+    label: "Source Type",
+    value: newForm.sourceType,
+    onChange: v => setNewForm({
+      ...newForm,
+      sourceType: v
+    }),
+    options: REFERENCE_SOURCE_TYPES.map(s => ({
+      value: s.key,
+      label: s.label
+    }))
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Reference / Memo No. (leave blank for walk-in with no letter — one will be auto-generated)",
+    value: newForm.refNo,
+    onChange: v => setNewForm({
+      ...newForm,
+      refNo: v
+    })
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Organization Name",
+    value: newForm.organizationName,
+    onChange: v => setNewForm({
+      ...newForm,
+      organizationName: v
+    })
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    type: "date",
+    label: "Letter Date",
+    value: newForm.letterDate,
+    onChange: v => setNewForm({
+      ...newForm,
+      letterDate: v
+    })
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Contact Person",
+    value: newForm.contactPerson,
+    onChange: v => setNewForm({
+      ...newForm,
+      contactPerson: v
+    })
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Contact Phone",
+    value: newForm.contactPhone,
+    onChange: v => setNewForm({
+      ...newForm,
+      contactPhone: v
+    })
+  })), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Address",
+    value: newForm.address,
+    onChange: v => setNewForm({
+      ...newForm,
+      address: v
+    })
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    textarea: true,
+    label: "Notes",
+    value: newForm.notes,
+    onChange: v => setNewForm({
+      ...newForm,
+      notes: v
+    })
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end gap-2"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "ghost",
+    onClick: () => setShowNew(false)
+  }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
+    onClick: createNew
+  }, "Create Reference")))));
+}
+
+// ============================================================================
+// SAMPLE MINI CARD — the shared "here's this sample, and here's where the
+// full record lives" component. Sample Detail (below) is the single source
+// of truth for everything about a sample; every OTHER screen that needs to
+// show sample info (Add Test Record, Report Generator) renders this instead
+// of inventing its own ad-hoc summary, and links back with `goToSample`.
+// ============================================================================
+function SampleMiniCard({
+  sample,
+  references,
+  testRecords,
+  subBatches,
+  goToSample,
+  note
+}) {
+  if (!sample) return null;
+  const ref = sample.referenceId ? findReferenceById(references, sample.referenceId) : null;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "mx-4 mt-2 p-3 rounded",
+    style: {
+      background: C.infoBg,
+      border: `1px solid ${C.info}33`
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-2 flex-wrap"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", {
+    className: "text-sm font-semibold",
+    style: {
+      color: C.ink
+    }
+  }, sample.sampleCode, " — ", sample.clientName), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs ml-2",
+    style: {
+      color: C.muted
+    }
+  }, sample.siteLocation, ref ? ` · ${referenceSourceMeta(ref.sourceType).label}: ${referenceDisplayLabel(ref)}` : "")), goToSample && /*#__PURE__*/React.createElement(Button, {
+    size: "sm",
+    variant: "outline",
+    onClick: () => goToSample(sample.id)
+  }, "View Full Sample →")), note && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs mt-1",
+    style: {
+      color: C.info
+    }
+  }, note), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-1.5 mt-1.5"
+  }, (sample.requestedTests || []).map(t => {
+    const stage = testStageForSample(sample, t.testTypeId, testRecords, subBatches);
+    const style = testStageChipStyle(stage);
+    return /*#__PURE__*/React.createElement("span", {
+      key: t.testTypeId,
+      className: "text-[11px] px-2 py-0.5 rounded-full",
+      style: {
+        background: style.bg,
+        color: style.fg
+      },
+      title: `${t.testTypeName} — ${testStageLabel(stage)}`
+    }, t.testTypeName, " · ", testStageLabel(stage));
+  })));
+}
+
 function SampleRegistrationForm({
   testTypes,
-  references,
   onCreate,
   onClose
 }) {
@@ -84,7 +308,6 @@ function SampleRegistrationForm({
     village: "",
     caretakerName: "",
     sampleSourceId: "",
-    referenceId: "",
     matrix: "Drinking Water",
     collectionDate: todayStr(),
     collectedBy: "",
@@ -121,20 +344,7 @@ function SampleRegistrationForm({
     wide: true
   }, /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-2 gap-3"
-  }, /*#__PURE__*/React.createElement(SelectField, {
-    simple: true,
-    label: "Reference (who sent this sample) — optional",
-    value: form.referenceId,
-    onChange: v => setForm({
-      ...form,
-      referenceId: v
-    }),
-    options: (references || []).map(r => ({
-      value: r.id,
-      label: referenceDisplayLabel(r)
-    })),
-    placeholder: "No reference / walk-in"
-  }), /*#__PURE__*/React.createElement(TextField, {
+  }, /*#__PURE__*/React.createElement(TextField, {
     simple: true,
     label: "Client / Requester",
     value: form.clientName,
@@ -307,244 +517,6 @@ function SampleRegistrationForm({
   }), "Register Sample")));
 }
 
-
-// ---- Edit an existing sample's registration fields (fixes typos from manual
-// or bulk-upload registration). Requested tests that already have a result
-// (direct or via a tested Sub-Batch) can't be unchecked here — removing a
-// test that's already been run would orphan that result silently.
-function EditSampleForm({
-  sample,
-  testTypes,
-  testRecords,
-  references,
-  onSave,
-  onClose
-}) {
-  const [form, setForm] = React.useState({
-    clientName: sample.clientName || "",
-    siteLocation: sample.siteLocation || "",
-    district: sample.district || "",
-    upazila: sample.upazila || "",
-    union: sample.union || "",
-    village: sample.village || "",
-    caretakerName: sample.caretakerName || "",
-    sampleSourceId: sample.sampleSourceId || "",
-    referenceId: sample.referenceId || "",
-    matrix: sample.matrix || "Drinking Water",
-    collectionDate: sample.collectionDate || todayStr(),
-    collectedBy: sample.collectedBy || "",
-    receivedDate: sample.receivedDate || todayStr(),
-    priority: sample.priority || "Routine",
-    notes: sample.notes || ""
-  });
-  const [selectedTests, setSelectedTests] = React.useState(sample.requestedTests || []);
-  const [err, setErr] = React.useState("");
-  function testLocked(t) {
-    return !!getSampleResultForTest(sample, t.id, testRecords);
-  }
-  function toggleTest(t) {
-    if (testLocked(t)) return; // already has a result — can't be removed here
-    setSelectedTests(prev => prev.some(x => x.testTypeId === t.id) ? prev.filter(x => x.testTypeId !== t.id) : [...prev, {
-      testTypeId: t.id,
-      testTypeName: t.name
-    }]);
-  }
-  function submit() {
-    if (!form.clientName.trim() || !form.siteLocation.trim()) {
-      setErr("Client / requester and site location are required.");
-      return;
-    }
-    if (!selectedTests.length) {
-      setErr("Select at least one requested test.");
-      return;
-    }
-    onSave({
-      ...sample,
-      ...form,
-      requestedTests: selectedTests
-    });
-  }
-  return /*#__PURE__*/React.createElement(Modal, {
-    title: `Edit Sample — ${sample.sampleCode}`,
-    onClose: onClose,
-    wide: true
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-2 gap-3"
-  }, /*#__PURE__*/React.createElement(SelectField, {
-    simple: true,
-    label: "Reference (who sent this sample) — optional",
-    value: form.referenceId,
-    onChange: v => setForm({
-      ...form,
-      referenceId: v
-    }),
-    options: (references || []).map(r => ({
-      value: r.id,
-      label: referenceDisplayLabel(r)
-    })),
-    placeholder: "No reference / walk-in"
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Client / Requester",
-    value: form.clientName,
-    onChange: v => setForm({
-      ...form,
-      clientName: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Site / Location",
-    value: form.siteLocation,
-    onChange: v => setForm({
-      ...form,
-      siteLocation: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "District",
-    value: form.district,
-    onChange: v => setForm({
-      ...form,
-      district: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Upazila / City Corporation",
-    value: form.upazila,
-    onChange: v => setForm({
-      ...form,
-      upazila: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Union / Pourashava",
-    value: form.union,
-    onChange: v => setForm({
-      ...form,
-      union: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Village / Ward",
-    value: form.village,
-    onChange: v => setForm({
-      ...form,
-      village: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Caretaker Name",
-    value: form.caretakerName,
-    onChange: v => setForm({
-      ...form,
-      caretakerName: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Sample Source (e.g. STW-6)",
-    value: form.sampleSourceId,
-    onChange: v => setForm({
-      ...form,
-      sampleSourceId: v
-    })
-  }), /*#__PURE__*/React.createElement(SelectField, {
-    simple: true,
-    label: "Matrix",
-    value: form.matrix,
-    onChange: v => setForm({
-      ...form,
-      matrix: v
-    }),
-    options: ["Drinking Water", "Ground Water", "Surface Water", "Wastewater", "Other"]
-  }), /*#__PURE__*/React.createElement(SelectField, {
-    simple: true,
-    label: "Priority",
-    value: form.priority,
-    onChange: v => setForm({
-      ...form,
-      priority: v
-    }),
-    options: ["Routine", "Urgent"]
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Collection Date",
-    type: "date",
-    value: form.collectionDate,
-    onChange: v => setForm({
-      ...form,
-      collectionDate: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Collected By",
-    value: form.collectedBy,
-    onChange: v => setForm({
-      ...form,
-      collectedBy: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Received Date",
-    type: "date",
-    value: form.receivedDate,
-    onChange: v => setForm({
-      ...form,
-      receivedDate: v
-    })
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "mt-3"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "text-xs font-medium mb-1.5",
-    style: {
-      color: C.muted
-    }
-  }, "Requested Tests"), /*#__PURE__*/React.createElement("div", {
-    className: "flex flex-wrap gap-1.5"
-  }, testTypes.map(t => {
-    const on = selectedTests.some(x => x.testTypeId === t.id);
-    const locked = testLocked(t);
-    return /*#__PURE__*/React.createElement("button", {
-      key: t.id,
-      onClick: () => toggleTest(t),
-      disabled: locked,
-      title: locked ? "Already has a result — remove the test record first to change this." : undefined,
-      className: "px-2.5 py-1 rounded-full text-xs font-medium border",
-      style: {
-        background: on ? C.teal : "transparent",
-        color: on ? "#fff" : locked ? C.muted : C.ink,
-        borderColor: on ? C.teal : C.border,
-        opacity: locked ? 0.6 : 1,
-        cursor: locked ? "not-allowed" : "pointer"
-      }
-    }, t.testName || t.name, locked ? " 🔒" : "");
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "mt-3"
-  }, /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Notes",
-    value: form.notes,
-    onChange: v => setForm({
-      ...form,
-      notes: v
-    }),
-    textarea: true
-  })), err && /*#__PURE__*/React.createElement("div", {
-    className: "mt-2 text-xs font-medium",
-    style: {
-      color: C.warn
-    }
-  }, err), /*#__PURE__*/React.createElement("div", {
-    className: "mt-4 flex justify-end gap-2"
-  }, /*#__PURE__*/React.createElement(Button, {
-    variant: "outline",
-    onClick: onClose
-  }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
-    onClick: submit
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "check",
-    size: 13
-  }), "Save Changes")));
-}
 // ---- Chain of custody timeline ----
 function CustodyTimeline({
   events
@@ -681,16 +653,53 @@ function SampleDetail({
   testRecords,
   subBatches,
   references,
+  setReferences,
   onClose,
   onUpdate,
+  onDelete,
   notify
 }) {
   const perms = permissionsFor(session.role);
   const allowedNext = nextAllowedStatuses(sample);
+  // results_entered/under_review/approved/released are governed elsewhere
+  // now (auto-rollup, Sub-Batch review, or the signature-gated approval
+  // flow) — the plain "Move Status" buttons only ever offer genuine
+  // whole-sample custody moves (on_hold/cancelled/rejected/starting testing).
+  const manualAllowedNext = allowedNext.filter(s => !["results_entered", "under_review", "approved", "released"].includes(s));
   const technicians = users.filter(u => u.role === "Technician" || u.role === "Administrator");
   const [assignee, setAssignee] = React.useState(sample.assignedTo || "");
-  const progress = React.useMemo(() => sampleTestProgress(sample, testRecords, subBatches), [sample, testRecords, subBatches]);
-  const reference = (references || []).find(r => r.id === sample.referenceId) || null;
+  const [editing, setEditing] = React.useState(false);
+  const [editForm, setEditForm] = React.useState(null);
+  const [confirmDelete, setConfirmDelete] = React.useState(false);
+  const canEdit = perms.canRegister && sample.status !== "released";
+  const canDelete = perms.canRegister && (sample.linkedTestRecordIds || []).length === 0;
+  function startEdit() {
+    setEditForm({
+      clientName: sample.clientName,
+      siteLocation: sample.siteLocation,
+      district: sample.district,
+      upazila: sample.upazila,
+      union: sample.union,
+      village: sample.village,
+      caretakerName: sample.caretakerName,
+      sampleSourceId: sample.sampleSourceId,
+      batchRef: sample.batchRef,
+      referenceId: sample.referenceId,
+      matrix: sample.matrix,
+      collectionDate: sample.collectionDate,
+      collectedBy: sample.collectedBy,
+      receivedDate: sample.receivedDate,
+      priority: sample.priority,
+      notes: sample.notes
+    });
+    setEditing(true);
+  }
+  function saveEdit() {
+    const next = editSample(sample, editForm, session);
+    onUpdate(next);
+    notify?.("Registration details updated.", "ok");
+    setEditing(false);
+  }
   const step = sample.status === "results_entered" ? "review" : sample.status === "under_review" ? "approve" : null;
   // QC status check — only relevant once results are in and someone is about
   // to review/approve. Flags if any requested test method has an open
@@ -712,22 +721,175 @@ function SampleDetail({
     }
   }
   const canActOnStep = step === "review" ? perms.canReview : step === "approve" ? perms.canApprove : false;
+  const editPanel = editing ? /*#__PURE__*/React.createElement("div", {
+    className: "mb-3 p-3 rounded",
+    style: {
+      border: `1px solid ${C.teal}`,
+      background: "#F3FAF9"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-semibold mb-2",
+    style: {
+      color: C.ink
+    }
+  }, "Correct Registration Details"), /*#__PURE__*/React.createElement("div", {
+    className: "mb-2"
+  }, /*#__PURE__*/React.createElement(ReferencePicker, {
+    references: references,
+    setReferences: setReferences,
+    value: editForm?.referenceId,
+    onChange: v => setEditForm(prev => ({
+      ...prev,
+      referenceId: v
+    })),
+    session: session,
+    notify: notify,
+    label: "Reference (Source)"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "grid gap-2",
+    style: {
+      gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))"
+    }
+  }, [["clientName", "Client / Requester"], ["siteLocation", "Site / Location"], ["district", "District"], ["upazila", "Upazila / City Corp"], ["union", "Union / Pourashava"], ["village", "Village / Ward"], ["caretakerName", "Caretaker Name"], ["sampleSourceId", "Sample Source"], ["collectedBy", "Collected By"], ["notes", "Notes"]].map(([field, fieldLabel]) => /*#__PURE__*/React.createElement("label", {
+    key: field,
+    className: "flex flex-col gap-0.5 text-xs",
+    style: {
+      color: C.muted
+    }
+  }, fieldLabel, /*#__PURE__*/React.createElement("input", {
+    className: "border rounded px-2 py-1 text-xs",
+    style: {
+      borderColor: C.border
+    },
+    value: editForm[field] || "",
+    onChange: e => setEditForm(prev => ({
+      ...prev,
+      [field]: e.target.value
+    }))
+  }))), /*#__PURE__*/React.createElement("label", {
+    className: "flex flex-col gap-0.5 text-xs",
+    style: {
+      color: C.muted
+    }
+  }, "Matrix", /*#__PURE__*/React.createElement("select", {
+    className: "border rounded px-2 py-1 text-xs",
+    style: {
+      borderColor: C.border
+    },
+    value: editForm.matrix,
+    onChange: e => setEditForm(prev => ({
+      ...prev,
+      matrix: e.target.value
+    }))
+  }, ["Drinking Water", "Ground Water", "Surface Water", "Wastewater", "Other"].map(m => /*#__PURE__*/React.createElement("option", {
+    key: m,
+    value: m
+  }, m)))), /*#__PURE__*/React.createElement("label", {
+    className: "flex flex-col gap-0.5 text-xs",
+    style: {
+      color: C.muted
+    }
+  }, "Priority", /*#__PURE__*/React.createElement("select", {
+    className: "border rounded px-2 py-1 text-xs",
+    style: {
+      borderColor: C.border
+    },
+    value: editForm.priority,
+    onChange: e => setEditForm(prev => ({
+      ...prev,
+      priority: e.target.value
+    }))
+  }, ["Routine", "Urgent"].map(p => /*#__PURE__*/React.createElement("option", {
+    key: p,
+    value: p
+  }, p)))), /*#__PURE__*/React.createElement("label", {
+    className: "flex flex-col gap-0.5 text-xs",
+    style: {
+      color: C.muted
+    }
+  }, "Collection Date", /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "border rounded px-2 py-1 text-xs",
+    style: {
+      borderColor: C.border
+    },
+    value: editForm.collectionDate,
+    onChange: e => setEditForm(prev => ({
+      ...prev,
+      collectionDate: e.target.value
+    }))
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "flex flex-col gap-0.5 text-xs",
+    style: {
+      color: C.muted
+    }
+  }, "Received Date", /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "border rounded px-2 py-1 text-xs",
+    style: {
+      borderColor: C.border
+    },
+    value: editForm.receivedDate,
+    onChange: e => setEditForm(prev => ({
+      ...prev,
+      receivedDate: e.target.value
+    }))
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end gap-2 mt-3"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "outline",
+    size: "sm",
+    onClick: () => setEditing(false)
+  }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
+    size: "sm",
+    onClick: saveEdit
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "check",
+    size: 12
+  }), "Save Correction"))) : null;
+  const deleteConfirmPanel = confirmDelete ? /*#__PURE__*/React.createElement(ConfirmBar, {
+    text: `Delete ${sample.sampleCode}? This sample has no test records yet, so this is safe — it will be permanently removed.`,
+    onConfirm: () => {
+      onDelete(sample);
+      onClose();
+    },
+    onCancel: () => setConfirmDelete(false)
+  }) : null;
   return /*#__PURE__*/React.createElement(Modal, {
     title: `${sample.sampleCode} — ${sample.clientName}`,
     onClose: onClose,
     wide: true
   }, /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center gap-2 mb-3"
+    className: "flex items-center gap-2 mb-3 flex-wrap"
   }, /*#__PURE__*/React.createElement(SampleStatusBadge, {
     status: sample.status
   }), /*#__PURE__*/React.createElement(PriorityBadge, {
     priority: sample.priority
-  }), /*#__PURE__*/React.createElement("span", {
+  }), sample.referenceId && findReferenceById(references, sample.referenceId) && /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] px-2 py-0.5 rounded-full",
+    style: {
+      background: `${C.info}1A`,
+      color: C.info
+    },
+    title: "Source reference"
+  }, referenceSourceMeta(findReferenceById(references, sample.referenceId).sourceType).label, ": ", referenceDisplayLabel(findReferenceById(references, sample.referenceId))), /*#__PURE__*/React.createElement("span", {
     className: "text-xs",
     style: {
       color: C.muted
     }
-  }, sample.matrix, " · ", sample.siteLocation, " · ", sample.numberOfSamples || 1, " sample", (sample.numberOfSamples || 1) > 1 ? "s" : "", " in batch")), qcWarnings.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, sample.matrix, " · ", sample.siteLocation, " · ", sample.numberOfSamples || 1, " sample", (sample.numberOfSamples || 1) > 1 ? "s" : "", " in batch"), /*#__PURE__*/React.createElement("div", {
+    className: "ml-auto flex items-center gap-1"
+  }, canEdit && /*#__PURE__*/React.createElement(IconButton, {
+    name: "edit",
+    color: C.teal,
+    title: "Correct registration details",
+    onClick: startEdit
+  }), canDelete && /*#__PURE__*/React.createElement(IconButton, {
+    name: "trash",
+    color: C.warn,
+    title: "Delete this sample (no test records linked yet)",
+    onClick: () => setConfirmDelete(true)
+  }))), deleteConfirmPanel, editPanel, qcWarnings.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "mb-3 p-3 rounded text-xs",
     style: {
       background: qcWarnings.some(w => w.status.hasReject) ? C.warnBg : C.infoBg,
@@ -750,42 +912,31 @@ function SampleDetail({
     style: {
       color: C.ink
     }
-  }, "Test Progress"), /*#__PURE__*/React.createElement("div", {
-    className: "text-xs font-semibold mb-1",
-    style: { color: C.ink }
-  }, "Test Progress"), /*#__PURE__*/React.createElement("div", {
-    className: "rounded overflow-hidden mb-1.5",
-    style: { border: `1px solid ${C.border}` }
-  }, /*#__PURE__*/React.createElement("table", {
-    className: "w-full text-xs"
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
-    style: { background: C.bg }
-  }, ["Test", "Stage"].map(h => /*#__PURE__*/React.createElement("th", {
-    key: h,
-    className: "text-left px-2 py-1 font-semibold",
-    style: { color: C.muted }
-  }, h)))), /*#__PURE__*/React.createElement("tbody", null, progress.tests.map(t => {
-    const meta = testProgressMeta(t.stage);
-    const toneBg = { ok: C.okBg, warn: C.warnBg, info: C.infoBg, muted: "#EEF4F3" }[meta.color];
-    const toneFg = { ok: C.ok, warn: C.warn, info: C.info, muted: C.muted }[meta.color];
-    return /*#__PURE__*/React.createElement("tr", {
+  }, "Requested Tests"), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-1.5"
+  }, sample.requestedTests.map(t => {
+    // Per-parameter STAGE — NOT sample.status. A sample with 3 requested
+    // tests can have one Released, one still In Progress, and one still
+    // fully Pending, all at the same time. See testStageForSample() in
+    // 16-sub-batch.js for exactly what's tracked per-parameter vs. still
+    // decided for the whole sample.
+    const paramStage = testStageForSample(sample, t.testTypeId, testRecords, subBatches);
+    const paramStageStyle = testStageChipStyle(paramStage);
+    const paramStageLabel = testStageLabel(paramStage);
+    return /*#__PURE__*/React.createElement("span", {
       key: t.testTypeId,
-      style: { borderTop: `1px solid ${C.border}` }
-    }, /*#__PURE__*/React.createElement("td", {
-      className: "px-2 py-1 font-medium",
-      style: { color: C.ink }
-    }, t.testTypeName), /*#__PURE__*/React.createElement("td", {
-      className: "px-2 py-1"
-    }, /*#__PURE__*/React.createElement("span", {
-      className: "px-1.5 py-0.5 rounded text-[11px] font-semibold",
-      style: { background: toneBg, color: toneFg }
-    }, meta.label)));
-  })))), reference && /*#__PURE__*/React.createElement("div", {
+      className: "text-[11px] px-2 py-0.5 rounded-full",
+      style: {
+        background: paramStageStyle.bg,
+        color: paramStageStyle.fg
+      },
+      title: `${t.testTypeName} — ${paramStageLabel}`
+    }, t.testTypeName, " · ", paramStageLabel);
+  })), !!sample.linkedTestRecordIds.length && /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] mt-1.5",
-    style: { color: C.muted }
-  }, "Reference: ", referenceDisplayLabel(reference)), !!sample.linkedTestRecordIds.length && /*#__PURE__*/React.createElement("div", {
-    className: "text-[11px] mt-1.5",
-    style: { color: C.muted }
+    style: {
+      color: C.muted
+    }
   }, "Linked test records: ", sample.linkedTestRecordIds.length, " (see Test Records tab)")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "text-xs font-semibold mb-1",
     style: {
@@ -846,14 +997,14 @@ function SampleDetail({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "user",
     size: 12
-  }), "Assign")), !!allowedNext.length && !["received", "results_entered", "under_review"].includes(sample.status) && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }), "Assign")), !!manualAllowedNext.length && !["received", "results_entered", "under_review"].includes(sample.status) && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "text-xs font-semibold mb-1",
     style: {
       color: C.ink
     }
   }, "Move Status"), /*#__PURE__*/React.createElement("div", {
     className: "flex flex-wrap gap-1.5"
-  }, allowedNext.map(s => /*#__PURE__*/React.createElement(Button, {
+  }, manualAllowedNext.map(s => /*#__PURE__*/React.createElement(Button, {
     key: s,
     size: "sm",
     variant: "outline",
@@ -897,6 +1048,9 @@ function SampleDetail({
 function BatchRegistrationForm({
   testTypes,
   references,
+  setReferences,
+  session,
+  notify,
   onCreate,
   onClose
 }) {
@@ -910,7 +1064,6 @@ function BatchRegistrationForm({
     collectedBy: "",
     receivedDate: todayStr(),
     priority: "Routine",
-    batchRef: "",
     referenceId: ""
   });
   const [selectedTests, setSelectedTests] = React.useState([]);
@@ -952,6 +1105,10 @@ function BatchRegistrationForm({
       setErr("Client / requester is required.");
       return;
     }
+    if (!shared.referenceId) {
+      setErr("Select or create a Reference (source) first.");
+      return;
+    }
     if (rows.every(r => !r.village.trim() && !r.caretakerName.trim())) {
       setErr("Fill in at least one sample row (Village/Ward or Caretaker Name).");
       return;
@@ -963,7 +1120,7 @@ function BatchRegistrationForm({
     }, validRows);
   }
   return /*#__PURE__*/React.createElement(Modal, {
-    title: "Register Batch (multiple samples, shared info)",
+    title: "Register Sample(s) — shared info once, per-sample rows below (matches the bulk upload sheet)",
     onClose: onClose,
     wide: true
   }, err && /*#__PURE__*/React.createElement("div", {
@@ -978,6 +1135,20 @@ function BatchRegistrationForm({
       color: C.ink
     }
   }, "Shared Info (applies to every sample in this batch)"), /*#__PURE__*/React.createElement("div", {
+    className: "mb-3"
+  }, /*#__PURE__*/React.createElement(ReferencePicker, {
+    references: references,
+    setReferences: setReferences,
+    value: shared.referenceId,
+    onChange: v => setShared({
+      ...shared,
+      referenceId: v
+    }),
+    session: session,
+    notify: notify,
+    label: "Reference (Source) — required",
+    helpText: "DPHE / institution letter+ref no., or a walk-in with no letter (one will be auto-generated)."
+  })), /*#__PURE__*/React.createElement("div", {
     className: "grid gap-3 mb-3",
     style: {
       gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))"
@@ -989,27 +1160,6 @@ function BatchRegistrationForm({
     onChange: v => setShared({
       ...shared,
       clientName: v
-    })
-  }), /*#__PURE__*/React.createElement(SelectField, {
-    simple: true,
-    label: "Reference (who sent these) — optional",
-    value: shared.referenceId,
-    onChange: v => setShared({
-      ...shared,
-      referenceId: v
-    }),
-    options: (references || []).map(r => ({
-      value: r.id,
-      label: referenceDisplayLabel(r)
-    })),
-    placeholder: "No reference / walk-in"
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Batch Ref (e.g. Memo No.)",
-    value: shared.batchRef,
-    onChange: v => setShared({
-      ...shared,
-      batchRef: v
     })
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
@@ -1232,29 +1382,30 @@ function ImportTestPickerModal({
 function SamplesTab({
   samples,
   setSamples,
+  references,
+  setReferences,
   testTypes,
   testRecords,
   subBatches,
   setSubBatches,
-  references,
-  setReferences,
   equipment,
   users,
   session,
-  notify
+  notify,
+  focusSampleId,
+  setFocusSampleId
 }) {
   const [sampleSubTab, setSampleSubTab] = React.useState("samples");
-  const [showForm, setShowForm] = React.useState(false);
   const [showBatchForm, setShowBatchForm] = React.useState(false);
   const bulkUploadInputRef = React.useRef(null);
-  const [openId, setOpenId] = React.useState(null);
+  const [internalOpenId, setInternalOpenId] = React.useState(null);
+  const openId = focusSampleId !== undefined ? focusSampleId : internalOpenId;
+  const setOpenId = setFocusSampleId || setInternalOpenId;
   const [statusFilter, setStatusFilter] = React.useState("");
   const [q, setQ] = React.useState("");
   const [expandedBatches, setExpandedBatches] = React.useState(new Set());
   const [pendingImportRows, setPendingImportRows] = React.useState(null);
   const [pendingImportSkipped, setPendingImportSkipped] = React.useState(0);
-  const [editingSample, setEditingSample] = React.useState(null);
-  const [deletingSampleId, setDeletingSampleId] = React.useState(null);
   const perms = permissionsFor(session.role);
   const openSample = samples.find(s => s.id === openId) || null;
   const filtered = samples.filter(s => {
@@ -1269,23 +1420,24 @@ function SamplesTab({
       return next;
     });
   }
-  // Group filtered samples by batchRef (bulk upload / Register Batch) while
-  // keeping individually-registered samples (no batchRef) as plain rows, all
+  // Group filtered samples by Reference (bulk upload / Register Batch) while
+  // keeping individually-registered samples (no reference) as plain rows, all
   // in original sort order (position = first/most-recent member encountered).
   const batchGroups = {};
   filtered.forEach(s => {
-    if (s.batchRef) (batchGroups[s.batchRef] = batchGroups[s.batchRef] || []).push(s);
+    if (s.referenceId) (batchGroups[s.referenceId] = batchGroups[s.referenceId] || []).push(s);
   });
   const listItems = [];
-  const seenBatchRefs = new Set();
+  const seenReferenceIds = new Set();
   filtered.forEach(s => {
-    if (s.batchRef) {
-      if (seenBatchRefs.has(s.batchRef)) return;
-      seenBatchRefs.add(s.batchRef);
+    if (s.referenceId) {
+      if (seenReferenceIds.has(s.referenceId)) return;
+      seenReferenceIds.add(s.referenceId);
       listItems.push({
         type: "batch",
-        batchRef: s.batchRef,
-        members: batchGroups[s.batchRef]
+        referenceId: s.referenceId,
+        reference: findReferenceById(references, s.referenceId),
+        members: batchGroups[s.referenceId]
       });
     } else {
       listItems.push({
@@ -1318,8 +1470,22 @@ function SamplesTab({
   // physical manifest sheet requesting the same panel for the whole batch.
   async function confirmImportSamples(requestedTests) {
     let runningSamples = [...samples];
+    let runningReferences = [...references];
+    const refNoToReference = new Map(runningReferences.map(r => [r.refNo, r]));
     let count = 0;
     for (const row of pendingImportRows) {
+      const rawRef = String(row.BatchRef || row["Batch Ref"] || "").trim();
+      let ref = rawRef ? refNoToReference.get(rawRef) : null;
+      if (!ref) {
+        ref = createReference({
+          refNo: rawRef,
+          sourceType: rawRef ? "institution" : "walkin",
+          notes: "Auto-created from bulk manifest import — please verify source type and add organization/contact details."
+        }, runningReferences, session);
+        runningReferences = [...runningReferences, ref];
+        if (rawRef) refNoToReference.set(rawRef, ref);
+        await setReferences(prev => [...prev, ref], ref);
+      }
       const sample = createSample({
         clientName: String(row.ClientName || row["Client Name"] || "").trim(),
         siteLocation: String(row.SiteLocation || row["Site Location"] || "").trim(),
@@ -1329,7 +1495,8 @@ function SamplesTab({
         village: String(row.Village || row["Village/Ward"] || "").trim(),
         caretakerName: String(row.CaretakerName || row["Caretaker Name"] || "").trim(),
         sampleSourceId: String(row.SampleSource || row["Sample Source"] || "").trim(),
-        batchRef: String(row.BatchRef || row["Batch Ref"] || "").trim(),
+        referenceId: ref.id,
+        batchRef: ref.refNo,
         matrix: String(row.Matrix || "Drinking Water").trim(),
         collectionDate: String(row.CollectionDate || todayStr()),
         collectedBy: String(row.CollectedBy || "").trim(),
@@ -1350,30 +1517,19 @@ function SamplesTab({
   async function handleUpdate(next) {
     await setSamples(prev => prev.map(s => s.id === next.id ? next : s), next);
   }
-  // Deleting a sample is only safe if nothing else references it — a test
-  // result (direct or via a Sub-Batch) or Sub-Batch membership would be
-  // orphaned/corrupted otherwise. Block with a clear reason instead.
-  function sampleDeleteBlockReason(s) {
-    const hasAnyResult = testTypes.some(t => getSampleResultForTest(s, t.id, testRecords));
-    if (hasAnyResult) return "This sample already has test result(s) — delete those test records first.";
-    const inSubBatch = subBatches.some(sb => (sb.members || []).some(m => m.sampleId === s.id));
-    if (inSubBatch) return "This sample is part of a sub-batch — remove it from the sub-batch first.";
-    return null;
-  }
-  async function handleDeleteSample(s) {
-    const reason = sampleDeleteBlockReason(s);
-    if (reason) { notify?.(reason, "warn"); return; }
-    await setSamples(prev => prev.filter(x => x.id !== s.id), null);
-    await DataService.remove("samples", s.id);
-    await DataService.appendAudit({ entity: "sample", entityId: s.id, sampleCode: s.sampleCode, action: "deleted", user: session.name, role: session.role });
-    notify?.(`${s.sampleCode} deleted.`, "ok");
+  async function handleDeleteSample(sample) {
+    await setSamples(prev => prev.filter(s => s.id !== sample.id));
+    notify?.(`${sample.sampleCode} deleted.`, "ok");
   }
   async function handleBatchCreate(shared, rows) {
+    const ref = findReferenceById(references, shared.referenceId);
     let runningSamples = [...samples];
     let count = 0;
     for (const row of rows) {
       const sample = createSample({
         ...shared,
+        // legacy display fallback — the real source of truth is referenceId
+        batchRef: ref ? ref.refNo : "",
         village: row.village,
         caretakerName: row.caretakerName,
         sampleSourceId: row.sampleSourceId,
@@ -1384,14 +1540,12 @@ function SamplesTab({
       count++;
     }
     setShowBatchForm(false);
-    notify?.(`${count} sample(s) registered under batch ${shared.batchRef || "(no ref)"}.`, "ok");
+    notify?.(`${count} sample(s) registered under Reference ${ref ? referenceDisplayLabel(ref) : "(none)"}.`, "ok");
   }
   const stats = sampleLifecycleStats(samples);
   function renderSampleRow(s, indented) {
-    const deleteBlockReason = sampleDeleteBlockReason(s);
-    return /*#__PURE__*/React.createElement(React.Fragment, {
-      key: s.id
-    }, /*#__PURE__*/React.createElement("tr", {
+    return /*#__PURE__*/React.createElement("tr", {
+      key: s.id,
       className: "cursor-pointer",
       style: {
         borderTop: `1px solid ${C.border}`,
@@ -1434,35 +1588,11 @@ function SamplesTab({
       }
     }, s.assignedTo || "—"), /*#__PURE__*/React.createElement("td", {
       className: "px-3 py-2 text-right"
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "flex items-center justify-end gap-1",
-      onClick: e => e.stopPropagation()
-    }, /*#__PURE__*/React.createElement(IconButton, {
-      name: "edit",
-      color: C.teal,
-      title: "Edit sample",
-      onClick: () => setEditingSample(s)
-    }), /*#__PURE__*/React.createElement(IconButton, {
-      name: "trash",
-      color: C.warn,
-      title: deleteBlockReason || "Delete sample",
-      onClick: () => deleteBlockReason ? notify?.(deleteBlockReason, "warn") : setDeletingSampleId(s.id)
-    }), /*#__PURE__*/React.createElement(Icon, {
+    }, /*#__PURE__*/React.createElement(Icon, {
       name: "chevronRight",
       size: 14,
       color: C.muted
-    })))), deletingSampleId === s.id && /*#__PURE__*/React.createElement("tr", {
-      key: `${s.id}-confirm`
-    }, /*#__PURE__*/React.createElement("td", {
-      colSpan: 8
-    }, /*#__PURE__*/React.createElement(ConfirmBar, {
-      text: `Delete sample "${s.sampleCode}"? This cannot be undone.`,
-      onConfirm: () => {
-        handleDeleteSample(s);
-        setDeletingSampleId(null);
-      },
-      onCancel: () => setDeletingSampleId(null)
-    }))));
+    })));
   }
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "flex gap-2 mb-4 flex-wrap"
@@ -1474,10 +1604,6 @@ function SamplesTab({
     k: "subBatches",
     label: "Create and Edit Sub-Batches",
     icon: "flask"
-  }, {
-    k: "references",
-    label: "References",
-    icon: "clipboard"
   }].map(t => /*#__PURE__*/React.createElement("button", {
     key: t.k,
     onClick: () => setSampleSubTab(t.k),
@@ -1503,19 +1629,22 @@ function SamplesTab({
       color: C.muted
     }
   }, "Registration, chain of custody, assignment, approval and result release.")), perms.canRegister && /*#__PURE__*/React.createElement("div", {
-    className: "flex gap-2 flex-wrap items-center"
+    className: "flex gap-2 flex-wrap"
   }, /*#__PURE__*/React.createElement(Button, {
-    variant: "outline",
     onClick: () => setShowBatchForm(true)
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "clipboard",
     size: 13
-  }), "Register Batch"), /*#__PURE__*/React.createElement(Button, {
-    onClick: () => setShowForm(true)
+  }), "Register Sample(s)"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end gap-2 mb-3 flex-wrap"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "ghost",
+    size: "sm",
+    onClick: () => downloadTemplate("samples")
   }, /*#__PURE__*/React.createElement(Icon, {
-    name: "clipboard",
-    size: 13
-  }), "Register New Sample"), /*#__PURE__*/React.createElement("input", {
+    name: "download",
+    size: 14
+  }), "Download Manifest Template"), perms.canRegister && /*#__PURE__*/React.createElement("input", {
     ref: bulkUploadInputRef,
     type: "file",
     accept: ".xlsx,.xls,.csv",
@@ -1524,22 +1653,14 @@ function SamplesTab({
       if (e.target.files[0]) importSamples(e.target.files[0]);
       e.target.value = "";
     }
-  }), /*#__PURE__*/React.createElement(Button, {
+  }), perms.canRegister && /*#__PURE__*/React.createElement(Button, {
     variant: "outline",
+    size: "sm",
     onClick: () => bulkUploadInputRef.current && bulkUploadInputRef.current.click()
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "upload",
-    size: 13
-  }), "Bulk Upload Samples"))), /*#__PURE__*/React.createElement("div", {
-    className: "flex justify-end mb-3"
-  }, /*#__PURE__*/React.createElement(Button, {
-    variant: "ghost",
-    size: "sm",
-    onClick: () => downloadTemplate("samples")
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "download",
     size: 14
-  }), "Download Manifest Template")), /*#__PURE__*/React.createElement("div", {
+  }), "Bulk Upload Samples")), /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-4 gap-3 mb-4"
   }, /*#__PURE__*/React.createElement(StatCard, {
     label: "Active Samples",
@@ -1605,16 +1726,16 @@ function SamplesTab({
     }
   }, h)))), /*#__PURE__*/React.createElement("tbody", null, listItems.map(item => {
     if (item.type === "single") return renderSampleRow(item.sample, false);
-    const isOpen = expandedBatches.has(item.batchRef);
+    const isOpen = expandedBatches.has(item.referenceId);
     return /*#__PURE__*/React.createElement(React.Fragment, {
-      key: "batch-" + item.batchRef
+      key: "batch-" + item.referenceId
     }, /*#__PURE__*/React.createElement("tr", {
       className: "cursor-pointer",
       style: {
         borderTop: `1px solid ${C.border}`,
         background: C.bg
       },
-      onClick: () => toggleBatchExpand(item.batchRef)
+      onClick: () => toggleBatchExpand(item.referenceId)
     }, /*#__PURE__*/React.createElement("td", {
       colSpan: 8,
       className: "px-3 py-2"
@@ -1633,7 +1754,7 @@ function SamplesTab({
       style: {
         color: C.ink
       }
-    }, "Batch: ", item.batchRef), /*#__PURE__*/React.createElement("span", {
+    }, item.reference ? `${referenceSourceMeta(item.reference.sourceType).label}: ${referenceDisplayLabel(item.reference)}` : "Reference: (unknown)"), /*#__PURE__*/React.createElement("span", {
       className: "text-xs",
       style: {
         color: C.muted
@@ -1651,26 +1772,21 @@ function SamplesTab({
     }
   }, "No samples match. Register one to get started.")))))), sampleSubTab === "subBatches" && /*#__PURE__*/React.createElement(SubBatchBuilder, {
     samples: samples,
+    setSamples: setSamples,
     testTypes: testTypes,
     subBatches: subBatches,
     setSubBatches: setSubBatches,
     testRecords: testRecords,
-    users: users,
-    notify: notify
-  }), sampleSubTab === "references" && /*#__PURE__*/React.createElement(ReferencesPanel, {
     references: references,
-    setReferences: setReferences,
-    samples: samples,
+    users: users,
     session: session,
     notify: notify
-  }), showForm && /*#__PURE__*/React.createElement(SampleRegistrationForm, {
-    testTypes: testTypes,
-    references: references,
-    onCreate: handleCreate,
-    onClose: () => setShowForm(false)
   }), showBatchForm && /*#__PURE__*/React.createElement(BatchRegistrationForm, {
     testTypes: testTypes,
     references: references,
+    setReferences: setReferences,
+    session: session,
+    notify: notify,
     onCreate: handleBatchCreate,
     onClose: () => setShowBatchForm(false)
   }), pendingImportRows && /*#__PURE__*/React.createElement(ImportTestPickerModal, {
@@ -1681,17 +1797,6 @@ function SamplesTab({
       setPendingImportRows(null);
       setPendingImportSkipped(0);
     }
-  }), editingSample && /*#__PURE__*/React.createElement(EditSampleForm, {
-    sample: editingSample,
-    testTypes: testTypes,
-    testRecords: testRecords,
-    references: references,
-    onSave: async next => {
-      await handleUpdate(next);
-      setEditingSample(null);
-      notify?.(`${next.sampleCode} updated.`, "ok");
-    },
-    onClose: () => setEditingSample(null)
   }), openSample && /*#__PURE__*/React.createElement(SampleDetail, {
     sample: openSample,
     users: users,
@@ -1700,696 +1805,516 @@ function SamplesTab({
     testRecords: testRecords,
     subBatches: subBatches,
     references: references,
+    setReferences: setReferences,
     onClose: () => setOpenId(null),
     onUpdate: handleUpdate,
+    onDelete: handleDeleteSample,
     notify: notify
   }));
 }
 
 // ---- Sub-Batches sub-view: group pending samples for one method into a
 // persistent, named batch that Add Test Record can later consume as a unit ----
-// ============================================================================
-// BATCH BUILDER (Phase B) — build a batch of (sample, test type) pairs, not
-// samples-for-one-test-type. Matches how the lab actually brackets samples:
-// grab a pile, and whatever each one specifically needs gets checked off.
-// ============================================================================
-function pairKey(sampleId, testTypeId) {
-  return `${sampleId}::${testTypeId}`;
-}
-function BatchGroupBadge({
-  batch,
-  testTypeId,
-  testTypeName,
-  testRecords
-}) {
-  const status = batchGroupStatus(batch, testTypeId, testRecords);
-  const tone = status === "completed" ? "ok" : "info";
-  return /*#__PURE__*/React.createElement("span", {
-    className: "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold mr-1 mb-1",
-    style: {
-      background: tone === "ok" ? C.okBg : C.infoBg,
-      color: tone === "ok" ? C.ok : C.info
-    }
-  }, testTypeName, " — ", status === "completed" ? "Run" : "Pending");
+function SUB_BATCH_STATUS_BADGE(status) {
+  if (status === "reviewed") return /*#__PURE__*/React.createElement(Badge, {
+    tone: "ok"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "check",
+    size: 11
+  }), " Reviewed");
+  if (status === "tested") return /*#__PURE__*/React.createElement(Badge, {
+    tone: "warn"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "clipboard",
+    size: 11
+  }), " Awaiting Review");
+  return /*#__PURE__*/React.createElement(Badge, {
+    tone: "info"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "clipboard",
+    size: 11
+  }), " Pending");
 }
 function SubBatchBuilder({
   samples,
+  setSamples,
   testTypes,
   subBatches,
   setSubBatches,
   testRecords,
+  references,
   users,
+  session,
   notify
 }) {
-  const [testTypeFilter, setTestTypeFilter] = React.useState([]); // [] = all test types
-  const [selectedBatchRefs, setSelectedBatchRefs] = React.useState([]);
-  const [selectedPairs, setSelectedPairs] = React.useState([]); // [{sampleId, testTypeId, testTypeName}]
+  const [selectedTestId, setSelectedTestId] = React.useState("");
+  const [selectedReferenceIds, setSelectedReferenceIds] = React.useState([]);
+  const [selectedSampleIds, setSelectedSampleIds] = React.useState([]);
   const [label, setLabel] = React.useState("");
   const [assignedTester, setAssignedTester] = React.useState("");
   const [autoCount, setAutoCount] = React.useState("");
   const [autoBatchCount, setAutoBatchCount] = React.useState("");
-  const [editingBatchId, setEditingBatchId] = React.useState(null);
-  const [expandedBatchId, setExpandedBatchId] = React.useState(null);
-  const [deleteBatchId, setDeleteBatchId] = React.useState(null);
+  const [editingSubBatchId, setEditingSubBatchId] = React.useState(null);
+  const [deleteSubBatchId, setDeleteSubBatchId] = React.useState(null);
+  const [returningSubBatchId, setReturningSubBatchId] = React.useState(null);
+  const [returnNote, setReturnNote] = React.useState("");
 
-  // ---- eligible (sample, testType) pairs across the whole pool ----
-  const batchRefOptions = Array.from(new Set(samples.map(s => s.batchRef).filter(Boolean))).sort();
-  const testTypeOptions = testTypes.map(t => ({
-    value: t.id,
-    label: t.name
-  }));
-  function eligiblePairsForSample(sample) {
-    return (sample.requestedTests || []).filter(rt => SUBBATCH_ELIGIBLE_STATUSES.includes(sample.status)).filter(rt => testTypeFilter.length === 0 || testTypeFilter.includes(rt.testTypeId)).filter(rt => !sampleAlreadyCommittedForTest(sample, rt.testTypeId, testRecords, subBatches, editingBatchId)).map(rt => ({
-      sampleId: sample.id,
-      testTypeId: rt.testTypeId,
-      testTypeName: rt.testTypeName
-    }));
+  // Samples eligible for the chosen Test Type — ignoring the sub-batch's own
+  // current membership while it's being edited (otherwise its members would
+  // wrongly look "already used" and disappear from the picker).
+  const eligibleForTest = selectedTestId ? samples.filter(s => {
+    // While editing an existing sub-batch, its own current members must not
+    // be excluded by the "already queued" check below (they're queued IN
+    // this sub-batch) — pretend this sub-batch doesn't exist for that check.
+    const subBatchesForCheck = editingSubBatchId ? subBatches.filter(sb => sb.id !== editingSubBatchId) : subBatches;
+    return pendingTestTypeIdsForSample(s, testRecords, subBatchesForCheck).includes(selectedTestId);
+  }) : [];
+  // References available to filter by, scoped to the Test Type above — a
+  // Reference (source batch) can carry several test types, so this narrows
+  // to only References that actually have samples requesting THIS test.
+  const referenceFilterOptions = Array.from(new Set(eligibleForTest.map(s => s.referenceId).filter(Boolean))).map(id => findReferenceById(references, id)).filter(Boolean).sort((a, b) => (a.refNo || "").localeCompare(b.refNo || ""));
+  const eligibleSamples = selectedReferenceIds.length ? eligibleForTest.filter(s => selectedReferenceIds.includes(s.referenceId)) : eligibleForTest;
+  const distinctReferences = Array.from(new Set(samples.filter(s => selectedSampleIds.includes(s.id)).map(s => s.referenceId).filter(Boolean))).map(id => findReferenceById(references, id)).filter(Boolean);
+  function toggleMember(id) {
+    setSelectedSampleIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   }
-  const filteredSamples = samples.filter(s => selectedBatchRefs.length === 0 || selectedBatchRefs.includes(s.batchRef));
-  const samplesWithEligiblePairs = filteredSamples.map(s => ({
-    sample: s,
-    pairs: eligiblePairsForSample(s)
-  })).filter(x => x.pairs.length > 0);
-  const allEligiblePairsFlat = samplesWithEligiblePairs.flatMap(x => x.pairs);
-  const totalEligiblePairs = allEligiblePairsFlat.length;
-  function isPairSelected(sampleId, testTypeId) {
-    return selectedPairs.some(p => p.sampleId === sampleId && p.testTypeId === testTypeId);
+  function toggleReferenceFilter(id) {
+    setSelectedReferenceIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   }
-  function togglePair(pair) {
-    setSelectedPairs(prev => isPairSelected(pair.sampleId, pair.testTypeId) ? prev.filter(p => !(p.sampleId === pair.sampleId && p.testTypeId === pair.testTypeId)) : [...prev, pair]);
-  }
-  function toggleAllForSample(sample, pairs) {
-    const allOn = pairs.every(p => isPairSelected(p.sampleId, p.testTypeId));
-    setSelectedPairs(prev => {
-      const withoutSample = prev.filter(p => p.sampleId !== sample.id);
-      return allOn ? withoutSample : [...withoutSample, ...pairs];
-    });
-  }
-  function resetForm() {
-    setSelectedPairs([]);
-    setLabel("");
-    setAssignedTester("");
-    setEditingBatchId(null);
-  }
-  function saveBatch() {
-    if (!selectedPairs.length) {
-      notify?.("Select at least one sample/test pair.", "warn");
-      return;
-    }
-    if (editingBatchId) {
-      setSubBatches(prev => prev.map(sb => sb.id === editingBatchId ? {
-        ...sb,
-        label: label.trim() || sb.label,
-        assignedTester,
-        members: selectedPairs
-      } : sb));
-      notify?.("Batch updated.", "ok");
-    } else {
-      const batch = createBatch({
-        label: label.trim(),
-        members: selectedPairs,
-        assignedTester
-      }, subBatches);
-      setSubBatches(prev => [batch, ...prev]);
-      notify?.(`${batch.label} created with ${selectedPairs.length} sample/test pair(s).`, "ok");
-    }
-    resetForm();
-  }
+  // "No. of samples" auto-pick — takes that many not-yet-selected eligible
+  // samples (in list order). If fewer are available (odd/short batch), it
+  // takes all it can and tells the tester so the remainder can go in a
+  // separate sub-batch instead of silently under-filling.
   function autoSelect() {
     const n = parseInt(autoCount, 10);
     if (!n || n <= 0) {
-      notify?.("Enter a valid number of pairs first.", "warn");
+      notify?.("Enter a valid number of samples first.", "warn");
       return;
     }
-    const remaining = allEligiblePairsFlat.filter(p => !isPairSelected(p.sampleId, p.testTypeId));
-    setSelectedPairs(prev => [...prev, ...remaining.slice(0, n)]);
+    const notYetSelected = eligibleSamples.filter(s => !selectedSampleIds.includes(s.id));
+    const take = notYetSelected.slice(0, n).map(s => s.id);
+    setSelectedSampleIds(prev => [...prev, ...take]);
+    if (take.length < n) {
+      notify?.(`Only ${take.length} eligible sample(s) were available (asked for ${n}) — added all of them. Put the remainder in a second sub-batch.`, "warn");
+    } else {
+      notify?.(`Added ${take.length} sample(s).`, "ok");
+    }
     setAutoCount("");
   }
-
-  // Same idea as Phase A's per-sample auto-split, now operating on pairs
-  // instead of whole samples — a batch can end up with fewer distinct
-  // samples than "pairs per batch" if some samples contribute >1 pair.
-  function autoCreateBatches() {
+  function autoCreateMultipleBatches() {
     const perBatch = parseInt(autoCount, 10);
     const numBatches = parseInt(autoBatchCount, 10);
-    if (!perBatch || perBatch <= 0) {
-      notify?.("Enter a valid number of pairs per batch first.", "warn");
+    if (!perBatch || perBatch <= 0 || !numBatches || numBatches <= 0) {
+      notify?.("Enter both No. of Samples (per batch) and No. of Batches first.", "warn");
       return;
     }
-    if (!numBatches || numBatches <= 0) {
-      notify?.("Enter a valid number of batches to create.", "warn");
+    if (!selectedTestId) {
+      notify?.("Pick a Test Type first.", "warn");
       return;
     }
-    const pool = allEligiblePairsFlat.filter(p => !isPairSelected(p.sampleId, p.testTypeId));
-    if (!pool.length) {
-      notify?.("No eligible sample/test pairs available.", "warn");
-      return;
-    }
-    const created = [];
+    const pool = eligibleSamples.filter(s => !selectedSampleIds.includes(s.id));
+    const test = testTypes.find(t => t.id === selectedTestId);
     let cursor = 0;
-    let running = [...subBatches];
+    let runningSubBatches = subBatches;
+    const createdLabels = [];
     for (let i = 0; i < numBatches && cursor < pool.length; i++) {
       const chunk = pool.slice(cursor, cursor + perBatch);
-      if (!chunk.length) break;
-      cursor += chunk.length;
-      const batch = createBatch({
-        label: label.trim() ? `${label.trim()} ${i + 1}` : "",
-        members: chunk,
+      cursor += perBatch;
+      const sb = createSubBatch({
+        label: label.trim() ? `${label.trim()} — Batch ${i + 1}` : "",
+        testTypeId: selectedTestId,
+        testTypeName: test?.name || "",
+        memberSampleIds: chunk.map(s => s.id),
         assignedTester
-      }, running);
-      running = [...running, batch];
-      created.push(batch);
+      }, runningSubBatches);
+      runningSubBatches = [...runningSubBatches, sb];
+      createdLabels.push(`${sb.label} (${chunk.length})`);
     }
-    if (!created.length) {
-      notify?.("Nothing to create.", "warn");
+    setSubBatches(runningSubBatches);
+    if (!createdLabels.length) {
+      notify?.("No eligible samples were available to create any batch.", "warn");
       return;
     }
-    setSubBatches(prev => [...created, ...prev]);
-    const totalPairs = created.reduce((s, b) => s + b.members.length, 0);
-    const short = numBatches * perBatch > pool.length;
-    notify?.(`Created ${created.length} batch(es) covering ${totalPairs} pair(s)${short ? ` — only ${pool.length} pair(s) were available, so the last batch has fewer than ${perBatch}` : ""}.`, "ok");
+    markMembersInProgress(pool.slice(0, cursor).map(s => s.id), selectedTestId);
+    const shortBy = numBatches - createdLabels.length;
+    notify?.(`Created ${createdLabels.length} sub-batch(es): ${createdLabels.join(", ")}.${shortBy > 0 ? ` Only enough samples for ${createdLabels.length} of the ${numBatches} requested — the last one may have fewer than ${perBatch}.` : ""}`, "ok");
     setAutoCount("");
     setAutoBatchCount("");
   }
-  function startEdit(batch) {
-    setEditingBatchId(batch.id);
-    setLabel(batch.label);
-    setAssignedTester(batch.assignedTester || "");
-    setSelectedPairs(batch.members || []);
+  function resetForm() {
+    setSelectedTestId("");
+    setSelectedReferenceIds([]);
+    setSelectedSampleIds([]);
+    setLabel("");
+    setAssignedTester("");
+    setAutoCount("");
+    setEditingSubBatchId(null);
   }
-  function batchDeleteBlockReason(batch) {
-    const status = batchOverallStatus(batch, testRecords);
-    if (status !== "pending") return "This batch has at least one test type already run — remove that test record first, or edit only the pending groups.";
-    return null;
+  function startEdit(sb) {
+    setSelectedTestId(sb.testTypeId);
+    setSelectedReferenceIds([]);
+    setSelectedSampleIds(sb.memberSampleIds || []);
+    setLabel(sb.label);
+    setAssignedTester(sb.assignedTester || "");
+    setEditingSubBatchId(sb.id);
   }
-  function doDeleteBatch(batch) {
-    setSubBatches(prev => prev.filter(sb => sb.id !== batch.id));
-    setDeleteBatchId(null);
-    notify?.(`${batch.label} deleted.`, "ok");
+  function markMembersInProgress(memberIds, testTypeId) {
+    if (!setSamples) return;
+    memberIds.forEach(id => {
+      const member = (samples || []).find(s => s.id === id);
+      if (!member) return;
+      const rt = (member.requestedTests || []).find(r => r.testTypeId === testTypeId);
+      if (!rt || rt.status !== "pending") return; // already past pending, or edit removed it — leave alone
+      const updated = setRequestedTestStatus(member, testTypeId, "in_progress", session);
+      setSamples(prev => prev.map(s => s.id === id ? updated : s), updated);
+    });
   }
-  return /*#__PURE__*/React.createElement("div", {
-    className: "grid gap-4"
-  }, /*#__PURE__*/React.createElement(SectionCard, {
-    title: editingBatchId ? `Editing ${label}` : "Build a Batch",
-    icon: /*#__PURE__*/React.createElement(Icon, {
-      name: "flask",
-      size: 16,
-      color: C.teal
-    })
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "flex flex-wrap gap-3 mb-3"
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      minWidth: 260
+  function createGroup() {
+    if (!selectedTestId || selectedSampleIds.length === 0) {
+      notify?.("Pick a test type and at least one sample.", "warn");
+      return;
     }
-  }, /*#__PURE__*/React.createElement(MultiSelectDropdown, {
-    label: "Filter by Test Type (optional — leave blank for all)",
-    options: testTypeOptions,
-    selected: testTypeFilter,
-    onChange: setTestTypeFilter,
-    placeholder: "All test types"
-  })), batchRefOptions.length > 0 && /*#__PURE__*/React.createElement("div", {
-    style: {
-      minWidth: 220
+    const test = testTypes.find(t => t.id === selectedTestId);
+    if (editingSubBatchId) {
+      setSubBatches(prev => prev.map(sb => sb.id === editingSubBatchId ? {
+        ...sb,
+        label: label.trim() || sb.label,
+        testTypeId: selectedTestId,
+        testTypeName: test?.name || sb.testTypeName,
+        memberSampleIds: selectedSampleIds,
+        assignedTester
+      } : sb));
+      markMembersInProgress(selectedSampleIds, selectedTestId);
+      notify?.(`${label.trim() || "Sub-batch"} updated — now ${selectedSampleIds.length} sample(s).`, "ok");
+    } else {
+      const sb = createSubBatch({
+        label: label.trim(),
+        testTypeId: selectedTestId,
+        testTypeName: test?.name || "",
+        memberSampleIds: selectedSampleIds,
+        assignedTester
+      }, subBatches);
+      setSubBatches(prev => [sb, ...prev]);
+      markMembersInProgress(selectedSampleIds, selectedTestId);
+      notify?.(`${sb.label} created with ${selectedSampleIds.length} sample(s).`, "ok");
     }
-  }, /*#__PURE__*/React.createElement(MultiSelectDropdown, {
-    label: "Filter by Registration Batch (optional)",
-    options: batchRefOptions.map(r => ({
-      value: r,
-      label: r
+    resetForm();
+  }
+  function updateAssignedTester(sbId, tester) {
+    setSubBatches(prev => prev.map(sb => sb.id === sbId ? {
+      ...sb,
+      assignedTester: tester
+    } : sb));
+  }
+  function doDeleteSubBatch(sb) {
+    setSubBatches(prev => prev.filter(x => x.id !== sb.id));
+    setDeleteSubBatchId(null);
+    if (editingSubBatchId === sb.id) resetForm();
+    notify?.(`${sb.label} deleted.`, "ok");
+  }
+  // ---- Review (Phase 3) — approving/returning a Sub-Batch only ever
+  // touches the ONE parameter it represents (sb.testTypeId), for its member
+  // samples. A sample with 3 requested parameters can have one approved via
+  // its Sub-Batch while the other two are still untouched. ----
+  // ---- Review (Phase 3) — this is the bulk TECHNICAL review pass
+  // (results_entered -> under_review) for the one parameter this Sub-Batch
+  // represents, for its member samples. Final Approval/Release stay
+  // signature-gated on the whole sample (see addApproval/releaseResults in
+  // 20-sample-model.js) — a Sub-Batch can't skip past that; it only brings
+  // its own parameter up to "ready for the signed-off approval step",
+  // exactly like the workflow doc's "Review is performed at batch level".
+  function approveSubBatch(sb) {
+    reviewSubBatchApprove(sb, samples, setSamples, setSubBatches, session, notify);
+  }
+  function confirmReturnSubBatch(sb) {
+    reviewSubBatchReturn(sb, samples, setSamples, setSubBatches, session, notify, returnNote);
+    setReturningSubBatchId(null);
+    setReturnNote("");
+  }
+  const filterFields = /*#__PURE__*/React.createElement("div", {
+    className: "grid gap-3",
+    style: {
+      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))"
+    }
+  }, /*#__PURE__*/React.createElement(SelectField, {
+    simple: true,
+    label: "Test Type",
+    value: selectedTestId,
+    onChange: v => {
+      setSelectedTestId(v);
+      setSelectedReferenceIds([]);
+      setSelectedSampleIds([]);
+    },
+    options: testTypes.map(t => ({
+      value: t.id,
+      label: t.name
     })),
-    selected: selectedBatchRefs,
-    onChange: setSelectedBatchRefs,
-    placeholder: "All registration batches"
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "text-xs mb-2",
+    placeholder: "Select a method"
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Sub-Batch Label (optional)",
+    value: label,
+    onChange: v => setLabel(v),
+    placeholder: "auto-generated if left blank"
+  }), /*#__PURE__*/React.createElement(SelectField, {
+    simple: true,
+    label: "Assign Tester",
+    value: assignedTester,
+    onChange: v => setAssignedTester(v),
+    options: users.map(u => ({
+      value: u.name,
+      label: `${u.name} (${u.designation || u.role})`
+    })),
+    placeholder: "Unassigned"
+  }));
+
+  const batchFilterBlock = referenceFilterOptions.length > 0 ? /*#__PURE__*/React.createElement("details", {
+    className: "mb-3 rounded",
     style: {
-      color: C.muted
+      border: `1px solid ${C.border}`
     }
-  }, selectedPairs.length, " sample/test pair(s) selected · ", totalEligiblePairs, " eligible in the current filter"), /*#__PURE__*/React.createElement("div", {
-    className: "flex flex-wrap items-end gap-2 mb-3"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "flex flex-col gap-1 text-xs",
+  }, /*#__PURE__*/React.createElement("summary", {
+    className: "text-xs font-semibold px-2 py-1.5 cursor-pointer select-none",
     style: {
-      color: C.muted
+      color: C.ink
     }
-  }, "No. of pairs", /*#__PURE__*/React.createElement("input", {
+  }, "Filter by Reference ", selectedReferenceIds.length ? `(${selectedReferenceIds.length} selected)` : "(optional — pick one or more)"), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-2 px-2 pb-2"
+  }, referenceFilterOptions.map(ref => /*#__PURE__*/React.createElement("label", {
+    key: ref.id,
+    className: "flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer",
+    style: {
+      border: `1px solid ${selectedReferenceIds.includes(ref.id) ? C.teal : C.border}`,
+      background: selectedReferenceIds.includes(ref.id) ? `${C.teal}14` : "transparent"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: selectedReferenceIds.includes(ref.id),
+    onChange: () => toggleReferenceFilter(ref.id)
+  }), referenceSourceMeta(ref.sourceType).label, ": ", referenceDisplayLabel(ref))))) : null;
+
+  const pickerHeaderRow = /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mb-1.5 flex-wrap gap-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-semibold",
+    style: {
+      color: C.ink
+    }
+  }, "Select Samples (", selectedSampleIds.length, " of ", eligibleSamples.length, ")"), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 flex-wrap"
+  }, /*#__PURE__*/React.createElement("input", {
     type: "number",
-    min: "1",
+    min: 1,
+    placeholder: "No. of samples",
     value: autoCount,
     onChange: e => setAutoCount(e.target.value),
     className: "border rounded px-2 py-1 text-xs w-28",
     style: {
       borderColor: C.border
     }
-  })), /*#__PURE__*/React.createElement(Button, {
+  }), /*#__PURE__*/React.createElement(Button, {
     variant: "outline",
     size: "sm",
     onClick: autoSelect
-  }, "Auto-Select"), /*#__PURE__*/React.createElement("label", {
-    className: "flex flex-col gap-1 text-xs",
-    style: {
-      color: C.muted
-    }
-  }, "No. of batches", /*#__PURE__*/React.createElement("input", {
+  }, "Auto-Select"), /*#__PURE__*/React.createElement("input", {
     type: "number",
-    min: "1",
+    min: 1,
+    placeholder: "No. of batches",
     value: autoBatchCount,
     onChange: e => setAutoBatchCount(e.target.value),
     className: "border rounded px-2 py-1 text-xs w-28",
     style: {
       borderColor: C.border
     }
-  })), /*#__PURE__*/React.createElement(Button, {
+  }), /*#__PURE__*/React.createElement(Button, {
     variant: "outline",
     size: "sm",
-    onClick: autoCreateBatches,
-    title: "Creates that many batches at once, each with \"No. of pairs\" sample/test pairs; the last one gets whatever's left over."
-  }, "Auto-Create Batches"), /*#__PURE__*/React.createElement(Button, {
+    onClick: autoCreateMultipleBatches
+  }, "Create Multiple Batches"), /*#__PURE__*/React.createElement(Button, {
     variant: "ghost",
     size: "sm",
-    onClick: () => setSelectedPairs(allEligiblePairsFlat)
+    onClick: () => setSelectedSampleIds(eligibleSamples.map(s => s.id))
   }, "Select All"), /*#__PURE__*/React.createElement(Button, {
     variant: "ghost",
     size: "sm",
-    onClick: () => setSelectedPairs([])
-  }, "Clear")), samplesWithEligiblePairs.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    onClick: () => setSelectedSampleIds([])
+  }, "Clear")));
+
+  const pickerListBox = /*#__PURE__*/React.createElement("div", {
+    className: "grid gap-1 max-h-56 overflow-y-auto p-1 rounded",
+    style: {
+      border: `1px solid ${C.border}`
+    }
+  }, eligibleSamples.map(s => /*#__PURE__*/React.createElement("label", {
+    key: s.id,
+    className: "flex items-center gap-2 px-2 py-1.5 rounded text-xs cursor-pointer",
+    style: {
+      background: selectedSampleIds.includes(s.id) ? `${C.teal}14` : "transparent"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: selectedSampleIds.includes(s.id),
+    onChange: () => toggleMember(s.id)
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "font-semibold"
+  }, s.sampleCode), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.muted
+    }
+  }, s.clientName, s.referenceId ? ` · ref: ${referenceDisplayLabel(findReferenceById(references, s.referenceId))}` : ""))));
+
+  const mixedBatchWarning = distinctReferences.length > 1 ? /*#__PURE__*/React.createElement("div", {
+    className: "text-xs p-2 rounded mt-2",
+    style: {
+      background: C.warnBg,
+      color: C.warn
+    }
+  }, "Heads up: this sub-batch mixes samples from ", distinctReferences.length, " different References (", distinctReferences.map(r => r.refNo).join(", "), "). That's fine for testing — each sample keeps its own Reference for reporting.") : null;
+
+  const actionRow = /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end gap-2 mt-3"
+  }, editingSubBatchId && /*#__PURE__*/React.createElement(Button, {
+    variant: "outline",
+    onClick: resetForm
+  }, "Cancel Edit"), /*#__PURE__*/React.createElement(Button, {
+    onClick: createGroup
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "check",
+    size: 13
+  }), editingSubBatchId ? "Save Changes" : `Create Sub-Batch (${selectedSampleIds.length})`));
+
+  const pickerBlock = !selectedTestId ? /*#__PURE__*/React.createElement("div", {
+    className: "text-xs p-3 rounded mt-3",
+    style: {
+      background: C.infoBg,
+      color: C.info
+    }
+  }, "Pick a Test Type to see eligible pending samples.") : /*#__PURE__*/React.createElement("div", {
+    className: "mt-3"
+  }, batchFilterBlock, eligibleSamples.length === 0 ? /*#__PURE__*/React.createElement("div", {
     className: "text-xs p-3 rounded",
     style: {
       background: C.infoBg,
       color: C.info
     }
-  }, "No samples with eligible pending tests match the current filters.") : /*#__PURE__*/React.createElement("div", {
-    className: "rounded overflow-hidden mb-3",
-    style: {
-      border: `1px solid ${C.border}`,
-      maxHeight: 340,
-      overflowY: "auto"
-    }
-  }, /*#__PURE__*/React.createElement("table", {
-    className: "w-full text-xs"
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
-    style: {
-      background: C.bg,
-      position: "sticky",
-      top: 0
-    }
-  }, ["", "Sample Code", "Client", "Requested Tests (check to include)"].map(h => /*#__PURE__*/React.createElement("th", {
-    key: h,
-    className: "text-left px-2 py-1.5 font-semibold",
-    style: {
-      color: C.muted
-    }
-  }, h)))), /*#__PURE__*/React.createElement("tbody", null, samplesWithEligiblePairs.map(({
-    sample,
-    pairs
-  }) => {
-    const allOn = pairs.every(p => isPairSelected(p.sampleId, p.testTypeId));
-    return /*#__PURE__*/React.createElement("tr", {
-      key: sample.id,
+  }, "No pending samples match this Test Type", selectedReferenceIds.length ? " + Reference filter" : "", " (or all are already in another pending sub-batch).") : /*#__PURE__*/React.createElement("div", null, pickerHeaderRow, pickerListBox, mixedBatchWarning, actionRow));
+
+  const createCard = /*#__PURE__*/React.createElement(SectionCard, {
+    title: editingSubBatchId ? "Edit Sub-Batch" : "Create a Sub-Batch",
+    subtitle: "Group pending samples requesting the same test into one batch — shares one QC check, tested together in Add Test Record.",
+    icon: /*#__PURE__*/React.createElement(Icon, {
+      name: "flask",
+      size: 15
+    })
+  }, filterFields, pickerBlock);
+
+  function renderSubBatchRow(sb) {
+    const testerControl = sb.status === "pending" ? /*#__PURE__*/React.createElement("select", {
+      className: "border rounded px-2 py-1 text-xs",
       style: {
-        borderTop: `1px solid ${C.border}`
-      }
-    }, /*#__PURE__*/React.createElement("td", {
-      className: "px-2 py-1.5"
-    }, /*#__PURE__*/React.createElement("input", {
-      type: "checkbox",
-      checked: allOn,
-      onChange: () => toggleAllForSample(sample, pairs),
-      title: "Toggle all this sample's eligible tests"
-    })), /*#__PURE__*/React.createElement("td", {
-      className: "px-2 py-1.5 font-medium",
-      style: {
-        color: C.ink
-      }
-    }, sample.sampleCode), /*#__PURE__*/React.createElement("td", {
-      className: "px-2 py-1.5",
+        borderColor: C.border
+      },
+      value: sb.assignedTester,
+      onChange: e => updateAssignedTester(sb.id, e.target.value)
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "Unassigned"), users.map(u => /*#__PURE__*/React.createElement("option", {
+      key: u.id,
+      value: u.name
+    }, u.name))) : /*#__PURE__*/React.createElement("span", {
+      className: "text-xs",
       style: {
         color: C.muted
       }
-    }, sample.clientName), /*#__PURE__*/React.createElement("td", {
-      className: "px-2 py-1.5"
+    }, sb.assignedTester || "—");
+    return /*#__PURE__*/React.createElement("div", {
+      key: sb.id,
+      className: "px-3 py-2 rounded",
+      style: {
+        border: `1px solid ${C.border}`
+      }
     }, /*#__PURE__*/React.createElement("div", {
-      className: "flex flex-wrap gap-1"
-    }, pairs.map(p => {
-      const on = isPairSelected(p.sampleId, p.testTypeId);
-      return /*#__PURE__*/React.createElement("button", {
-        key: p.testTypeId,
-        onClick: () => togglePair(p),
-        className: "px-2 py-0.5 rounded-full text-[11px] font-medium border",
-        style: {
-          background: on ? C.teal : "transparent",
-          color: on ? "#fff" : C.ink,
-          borderColor: on ? C.teal : C.border
-        }
-      }, p.testTypeName);
-    }))));
-  })))), /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-2 gap-3 mb-3"
-  }, /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Batch Label (optional — auto-generated if blank)",
-    value: label,
-    onChange: setLabel
-  }), /*#__PURE__*/React.createElement(SelectField, {
-    simple: true,
-    label: "Assigned Tester (optional)",
-    value: assignedTester,
-    onChange: setAssignedTester,
-    options: users.map(u => ({
-      value: u.name,
-      label: u.name
-    })),
-    placeholder: "Unassigned"
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "flex justify-end gap-2"
-  }, editingBatchId && /*#__PURE__*/React.createElement(Button, {
-    variant: "outline",
-    onClick: resetForm
-  }, "Cancel Edit"), /*#__PURE__*/React.createElement(Button, {
-    onClick: saveBatch
-  }, editingBatchId ? "Save Changes" : "Create Batch"))), /*#__PURE__*/React.createElement(SectionCard, {
-    title: `Existing Batches (${subBatches.length})`,
+      className: "flex items-center justify-between gap-2"
+    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+      className: "text-xs font-semibold",
+      style: {
+        color: C.ink
+      }
+    }, sb.label, " · ", sb.testTypeName), /*#__PURE__*/React.createElement("div", {
+      className: "text-[11px]",
+      style: {
+        color: C.muted
+      }
+    }, sb.memberSampleIds.length, " samples · created ", new Date(sb.createdAt).toLocaleDateString())), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-2"
+    }, testerControl, SUB_BATCH_STATUS_BADGE(sb.status), sb.status === "tested" && /*#__PURE__*/React.createElement(Button, {
+      variant: "outline",
+      size: "sm",
+      onClick: () => approveSubBatch(sb)
+    }, "Mark Reviewed"), sb.status === "tested" && /*#__PURE__*/React.createElement(Button, {
+      variant: "ghost",
+      size: "sm",
+      onClick: () => {
+        setReturningSubBatchId(sb.id);
+        setReturnNote("");
+      }
+    }, "Return to Analyst"), /*#__PURE__*/React.createElement(IconButton, {
+      name: "edit",
+      color: C.teal,
+      title: sb.status === "pending" ? "Edit sub-batch" : "Only pending sub-batches can be edited (this one is already tested)",
+      disabled: sb.status !== "pending",
+      onClick: () => startEdit(sb)
+    }), /*#__PURE__*/React.createElement(IconButton, {
+      name: "trash",
+      color: C.warn,
+      title: sb.status === "pending" ? "Delete sub-batch" : "Delete the linked test record first to remove a tested sub-batch",
+      disabled: sb.status !== "pending",
+      onClick: () => setDeleteSubBatchId(sb.id)
+    }))), deleteSubBatchId === sb.id && /*#__PURE__*/React.createElement(ConfirmBar, {
+      text: `Delete sub-batch "${sb.label}"? Its ${sb.memberSampleIds.length} member sample(s) become available for another sub-batch again.`,
+      onConfirm: () => doDeleteSubBatch(sb),
+      onCancel: () => setDeleteSubBatchId(null)
+    }), returningSubBatchId === sb.id && /*#__PURE__*/React.createElement("div", {
+      className: "mt-2 p-2 rounded",
+      style: {
+        background: C.warnBg
+      }
+    }, /*#__PURE__*/React.createElement(TextField, {
+      simple: true,
+      label: `Note for the analyst (optional) — why is "${sb.testTypeName}" being returned?`,
+      value: returnNote,
+      onChange: setReturnNote
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "flex justify-end gap-2 mt-2"
+    }, /*#__PURE__*/React.createElement(Button, {
+      variant: "ghost",
+      size: "sm",
+      onClick: () => {
+        setReturningSubBatchId(null);
+        setReturnNote("");
+      }
+    }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
+      size: "sm",
+      onClick: () => confirmReturnSubBatch(sb)
+    }, "Confirm Return"))));
+  }
+
+  const listCard = /*#__PURE__*/React.createElement(SectionCard, {
+    title: "All Sub-Batches",
     icon: /*#__PURE__*/React.createElement(Icon, {
-      name: "table",
-      size: 16,
-      color: C.teal
+      name: "clipboard",
+      size: 15
     })
   }, subBatches.length === 0 ? /*#__PURE__*/React.createElement("div", {
     className: "text-xs",
     style: {
       color: C.muted
     }
-  }, "No batches yet.") : /*#__PURE__*/React.createElement("div", {
-    className: "flex flex-col gap-2"
-  }, subBatches.map(sb => {
-    const groups = distinctTestTypesInBatch(sb);
-    const overall = batchOverallStatus(sb, testRecords);
-    const isOpen = expandedBatchId === sb.id;
-    const blockReason = batchDeleteBlockReason(sb);
-    return /*#__PURE__*/React.createElement("div", {
-      key: sb.id,
-      className: "rounded p-2.5",
-      style: {
-        border: `1px solid ${C.border}`
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "flex items-center justify-between flex-wrap gap-2"
-    }, /*#__PURE__*/React.createElement("button", {
-      onClick: () => setExpandedBatchId(isOpen ? null : sb.id),
-      className: "flex items-center gap-1.5 text-left"
-    }, /*#__PURE__*/React.createElement(Icon, {
-      name: isOpen ? "chevronDown" : "chevronRight",
-      size: 13,
-      color: C.muted
-    }), /*#__PURE__*/React.createElement("span", {
-      className: "text-sm font-semibold",
-      style: {
-        color: C.ink
-      }
-    }, sb.label), /*#__PURE__*/React.createElement(Badge, {
-      tone: overall === "completed" ? "ok" : overall === "partial" ? "warn" : "muted"
-    }, overall === "completed" ? "Completed" : overall === "partial" ? "Partially Run" : "Pending"), /*#__PURE__*/React.createElement("span", {
-      className: "text-[11px]",
-      style: {
-        color: C.muted
-      }
-    }, sb.members.length, " pair(s) · ", groups.length, " test type(s)")), /*#__PURE__*/React.createElement("div", {
-      className: "flex items-center gap-1"
-    }, overall === "pending" && /*#__PURE__*/React.createElement(IconButton, {
-      name: "edit",
-      color: C.teal,
-      title: "Edit batch",
-      onClick: () => startEdit(sb)
-    }), /*#__PURE__*/React.createElement(IconButton, {
-      name: "trash",
-      color: C.warn,
-      title: blockReason || "Delete batch",
-      onClick: () => blockReason ? notify?.(blockReason, "warn") : setDeleteBatchId(sb.id)
-    }))), isOpen && /*#__PURE__*/React.createElement("div", {
-      className: "mt-2 pt-2",
-      style: {
-        borderTop: `1px solid ${C.border}`
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "mb-2"
-    }, groups.map(g => /*#__PURE__*/React.createElement(BatchGroupBadge, {
-      key: g.testTypeId,
-      batch: sb,
-      testTypeId: g.testTypeId,
-      testTypeName: g.testTypeName,
-      testRecords: testRecords
-    }))), /*#__PURE__*/React.createElement("table", {
-      className: "w-full text-xs"
-    }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
-      style: {
-        background: C.bg
-      }
-    }, ["Sample", "Test", "Status"].map(h => /*#__PURE__*/React.createElement("th", {
-      key: h,
-      className: "text-left px-2 py-1 font-semibold",
-      style: {
-        color: C.muted
-      }
-    }, h)))), /*#__PURE__*/React.createElement("tbody", null, sb.members.map((m, i) => {
-      const sm = samples.find(s => s.id === m.sampleId);
-      const groupStatus = batchGroupStatus(sb, m.testTypeId, testRecords);
-      return /*#__PURE__*/React.createElement("tr", {
-        key: i,
-        style: {
-          borderTop: `1px solid ${C.border}`
-        }
-      }, /*#__PURE__*/React.createElement("td", {
-        className: "px-2 py-1",
-        style: {
-          color: C.ink
-        }
-      }, sm ? sm.sampleCode : m.sampleId), /*#__PURE__*/React.createElement("td", {
-        className: "px-2 py-1",
-        style: {
-          color: C.muted
-        }
-      }, m.testTypeName), /*#__PURE__*/React.createElement("td", {
-        className: "px-2 py-1"
-      }, /*#__PURE__*/React.createElement("span", {
-        className: "px-1.5 py-0.5 rounded text-[10px] font-semibold",
-        style: {
-          background: groupStatus === "completed" ? C.okBg : C.infoBg,
-          color: groupStatus === "completed" ? C.ok : C.info
-        }
-      }, groupStatus === "completed" ? "Run" : "Pending")));
-    })))), deleteBatchId === sb.id && /*#__PURE__*/React.createElement(ConfirmBar, {
-      text: `Delete batch "${sb.label}"? Its members become available for another batch again.`,
-      onConfirm: () => doDeleteBatch(sb),
-      onCancel: () => setDeleteBatchId(null)
-    }));
-  }))));
-}
-function ReferenceForm({
-  initial,
-  onSave,
-  onClose,
-  existingReferences
-}) {
-  const [sourceType, setSourceType] = React.useState(initial?.sourceType || "DPHE");
-  const [organizationName, setOrganizationName] = React.useState(initial?.organizationName || "");
-  const [officialRefNo, setOfficialRefNo] = React.useState(initial?.officialRefNo || "");
-  const [letterDate, setLetterDate] = React.useState(initial?.letterDate || todayStr());
-  const [contactPerson, setContactPerson] = React.useState(initial?.contactPerson || "");
-  const [contactPhone, setContactPhone] = React.useState(initial?.contactPhone || "");
-  const [notes, setNotes] = React.useState(initial?.notes || "");
-  const [err, setErr] = React.useState("");
-  function submit() {
-    if (sourceType !== "Walkin" && !organizationName.trim()) {
-      setErr("Organization name is required for DPHE / Private references.");
-      return;
-    }
-    onSave({
-      sourceType,
-      organizationName: organizationName.trim(),
-      officialRefNo: officialRefNo.trim(),
-      letterDate,
-      contactPerson: contactPerson.trim(),
-      contactPhone: contactPhone.trim(),
-      notes: notes.trim()
-    });
-  }
-  return /*#__PURE__*/React.createElement(Modal, {
-    title: initial ? `Edit Reference — ${initial.refCode}` : "New Reference",
-    onClose: onClose
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "flex flex-col gap-3"
-  }, /*#__PURE__*/React.createElement(SelectField, {
-    simple: true,
-    label: "Source Type",
-    value: sourceType,
-    onChange: setSourceType,
-    options: REFERENCE_SOURCE_TYPES
-  }), sourceType !== "Walkin" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Organization Name",
-    value: organizationName,
-    onChange: setOrganizationName,
-    placeholder: "e.g. DPHE Zone-3, or ABC Textiles Ltd."
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-2 gap-3"
-  }, /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Official Letter Ref No.",
-    value: officialRefNo,
-    onChange: setOfficialRefNo,
-    placeholder: "e.g. DPHE/WQ/2026/114"
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Letter Date",
-    type: "date",
-    value: letterDate,
-    onChange: setLetterDate
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-2 gap-3"
-  }, /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Contact Person",
-    value: contactPerson,
-    onChange: setContactPerson
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Contact Phone",
-    value: contactPhone,
-    onChange: setContactPhone
-  }))), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Notes",
-    value: notes,
-    onChange: setNotes,
-    textarea: true
-  }), err && /*#__PURE__*/React.createElement("div", {
-    className: "text-xs font-medium",
-    style: {
-      color: C.warn
-    }
-  }, err), /*#__PURE__*/React.createElement("div", {
-    className: "flex justify-end gap-2 mt-1"
-  }, /*#__PURE__*/React.createElement(Button, {
-    variant: "outline",
-    onClick: onClose
-  }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
-    onClick: submit
-  }, initial ? "Save Changes" : "Create Reference"))));
-}
-function ReferencesPanel({
-  references,
-  setReferences,
-  samples,
-  session,
-  notify
-}) {
-  const [showForm, setShowForm] = React.useState(false);
-  const [editing, setEditing] = React.useState(null);
-  const [q, setQ] = React.useState("");
-  function handleCreate(fields) {
-    const ref = createReference(fields, references, session);
-    setReferences(prev => [ref, ...prev]);
-    setShowForm(false);
-    notify?.(`${ref.refCode} created.`, "ok");
-  }
-  function handleUpdate(fields) {
-    setReferences(prev => prev.map(r => r.id === editing.id ? {
-      ...r,
-      ...fields
-    } : r));
-    setEditing(null);
-    notify?.(`${editing.refCode} updated.`, "ok");
-  }
-  const filtered = references.filter(r => !q || `${r.refCode} ${r.organizationName} ${r.officialRefNo}`.toLowerCase().includes(q.toLowerCase()));
-  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-between mb-3 flex-wrap gap-2"
-  }, /*#__PURE__*/React.createElement("input", {
-    value: q,
-    onChange: e => setQ(e.target.value),
-    placeholder: "Search reference code, organization, letter no…",
-    className: "px-3 py-1.5 rounded text-sm",
-    style: {
-      border: `1px solid ${C.border}`,
-      background: C.card,
-      color: C.ink,
-      minWidth: 260
-    }
-  }), /*#__PURE__*/React.createElement(Button, {
-    onClick: () => setShowForm(true)
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "plus",
-    size: 13
-  }), "New Reference")), /*#__PURE__*/React.createElement("div", {
-    className: "rounded-lg overflow-hidden",
-    style: {
-      border: `1px solid ${C.border}`
-    }
-  }, /*#__PURE__*/React.createElement("table", {
-    className: "w-full text-sm"
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
-    style: {
-      background: C.bg
-    }
-  }, ["Reference", "Type", "Organization", "Letter Ref No.", "Samples", ""].map(h => /*#__PURE__*/React.createElement("th", {
-    key: h,
-    className: "text-left px-3 py-2 text-xs font-semibold",
-    style: {
-      color: C.muted
-    }
-  }, h)))), /*#__PURE__*/React.createElement("tbody", null, filtered.map(r => {
-    const count = samplesByReference(samples, r.id).length;
-    return /*#__PURE__*/React.createElement("tr", {
-      key: r.id,
-      style: {
-        borderTop: `1px solid ${C.border}`
-      }
-    }, /*#__PURE__*/React.createElement("td", {
-      className: "px-3 py-2 font-medium",
-      style: {
-        color: C.ink
-      }
-    }, r.refCode), /*#__PURE__*/React.createElement("td", {
-      className: "px-3 py-2"
-    }, /*#__PURE__*/React.createElement(Badge, {
-      tone: "info"
-    }, REFERENCE_SOURCE_TYPES.find(t => t.value === r.sourceType)?.label || r.sourceType)), /*#__PURE__*/React.createElement("td", {
-      className: "px-3 py-2",
-      style: {
-        color: C.ink
-      }
-    }, r.organizationName || "—"), /*#__PURE__*/React.createElement("td", {
-      className: "px-3 py-2",
-      style: {
-        color: C.muted
-      }
-    }, r.officialRefNo || "—"), /*#__PURE__*/React.createElement("td", {
-      className: "px-3 py-2",
-      style: {
-        color: C.ink
-      }
-    }, count), /*#__PURE__*/React.createElement("td", {
-      className: "px-3 py-2 text-right"
-    }, /*#__PURE__*/React.createElement(IconButton, {
-      name: "edit",
-      color: C.teal,
-      title: "Edit reference",
-      onClick: () => setEditing(r)
-    })));
-  }), !filtered.length && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
-    colSpan: 6,
-    className: "px-3 py-8 text-center text-sm",
-    style: {
-      color: C.muted
-    }
-  }, "No references yet. Create one to link incoming samples to their source."))))), showForm && /*#__PURE__*/React.createElement(ReferenceForm, {
-    existingReferences: references,
-    onSave: handleCreate,
-    onClose: () => setShowForm(false)
-  }), editing && /*#__PURE__*/React.createElement(ReferenceForm, {
-    initial: editing,
-    existingReferences: references,
-    onSave: handleUpdate,
-    onClose: () => setEditing(null)
-  }));
+  }, "No sub-batches created yet.") : /*#__PURE__*/React.createElement("div", {
+    className: "grid gap-1.5"
+  }, subBatches.map(sb => renderSubBatchRow(sb))));
+
+  return /*#__PURE__*/React.createElement("div", {
+    className: "grid gap-4"
+  }, createCard, listCard);
 }

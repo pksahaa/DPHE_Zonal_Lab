@@ -1,94 +1,49 @@
+// ===== 16-sub-batch.js =====
 // ============================================================================
-// BATCH — a persistent grouping of pending samples that will be tested
-// together, matching how the lab actually works: grab a pile of samples
-// (possibly from different References — DPHE, private, walk-in, doesn't
-// matter) and "bracket" them into one working session, where different
-// samples in that same batch can need DIFFERENT test parameters (some need
-// Chlorine, some need Arsenic, whatever each one was actually requested).
+// SUB-BATCH — a persistent grouping of pending samples (typically 15-20) that
+// will be tested together for one method, sharing one QC check. A Sub-Batch
+// is created from the Samples tab ("Sub-Batches" sub-view) but the actual
+// testing — results, QC, and inventory deduction — happens in Add Test
+// Record, which can consume a Sub-Batch instead of a single Sample.
 //
-// Internally, a Batch's `members` array is a flat list of (sampleId,
-// testTypeId) pairs — NOT one testTypeId for the whole batch. Chemical
-// consumption, formulas, and QC rules are still fundamentally per-Test-Type
-// (that's the Test Method Engine's job and doesn't change), so "running" a
-// batch means running each distinct testTypeId present in it separately —
-// each such run produces its own Test Record (tagged with `sourceBatchId`
-// so it always traces back to the batch it came from), and the batch as a
-// whole is "completed" once every one of its distinct test types has been
-// run. A batch can sit at "partially done" for a while, same as real life.
-//
-// BACKWARD COMPATIBILITY: batches created before this phase have the old
-// shape { testTypeId, memberSampleIds, status }. normalizeBatches() below
-// migrates those into the new { members: [...] } shape on load — nothing
-// stored anywhere needs to change by hand.
+// A Sub-Batch's members can come from different registration batches
+// (different `batchRef`s) — that's fine, since reporting is done by
+// filtering Samples on their own `batchRef`, independent of which Sub-Batch
+// tested them. See getSampleResultForTest() below and the Report Generator's
+// "Filter by Batch Ref" control in 17-report-generator.js.
 // ============================================================================
 
+// Superseded by pendingTestTypeIdsForSample() below — a sample's single
+// overall `status` can't represent "which of its several requested
+// parameters still need testing", so eligibility is now computed per
+// (sample, testTypeId) pair instead. Kept here only in case older code
+// elsewhere still imports it; do not use for new eligibility checks.
 const SUBBATCH_ELIGIBLE_STATUSES = ["registered", "received", "assigned", "in_progress"];
-
 function generateSubBatchLabel(existingSubBatches) {
   const year = todayStr().slice(0, 4);
   const nums = (existingSubBatches || []).filter(sb => (sb.label || "").startsWith(`SB-${year}-`)).map(sb => Number(sb.label.split("-")[2]) || 0);
   const next = (nums.length ? Math.max(...nums) : 0) + 1;
   return `SB-${year}-${String(next).padStart(4, "0")}`;
 }
-
-// Old shape -> new shape. Idempotent: already-new batches pass through
-// unchanged (they just won't have the old testTypeId/memberSampleIds fields).
-function normalizeBatches(subBatches) {
-  return (subBatches || []).map(sb => {
-    if (Array.isArray(sb.members)) return sb; // already new shape
-    const members = (sb.memberSampleIds || []).map(sampleId => ({
-      sampleId, testTypeId: sb.testTypeId, testTypeName: sb.testTypeName
-    }));
-    return { ...sb, members };
-  });
-}
-
-function createBatch(fields, existingSubBatches) {
+function createSubBatch(fields, existingSubBatches) {
   return {
     id: uid("sb"),
     label: fields.label || generateSubBatchLabel(existingSubBatches),
-    members: fields.members || [],
-    // [{ sampleId, testTypeId, testTypeName }] — can span multiple test types
+    testTypeId: fields.testTypeId,
+    testTypeName: fields.testTypeName,
+    memberSampleIds: fields.memberSampleIds || [],
     assignedTester: fields.assignedTester || "",
-    createdAt: new Date().toISOString(),
+    status: "pending",
+    // pending -> tested (Add Test Record flips this on save)
+    testRecordId: null,
+    createdAt: new Date().toISOString()
   };
-}
-// Kept as an alias so any lingering call to the old name still works.
-const createSubBatch = createBatch;
-
-function distinctTestTypesInBatch(batch) {
-  const seen = new Map();
-  (batch.members || []).forEach(m => { if (!seen.has(m.testTypeId)) seen.set(m.testTypeId, m.testTypeName); });
-  return [...seen.entries()].map(([testTypeId, testTypeName]) => ({ testTypeId, testTypeName }));
-}
-
-function batchMembersForTestType(batch, testTypeId) {
-  return (batch.members || []).filter(m => m.testTypeId === testTypeId).map(m => m.sampleId);
-}
-
-// A batch's per-test-type "group" is done once a Test Record exists that was
-// generated FROM this batch for that test type. Traced via sourceBatchId —
-// unambiguous even if two batches happen to share member samples.
-function batchGroupStatus(batch, testTypeId, testRecords) {
-  const done = (testRecords || []).some(r => r.sourceBatchId === batch.id && r.testTypeId === testTypeId);
-  return done ? "completed" : "pending";
-}
-
-// Whole-batch status, derived from its groups — "pending" (nothing run yet),
-// "partial" (some test types done, some not), or "completed" (all done).
-function batchOverallStatus(batch, testRecords) {
-  const groups = distinctTestTypesInBatch(batch);
-  if (!groups.length) return "pending";
-  const doneCount = groups.filter(g => batchGroupStatus(batch, g.testTypeId, testRecords) === "completed").length;
-  if (doneCount === 0) return "pending";
-  if (doneCount === groups.length) return "completed";
-  return "partial";
 }
 
 // Shared lookup used by the QC Module banner, Sample review, and the Report
 // Generator: find a sample's result for a given test, whether it came from a
 // single Add Test Record entry (sampleId set directly) or from inside a
-// Batch group's memberResults (memberSampleIds + memberResults).
+// Sub-Batch's memberResults (memberSampleIds + memberResults).
 function getSampleResultForTest(sample, testTypeId, testRecords) {
   const direct = (testRecords || []).find(r => r.testTypeId === testTypeId && r.sampleId === sample.id);
   if (direct) return {
@@ -110,23 +65,201 @@ function getSampleResultForTest(sample, testTypeId, testRecords) {
   return null;
 }
 
-// ---- THE canonical "is this sample already spoken for, for this test?"
-// check. Use this everywhere a sample-eligibility pool for a Test Type is
-// built (Batch creation, Bulk Result Upload, Add Test Record's single-
-// sample picker) so a sample can never end up double-booked for the same
-// test via two different entry points. A sample is "committed" if:
-//   1. it already has a result (single Add Test Record OR a completed
-//      Batch group), OR
-//   2. it's a member of a Batch's still-PENDING group for that test type
-//      (reserved, not yet run).
-// `excludeBatchId` lets a Batch being edited ignore its own current
-// membership (otherwise its own members would wrongly look unavailable).
-function sampleAlreadyCommittedForTest(sample, testTypeId, testRecords, subBatches, excludeBatchId) {
-  if (getSampleResultForTest(sample, testTypeId, testRecords)) return true;
-  return (subBatches || []).some(sb => {
-    if (sb.id === excludeBatchId) return false;
-    const inGroup = (sb.members || []).some(m => m.sampleId === sample.id && m.testTypeId === testTypeId);
-    if (!inGroup) return false;
-    return batchGroupStatus(sb, testTypeId, testRecords) === "pending";
+// ============================================================================
+// PER-PARAMETER ELIGIBILITY — a sample with several requestedTests does NOT
+// move through those tests in lockstep. "Batch shows up for every parameter
+// it still needs, until Add Test Record is saved for that specific
+// parameter" — so eligibility must be computed per (sample, testTypeId)
+// pair, never off the sample's single `status` field. `status` still gates
+// whether the sample can be tested AT ALL right now (on_hold/rejected/
+// cancelled), it just can't tell you WHICH parameters remain.
+// ============================================================================
+
+// Custody-level gate: blocked from any testing regardless of parameter.
+function sampleBlockedFromTesting(sample) {
+  return ["on_hold", "rejected", "cancelled"].includes(sample.status);
+}
+
+// Has this one requested parameter already produced a result for this
+// sample — single Add Test Record entry OR inside a Sub-Batch's
+// memberResults? (Done = no longer eligible for anything, anywhere.)
+function isTestDoneForSample(sample, testTypeId, testRecords) {
+  return !!getSampleResultForTest(sample, testTypeId, testRecords);
+}
+
+// Is this parameter already committed to a pending (not-yet-tested)
+// Sub-Batch for THIS sample? (Queued = don't offer it again for a second
+// sub-batch or a standalone record — but only for this parameter, other
+// parameters on the same sample are untouched.)
+function isTestQueuedForSample(sample, testTypeId, subBatches) {
+  return (subBatches || []).some(sb => sb.status === "pending" && sb.testTypeId === testTypeId && sb.memberSampleIds.includes(sample.id));
+}
+
+// The parameters this sample still genuinely needs run: requested, not yet
+// resulted, not already queued (unless includeQueued is asked for, e.g. to
+// show "committed" state in a status chip). This — not sample.status — is
+// what should drive every "pending work" list in the app.
+function pendingTestTypeIdsForSample(sample, testRecords, subBatches, {
+  includeQueued = false
+} = {}) {
+  if (sampleBlockedFromTesting(sample)) return [];
+  return (sample.requestedTests || []).map(rt => rt.testTypeId).filter(tid => !isTestDoneForSample(sample, tid, testRecords)).filter(tid => includeQueued || !isTestQueuedForSample(sample, tid, subBatches));
+}
+
+// Per-parameter status for display: "done" | "queued" | "pending" | "blocked".
+// Drives the Requested Tests chips on Sample Detail so the per-parameter
+// state is visible, not just correct in the background.
+function testStatusForSample(sample, testTypeId, testRecords, subBatches) {
+  if (isTestDoneForSample(sample, testTypeId, testRecords)) return "done";
+  if (sampleBlockedFromTesting(sample)) return "blocked";
+  if (isTestQueuedForSample(sample, testTypeId, subBatches)) return "queued";
+  return "pending";
+}
+
+// ---- richer per-parameter STAGE (Phase 2) -------------------------------
+// testStatusForSample() above answers "is this parameter's result in yet?"
+// (done/queued/pending/blocked). This answers the fuller question: "where
+// is this parameter in the whole pipeline right now?" — pending / assigned
+// / in_progress / results_entered / under_review / approved / released.
+//
+// IMPORTANT — what's genuinely per-parameter vs. still whole-sample:
+//   - Whether a result exists (done vs. not) IS tracked per (sample,
+//     testType) pair — that part is fully accurate per parameter.
+//   - Review / Approve / Release are still single decisions made on the
+//     whole Sample today (one set of buttons in Sample Detail, matching
+//     how reviewers actually work through a sample) — rebuilding those to
+//     fire per-parameter would mean reworking the Review/Approve UI itself,
+//     which is a separate, bigger change from "can I see per-parameter
+//     status" (this function's job). So once a sample is formally moved to
+//     under_review/approved/released, every one of its RESULTED parameters
+//     is shown at that same stage — an un-resulted parameter never jumps
+//     ahead of "results_entered" even if the sample itself has been pushed
+//     further, since a result can't be reviewed/approved before it exists.
+const TEST_STAGE_ORDER = ["pending", "in_progress", "results_entered", "under_review", "approved", "released"];
+function testStageForSample(sample, testTypeId, testRecords, subBatches) {
+  if (sampleBlockedFromTesting(sample)) return "blocked";
+  const target = (sample.requestedTests || []).find(rt => rt.testTypeId === testTypeId);
+  // Phase 3: requestedTests[].status is the real, stored source of truth —
+  // just read it. Fall back to the old derived logic only for data that
+  // predates Phase 3 (a requestedTest with no `status` field yet).
+  if (target && target.status) return target.status;
+  const basic = testStatusForSample(sample, testTypeId, testRecords, subBatches);
+  if (basic === "pending") return "pending";
+  if (basic === "queued") return "in_progress";
+  return ["results_entered", "under_review", "approved", "released"].includes(sample.status) ? sample.status : "results_entered";
+}
+function testStageLabel(stage) {
+  return {
+    pending: "Pending",
+    queued: "In Progress",
+    in_progress: "In Progress",
+    results_entered: "Result Entered",
+    under_review: "Under Review",
+    approved: "Approved",
+    released: "Released",
+    blocked: "On Hold"
+  }[stage] || stage;
+}
+function testStageChipStyle(stage) {
+  return {
+    released: {
+      bg: `${C.ok}1A`,
+      fg: C.ok
+    },
+    approved: {
+      bg: `${C.ok}1A`,
+      fg: C.ok
+    },
+    under_review: {
+      bg: `${C.info}1A`,
+      fg: C.info
+    },
+    results_entered: {
+      bg: `${C.info}1A`,
+      fg: C.info
+    },
+    in_progress: {
+      bg: `${C.teal}1A`,
+      fg: C.tealDark
+    },
+    pending: {
+      bg: `${C.teal}1A`,
+      fg: C.tealDark
+    },
+    blocked: {
+      bg: `${C.muted}1A`,
+      fg: C.muted
+    }
+  }[stage] || {
+    bg: `${C.muted}1A`,
+    fg: C.muted
+  };
+}
+
+// ---- migration: samples registered before Phase 3 have requestedTests
+// with no `status` field. Backfill it once from the same derivation logic
+// testStageForSample() used to fall back on, so every sample ends up with
+// real, stored per-parameter status going forward. Idempotent — a
+// requestedTest that already has a status is left untouched. ----
+function backfillRequestedTestStatuses(samples, testRecords, subBatches) {
+  return (samples || []).map(sample => {
+    if ((sample.requestedTests || []).every(rt => rt.status)) return sample;
+    return {
+      ...sample,
+      requestedTests: (sample.requestedTests || []).map(rt => {
+        if (rt.status) return rt;
+        const basic = testStatusForSample(sample, rt.testTypeId, testRecords, subBatches);
+        let status;
+        if (basic === "pending") status = "pending";else if (basic === "queued") status = "in_progress";else if (basic === "blocked") status = "pending"; // blocked is a custody overlay, not a real stage
+        else status = ["results_entered", "under_review", "approved", "released"].includes(sample.status) ? sample.status : "results_entered";
+        return {
+          ...rt,
+          status
+        };
+      })
+    };
   });
+}
+
+// ============================================================================
+// SHARED SUB-BATCH REVIEW ACTIONS — used by both the Sub-Batch Builder's
+// review queue and the Test Records list (so a reviewer can act right where
+// they're looking at the actual readings, not have to go find the Sub-Batch
+// screen). Bulk-moves the ONE parameter this Sub-Batch represents
+// (results_entered -> under_review, or back to in_progress) for every
+// member sample, via setRequestedTestStatus — final Approval/Release stay
+// on the signature-gated flow, unaffected (see 20-sample-model.js).
+// ============================================================================
+function reviewSubBatchApprove(sb, samples, setSamples, setSubBatches, session, notify) {
+  if (!setSamples || !sb) return;
+  (sb.memberSampleIds || []).forEach(id => {
+    const member = (samples || []).find(s => s.id === id);
+    if (!member) return;
+    const rt = (member.requestedTests || []).find(r => r.testTypeId === sb.testTypeId);
+    if (!rt || rt.status !== "results_entered") return;
+    const updated = setRequestedTestStatus(member, sb.testTypeId, "under_review", session);
+    setSamples(prev => prev.map(s => s.id === id ? updated : s), updated);
+  });
+  setSubBatches(prev => prev.map(x => x.id === sb.id ? {
+    ...x,
+    status: "reviewed"
+  } : x));
+  notify?.(`${sb.label} marked reviewed — ${(sb.memberSampleIds || []).length} sample(s) ready for final approval on ${sb.testTypeName}.`, "ok");
+}
+function reviewSubBatchReturn(sb, samples, setSamples, setSubBatches, session, notify, note) {
+  if (!setSamples || !sb) return;
+  const finalNote = (note || "").trim() || `Returned to analyst for ${sb.testTypeName}.`;
+  (sb.memberSampleIds || []).forEach(id => {
+    const member = (samples || []).find(s => s.id === id);
+    if (!member) return;
+    const rt = (member.requestedTests || []).find(r => r.testTypeId === sb.testTypeId);
+    if (!rt || !["results_entered", "under_review"].includes(rt.status)) return;
+    const updated = setRequestedTestStatus(member, sb.testTypeId, "in_progress", session, finalNote);
+    setSamples(prev => prev.map(s => s.id === id ? updated : s), updated);
+  });
+  setSubBatches(prev => prev.map(x => x.id === sb.id ? {
+    ...x,
+    status: "pending"
+  } : x));
+  notify?.(`${sb.label} returned to analyst.`, "warn");
 }
