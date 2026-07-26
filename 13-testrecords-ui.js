@@ -1815,6 +1815,7 @@ function TestRecordsTab({
   const [bulkUploadRecord, setBulkUploadRecord] = useState(null);
   const [returningRecordId, setReturningRecordId] = useState(null);
   const [returnNoteText, setReturnNoteText] = useState("");
+  const [approvingRecordId, setApprovingRecordId] = useState(null);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [expanded, setExpanded] = useState({});
@@ -2080,61 +2081,51 @@ function TestRecordsTab({
       }
     }, r.feeApplicable === false ? "Free test" : r.revenue != null ? `${r.billedSamples ?? r.numberOfSamples} × ৳${fmtNum(r.unitCost || 0)}` : "—")), (r.memberResults || []).length > 0 && (() => {
       const sb = r.subBatchId ? (subBatches || []).find(x => x.id === r.subBatchId) : null;
-      return /*#__PURE__*/React.createElement("div", {
-        className: "col-span-2 md:col-span-3"
-      }, /*#__PURE__*/React.createElement("div", {
-        style: {
-          color: C.muted
-        },
+
+      const headerLine = /*#__PURE__*/React.createElement("div", {
+        style: { color: C.muted },
         className: "mb-1"
-      }, "Samples in this Sub-Batch (", r.memberResults.length, ")"), /*#__PURE__*/React.createElement("div", {
+      }, `Samples in this Sub-Batch (${r.memberResults.length})`);
+
+      const memberListDiv = /*#__PURE__*/React.createElement("div", {
         className: "grid gap-1"
       }, r.memberResults.map(m => {
         const sample = (samples || []).find(s => s.id === m.sampleId);
         const ref = sample?.referenceId ? findReferenceById(references, sample.referenceId) : null;
         const stage = sample ? testStageForSample(sample, r.testTypeId, testRecords, subBatches) : null;
         const stageStyle = stage ? testStageChipStyle(stage) : null;
+        const hasAnyValue = (m.results || []).some(res => res.value != null);
         return /*#__PURE__*/React.createElement("div", {
           key: m.sampleId,
           className: "flex flex-wrap items-center gap-1.5 px-2 py-1 rounded",
-          style: {
-            background: C.bg
-          }
+          style: { background: C.bg }
         }, goToSample ? /*#__PURE__*/React.createElement("button", {
           type: "button",
           className: "font-semibold underline",
-          style: {
-            color: C.ink
-          },
+          style: { color: C.ink },
           onClick: () => goToSample(m.sampleId)
         }, m.sampleCode) : /*#__PURE__*/React.createElement("span", {
           className: "font-semibold",
-          style: {
-            color: C.ink
-          }
-        }, m.sampleCode), sample && /*#__PURE__*/React.createElement("span", {
-          style: {
-            color: C.muted
-          }
-        }, sample.clientName, " · ", sample.siteLocation, ref ? ` · ${referenceDisplayLabel(ref)}` : ""), stage && /*#__PURE__*/React.createElement("span", {
+          style: { color: C.ink }
+        }, m.sampleCode),
+        sample && /*#__PURE__*/React.createElement("span", {
+          style: { color: C.muted }
+        }, `${sample.clientName} · ${sample.siteLocation}${ref ? ` · ${referenceDisplayLabel(ref)}` : ""}`),
+        stage && /*#__PURE__*/React.createElement("span", {
           className: "px-1.5 py-0.5 rounded",
-          style: {
-            background: stageStyle.bg,
-            color: stageStyle.fg
-          }
-        }, testStageLabel(stage)), (m.results || []).filter(res => res.value != null).map(res => /*#__PURE__*/React.createElement("span", {
+          style: { background: stageStyle.bg, color: stageStyle.fg }
+        }, testStageLabel(stage)),
+        ...(m.results || []).filter(res => res.value != null).map(res => /*#__PURE__*/React.createElement("span", {
           key: res.paramId,
           className: "px-1.5 py-0.5 rounded",
-          style: {
-            background: C.okBg,
-            color: C.ok
-          }
-        }, res.name, ": ", fmtNum(res.value), " ", res.unit)), (m.results || []).every(res => res.value == null) && /*#__PURE__*/React.createElement("span", {
-          style: {
-            color: C.warn
-          }
+          style: { background: C.okBg, color: C.ok }
+        }, `${res.name}: ${fmtNum(res.value)} ${res.unit}`)),
+        !hasAnyValue && /*#__PURE__*/React.createElement("span", {
+          style: { color: C.warn }
         }, "no result yet"));
-      })), sb && sb.status === "tested" && setSamples && /*#__PURE__*/React.createElement("div", {
+      }));
+
+      const reviewActionsBlock = (sb && sb.status === "tested" && setSamples) ? /*#__PURE__*/React.createElement("div", {
         className: "flex items-center gap-2 mt-2"
       }, /*#__PURE__*/React.createElement(Button, {
         size: "sm",
@@ -2147,16 +2138,11 @@ function TestRecordsTab({
           setReturningRecordId(r.id);
           setReturnNoteText("");
         }
-      }, "Return to Analyst")), sb && sb.status === "reviewed" && /*#__PURE__*/React.createElement("div", {
-        className: "text-xs mt-1",
-        style: {
-          color: C.ok
-        }
-      }, "Reviewed — awaiting final signed approval on each sample (Sample Detail)."), returningRecordId === r.id && /*#__PURE__*/React.createElement("div", {
+      }, "Return to Analyst")) : null;
+
+      const returnPanel = returningRecordId === r.id ? /*#__PURE__*/React.createElement("div", {
         className: "mt-2 p-2 rounded",
-        style: {
-          background: C.warnBg
-        }
+        style: { background: C.warnBg }
       }, /*#__PURE__*/React.createElement(TextField, {
         simple: true,
         label: "Note for the analyst (optional)",
@@ -2174,7 +2160,27 @@ function TestRecordsTab({
           reviewSubBatchReturn(sb, samples, setSamples, setSubBatches, session, notify, returnNoteText);
           setReturningRecordId(null);
         }
-      }, "Confirm Return"))));
+      }, "Confirm Return"))) : null;
+
+      const finalApproveButton = (sb && sb.status === "reviewed" && approvingRecordId !== r.id) ? /*#__PURE__*/React.createElement("div", {
+        className: "mt-2"
+      }, /*#__PURE__*/React.createElement(Button, {
+        size: "sm",
+        onClick: () => setApprovingRecordId(r.id)
+      }, "Final Approve")) : null;
+
+      const finalApprovePanel = (sb && sb.status === "reviewed" && approvingRecordId === r.id) ? /*#__PURE__*/React.createElement(SignatureCapture, {
+        user: session,
+        label: `Final Approval — ${sb.testTypeName} for ${(sb.memberSampleIds || []).length} sample(s) in ${sb.label}`,
+        onConfirm: payload => {
+          bulkApproveSubBatch(sb, samples, setSamples, setSubBatches, session, notify, payload);
+          setApprovingRecordId(null);
+        }
+      }) : null;
+
+      return /*#__PURE__*/React.createElement("div", {
+        className: "col-span-2 md:col-span-3"
+      }, headerLine, memberListDiv, reviewActionsBlock, returnPanel, finalApproveButton, finalApprovePanel);
     })(), r.sampleId && !r.memberSampleIds && (() => {
       // Individual (non-Sub-Batch) record — same review controls, applied
       // directly to this one (sample, testType) pair since there's no
@@ -2184,36 +2190,28 @@ function TestRecordsTab({
       const rt = (sample.requestedTests || []).find(x => x.testTypeId === r.testTypeId);
       if (!rt) return null;
       const ref = sample.referenceId ? findReferenceById(references, sample.referenceId) : null;
-      return /*#__PURE__*/React.createElement("div", {
-        className: "col-span-2 md:col-span-3"
-      }, /*#__PURE__*/React.createElement("div", {
+
+      const headerLine = /*#__PURE__*/React.createElement("div", {
         className: "flex flex-wrap items-center gap-1.5 px-2 py-1 rounded mb-2",
-        style: {
-          background: C.bg
-        }
+        style: { background: C.bg }
       }, goToSample ? /*#__PURE__*/React.createElement("button", {
         type: "button",
         className: "font-semibold underline",
-        style: {
-          color: C.ink
-        },
+        style: { color: C.ink },
         onClick: () => goToSample(sample.id)
       }, sample.sampleCode) : /*#__PURE__*/React.createElement("span", {
         className: "font-semibold",
-        style: {
-          color: C.ink
-        }
-      }, sample.sampleCode), /*#__PURE__*/React.createElement("span", {
-        style: {
-          color: C.muted
-        }
-      }, sample.clientName, " · ", sample.siteLocation, ref ? ` · ${referenceDisplayLabel(ref)}` : ""), /*#__PURE__*/React.createElement("span", {
+        style: { color: C.ink }
+      }, sample.sampleCode),
+      /*#__PURE__*/React.createElement("span", {
+        style: { color: C.muted }
+      }, `${sample.clientName} · ${sample.siteLocation}${ref ? ` · ${referenceDisplayLabel(ref)}` : ""}`),
+      /*#__PURE__*/React.createElement("span", {
         className: "px-1.5 py-0.5 rounded",
-        style: {
-          background: testStageChipStyle(rt.status).bg,
-          color: testStageChipStyle(rt.status).fg
-        }
-      }, testStageLabel(rt.status))), rt.status === "results_entered" && /*#__PURE__*/React.createElement("div", {
+        style: { background: testStageChipStyle(rt.status).bg, color: testStageChipStyle(rt.status).fg }
+      }, testStageLabel(rt.status)));
+
+      const reviewActionsBlock = rt.status !== "results_entered" ? null : /*#__PURE__*/React.createElement("div", {
         className: "flex items-center gap-2"
       }, /*#__PURE__*/React.createElement(Button, {
         size: "sm",
@@ -2230,11 +2228,11 @@ function TestRecordsTab({
           setReturningRecordId(r.id);
           setReturnNoteText("");
         }
-      }, "Return to Analyst")), returningRecordId === r.id && /*#__PURE__*/React.createElement("div", {
+      }, "Return to Analyst"));
+
+      const returnPanel = returningRecordId !== r.id ? null : /*#__PURE__*/React.createElement("div", {
         className: "mt-2 p-2 rounded",
-        style: {
-          background: C.warnBg
-        }
+        style: { background: C.warnBg }
       }, /*#__PURE__*/React.createElement(TextField, {
         simple: true,
         label: "Note for the analyst (optional)",
@@ -2254,7 +2252,33 @@ function TestRecordsTab({
           notify?.(`${sample.sampleCode} returned to analyst.`, "warn");
           setReturningRecordId(null);
         }
-      }, "Confirm Return"))));
+      }, "Confirm Return")));
+
+      // Final Approve — same signature-gated decision as Sub-Batch mode,
+      // just applied to this single (sample, testType) pair.
+      const finalApproveButton = (rt.status === "under_review" && approvingRecordId !== r.id) ? /*#__PURE__*/React.createElement("div", {
+        className: "mt-2"
+      }, /*#__PURE__*/React.createElement(Button, {
+        size: "sm",
+        onClick: () => setApprovingRecordId(r.id)
+      }, "Final Approve")) : null;
+
+      const finalApprovePanel = (rt.status === "under_review" && approvingRecordId === r.id) ? /*#__PURE__*/React.createElement(SignatureCapture, {
+        user: session,
+        label: `Final Approval — ${r.testTypeName} for ${sample.sampleCode}`,
+        onConfirm: payload => {
+          const result = bulkDecideParameter([sample], r.testTypeId, r.testTypeName, payload, session);
+          if (result.updated.length) {
+            setSamples(prev => prev.map(s => s.id === sample.id ? result.updated[0] : s), result.updated[0]);
+            notify?.(payload.decision === "approved" ? `${sample.sampleCode} approved for ${r.testTypeName}.` : `${sample.sampleCode} sent back to analyst for ${r.testTypeName}.`, payload.decision === "approved" ? "ok" : "warn");
+          }
+          setApprovingRecordId(null);
+        }
+      }) : null;
+
+      return /*#__PURE__*/React.createElement("div", {
+        className: "col-span-2 md:col-span-3"
+      }, headerLine, reviewActionsBlock, returnPanel, finalApproveButton, finalApprovePanel);
     })(), (r.results || []).filter(res => res.value !== null).length > 0 && /*#__PURE__*/React.createElement("div", {
       className: "col-span-2 md:col-span-3"
     }, /*#__PURE__*/React.createElement("div", {

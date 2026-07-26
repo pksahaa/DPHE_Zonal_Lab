@@ -669,6 +669,7 @@ function SampleDetail({
   const technicians = users.filter(u => u.role === "Technician" || u.role === "Administrator");
   const [assignee, setAssignee] = React.useState(sample.assignedTo || "");
   const [editing, setEditing] = React.useState(false);
+  const [approvingParamId, setApprovingParamId] = React.useState(null);
   const [editForm, setEditForm] = React.useState(null);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
   const canEdit = perms.canRegister && sample.status !== "released";
@@ -927,7 +928,7 @@ function SampleDetail({
     // showed a bare "Linked test records: N" count, never the results
     // themselves, even after they'd been entered (or bulk-uploaded).
     const resultInfo = getSampleResultForTest(sample, t.testTypeId, testRecords);
-    return /*#__PURE__*/React.createElement("div", {
+    const chipRow = /*#__PURE__*/React.createElement("div", {
       key: t.testTypeId,
       className: "flex flex-wrap items-center gap-1.5"
     }, /*#__PURE__*/React.createElement("span", {
@@ -942,7 +943,29 @@ function SampleDetail({
       style: {
         color: C.muted
       }
-    }, resultInfo.results.filter(r => r.value != null).map(r => `${r.name}: ${fmtNum(r.value)}${r.unit ? ` ${r.unit}` : ""}`).join(", ") || "no value yet", resultInfo.date ? ` (${resultInfo.date})` : ""));
+    }, resultInfo.results.filter(r => r.value != null).map(r => `${r.name}: ${fmtNum(r.value)}${r.unit ? ` ${r.unit}` : ""}`).join(", ") || "no value yet", resultInfo.date ? ` (${resultInfo.date})` : ""), paramStage === "under_review" && approvingParamId !== t.testTypeId && /*#__PURE__*/React.createElement(Button, {
+      size: "sm",
+      onClick: () => setApprovingParamId(t.testTypeId)
+    }, "Final Approve"));
+    const approvalPanel = paramStage !== "under_review" || approvingParamId !== t.testTypeId ? null : /*#__PURE__*/React.createElement(SignatureCapture, {
+      user: session,
+      label: `Final Approval — ${t.testTypeName} for ${sample.sampleCode}`,
+      onConfirm: payload => {
+        try {
+          const result = bulkDecideParameter([sample], t.testTypeId, t.testTypeName, payload, session);
+          if (result.updated.length) {
+            onUpdate(result.updated[0]);
+            notify?.(payload.decision === "approved" ? `${t.testTypeName} approved.` : `${t.testTypeName} sent back to analyst.`, payload.decision === "approved" ? "ok" : "warn");
+          }
+        } catch (e) {
+          notify?.(e.message, "warn");
+        }
+        setApprovingParamId(null);
+      }
+    });
+    return /*#__PURE__*/React.createElement(React.Fragment, {
+      key: t.testTypeId
+    }, chipRow, approvalPanel);
   })), !!sample.linkedTestRecordIds.length && /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] mt-1.5",
     style: {
@@ -1827,6 +1850,12 @@ function SamplesTab({
 // ---- Sub-Batches sub-view: group pending samples for one method into a
 // persistent, named batch that Add Test Record can later consume as a unit ----
 function SUB_BATCH_STATUS_BADGE(status) {
+  if (status === "approved") return /*#__PURE__*/React.createElement(Badge, {
+    tone: "ok"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "check",
+    size: 11
+  }), " Approved");
   if (status === "reviewed") return /*#__PURE__*/React.createElement(Badge, {
     tone: "ok"
   }, /*#__PURE__*/React.createElement(Icon, {
@@ -1869,6 +1898,54 @@ function SubBatchBuilder({
   const [deleteSubBatchId, setDeleteSubBatchId] = React.useState(null);
   const [returningSubBatchId, setReturningSubBatchId] = React.useState(null);
   const [returnNote, setReturnNote] = React.useState("");
+  const [approvingSubBatchId, setApprovingSubBatchId] = React.useState(null);
+  // ---- Batch (Reference) level bulk approve — the same signed decision as
+  // Sub-Batch approve, just scoped to "every parameter under_review for any
+  // sample under this Reference" instead of one Sub-Batch's single
+  // parameter. Grouped by testTypeId under the hood since the underlying
+  // bulkDecideParameter() call is per-parameter — one signature still
+  // covers everything found.
+  const [batchApproveReferenceId, setBatchApproveReferenceId] = React.useState("");
+  const [showBatchApproveSignature, setShowBatchApproveSignature] = React.useState(false);
+  const referenceApproveOptions = Array.from(new Set(samples.map(s => s.referenceId).filter(Boolean))).map(id => findReferenceById(references, id)).filter(Boolean).filter(ref => samples.some(s => s.referenceId === ref.id && (s.requestedTests || []).some(rt => rt.status === "under_review"))).sort((a, b) => (a.refNo || "").localeCompare(b.refNo || ""));
+  const selectedBatchApproveReference = batchApproveReferenceId ? findReferenceById(references, batchApproveReferenceId) : null;
+  const pendingApprovalPairs = selectedBatchApproveReference ? samples.filter(s => s.referenceId === selectedBatchApproveReference.id).flatMap(s => (s.requestedTests || []).filter(rt => rt.status === "under_review").map(rt => ({
+    sample: s,
+    testTypeId: rt.testTypeId,
+    testTypeName: rt.testTypeName
+  }))) : [];
+  function batchApproveByReference(payload) {
+    if (!selectedBatchApproveReference) return;
+    const byTestType = {};
+    pendingApprovalPairs.forEach(p => {
+      (byTestType[p.testTypeId] = byTestType[p.testTypeId] || {
+        testTypeName: p.testTypeName,
+        samples: []
+      }).samples.push(p.sample);
+    });
+    let totalUpdated = 0,
+      totalSkipped = 0,
+      hadError = false;
+    Object.entries(byTestType).forEach(([testTypeId, group]) => {
+      let result;
+      try {
+        result = bulkDecideParameter(group.samples, testTypeId, group.testTypeName, payload, session);
+      } catch (e) {
+        notify?.(e.message, "warn");
+        hadError = true;
+        return;
+      }
+      result.updated.forEach(updated => {
+        setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), updated);
+      });
+      totalUpdated += result.updated.length;
+      totalSkipped += result.skipped;
+    });
+    if (hadError) return;
+    notify?.(`${totalUpdated} parameter-sample pair(s) ${payload.decision === "approved" ? "approved" : "sent back to analyst"} across ${referenceDisplayLabel(selectedBatchApproveReference)}.`, payload.decision === "approved" ? "ok" : "warn");
+    setBatchApproveReferenceId("");
+    setShowBatchApproveSignature(false);
+  }
 
   // Samples eligible for the chosen Test Type — ignoring the sub-batch's own
   // current membership while it's being edited (otherwise its members would
@@ -2269,7 +2346,10 @@ function SubBatchBuilder({
         setReturningSubBatchId(sb.id);
         setReturnNote("");
       }
-    }, "Return to Analyst"), /*#__PURE__*/React.createElement(IconButton, {
+    }, "Return to Analyst"), sb.status === "reviewed" && /*#__PURE__*/React.createElement(Button, {
+      size: "sm",
+      onClick: () => setApprovingSubBatchId(sb.id)
+    }, "Final Approve"), /*#__PURE__*/React.createElement(IconButton, {
       name: "edit",
       color: C.teal,
       title: sb.status === "pending" ? "Edit sub-batch" : "Only pending sub-batches can be edited (this one is already tested)",
@@ -2307,7 +2387,14 @@ function SubBatchBuilder({
     }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
       size: "sm",
       onClick: () => confirmReturnSubBatch(sb)
-    }, "Confirm Return"))));
+    }, "Confirm Return"))), approvingSubBatchId === sb.id && /*#__PURE__*/React.createElement(SignatureCapture, {
+      user: session,
+      label: `Final Approval — ${sb.testTypeName} for ${sb.memberSampleIds.length} sample(s) in ${sb.label}`,
+      onConfirm: payload => {
+        bulkApproveSubBatch(sb, samples, setSamples, setSubBatches, session, notify, payload);
+        setApprovingSubBatchId(null);
+      }
+    }));
   }
 
   const listCard = /*#__PURE__*/React.createElement(SectionCard, {
@@ -2325,7 +2412,85 @@ function SubBatchBuilder({
     className: "grid gap-1.5"
   }, subBatches.map(sb => renderSubBatchRow(sb))));
 
+  const batchApproveReferencePicker = /*#__PURE__*/React.createElement("select", {
+    className: "border rounded px-2 py-1.5 text-sm w-full",
+    style: {
+      borderColor: C.border
+    },
+    value: batchApproveReferenceId,
+    onChange: e => {
+      setBatchApproveReferenceId(e.target.value);
+      setShowBatchApproveSignature(false);
+    }
+  }, [/*#__PURE__*/React.createElement("option", {
+    key: "none",
+    value: ""
+  }, "— Select a Reference —")].concat(referenceApproveOptions.map(ref => /*#__PURE__*/React.createElement("option", {
+    key: ref.id,
+    value: ref.id
+  }, `${referenceSourceMeta(ref.sourceType).label} — ${referenceDisplayLabel(ref)}`))));
+
+  const batchApprovePairsList = !selectedBatchApproveReference ? null : /*#__PURE__*/React.createElement("div", {
+    className: "grid gap-1 mt-2 max-h-56 overflow-y-auto"
+  }, pendingApprovalPairs.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "text-xs",
+    style: {
+      color: C.muted
+    }
+  }, "Nothing awaiting final approval under this Reference right now.") : pendingApprovalPairs.map(p => /*#__PURE__*/React.createElement("div", {
+    key: `${p.sample.id}-${p.testTypeId}`,
+    className: "flex items-center gap-1.5 px-2 py-1 rounded text-xs",
+    style: {
+      background: C.bg
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-semibold",
+    style: {
+      color: C.ink
+    }
+  }, p.sample.sampleCode), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: C.muted
+    }
+  }, p.sample.clientName), /*#__PURE__*/React.createElement("span", {
+    className: "ml-auto px-1.5 py-0.5 rounded",
+    style: {
+      background: `${C.info}1A`,
+      color: C.info
+    }
+  }, p.testTypeName))));
+
+  const batchApproveButton = !selectedBatchApproveReference || pendingApprovalPairs.length === 0 || showBatchApproveSignature ? null : /*#__PURE__*/React.createElement(Button, {
+    size: "sm",
+    className: "mt-2",
+    onClick: () => setShowBatchApproveSignature(true)
+  }, `Final Approve All (${pendingApprovalPairs.length})`);
+
+  const batchApproveSignaturePanel = !selectedBatchApproveReference || !showBatchApproveSignature ? null : /*#__PURE__*/React.createElement(SignatureCapture, {
+    user: session,
+    label: `Final Approval — ${pendingApprovalPairs.length} parameter-sample pair(s) under ${referenceDisplayLabel(selectedBatchApproveReference)}`,
+    onConfirm: batchApproveByReference
+  });
+
+  const batchApproveCard = /*#__PURE__*/React.createElement(SectionCard, {
+    title: "Batch Approve (by Reference)",
+    icon: /*#__PURE__*/React.createElement(Icon, {
+      name: "check",
+      size: 15
+    })
+  }, referenceApproveOptions.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "text-xs",
+    style: {
+      color: C.muted
+    }
+  }, "No Reference currently has parameters awaiting final approval.") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs mb-2",
+    style: {
+      color: C.muted
+    }
+  }, "One signature approves every parameter across every sample under the chosen Reference that's ready for final approval."), batchApproveReferencePicker, batchApprovePairsList, batchApproveButton, batchApproveSignaturePanel));
+
   return /*#__PURE__*/React.createElement("div", {
     className: "grid gap-4"
-  }, createCard, listCard);
+  }, createCard, batchApproveCard, listCard);
 }

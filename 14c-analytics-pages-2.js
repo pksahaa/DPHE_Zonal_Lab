@@ -1595,6 +1595,29 @@ function DailyTrendsPage({
 }
 
 // ==================================== FORECAST REPORTS ====================================
+// Monthly Progress Report — a genuinely new report type (distinct from
+// Monthly Trends analytics), requested as a Custom Report sub-page. Not
+// built yet — this is an honest placeholder rather than a half-working
+// stand-in, so it's clear what still needs to be scoped/built (likely: a
+// month-over-month summary of samples registered/tested/approved/released,
+// printable like the other Custom Report pages).
+function MonthlyProgressReportPage({
+  notify
+}) {
+  return /*#__PURE__*/React.createElement(SectionCard, {
+    title: "Monthly Progress Report",
+    icon: /*#__PURE__*/React.createElement(Icon, {
+      name: "chart",
+      size: 15
+    })
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-sm p-4 rounded",
+    style: {
+      background: C.infoBg,
+      color: C.info
+    }
+  }, "This report type isn't built yet — it needs its own design (likely a month-by-month summary of samples registered / tested / approved / released, printable like the other Custom Report pages). Let me know what fields and layout you want and I'll build it next."));
+}
 function ForecastPage({
   filteredRecords
 }) {
@@ -1782,7 +1805,7 @@ function ForecastPage({
 }
 // ---------------- Report page registry ----------------
 const REPORT_GROUPS = [{
-  group: "Overview",
+  group: "Report & Analytics",
   pages: [{
     k: "executive",
     label: "Executive Dashboard",
@@ -1791,10 +1814,7 @@ const REPORT_GROUPS = [{
     k: "insights",
     label: "Smart Insights",
     icon: "warning"
-  }]
-}, {
-  group: "Operations",
-  pages: [{
+  }, {
     k: "testAnalytics",
     label: "Test Analytics",
     icon: "clipboard"
@@ -1806,10 +1826,7 @@ const REPORT_GROUPS = [{
     k: "revenue",
     label: "Revenue Analytics",
     icon: "coins"
-  }]
-}, {
-  group: "Inventory",
-  pages: [{
+  }, {
     k: "chemicalAnalytics",
     label: "Chemical Analytics",
     icon: "flask"
@@ -1829,10 +1846,7 @@ const REPORT_GROUPS = [{
     k: "predictiveInventory",
     label: "Predictive Inventory",
     icon: "chart"
-  }]
-}, {
-  group: "Equipment",
-  pages: [{
+  }, {
     k: "equipmentAnalytics",
     label: "Equipment Analytics",
     icon: "wrench"
@@ -1840,10 +1854,7 @@ const REPORT_GROUPS = [{
     k: "maintenanceAnalytics",
     label: "Maintenance Analytics",
     icon: "wrench"
-  }]
-}, {
-  group: "Trends & Forecast",
-  pages: [{
+  }, {
     k: "monthlyTrends",
     label: "Monthly Trends",
     icon: "chart"
@@ -1857,11 +1868,19 @@ const REPORT_GROUPS = [{
     icon: "chart"
   }]
 }, {
-  group: "Official Report",
+  group: "Custom Report",
   pages: [{
     k: "customReport",
-    label: "Custom Report Generator",
+    label: "Multiple Sample Report",
     icon: "printer"
+  }, {
+    k: "customReportSingle",
+    label: "Single Sample Report",
+    icon: "printer"
+  }, {
+    k: "monthlyProgressReport",
+    label: "Monthly Progress Report",
+    icon: "chart"
   }]
 }];
 const ALL_REPORT_PAGES = REPORT_GROUPS.flatMap(g => g.pages);
@@ -2109,5 +2128,8 @@ function ReportsTab({
     setReportTab: setReportTab
   }), /*#__PURE__*/React.createElement("div", {
     className: "mt-4"
-  }, activePage === "executive" && /*#__PURE__*/React.createElement(ExecutiveDashboardPage, shared), activePage === "insights" && /*#__PURE__*/React.createElement(SmartInsightsPage, shared), activePage === "testAnalytics" && /*#__PURE__*/React.createElement(TestAnalyticsPage, shared), activePage === "technician" && /*#__PURE__*/React.createElement(TechnicianPerformancePage, shared), activePage === "revenue" && /*#__PURE__*/React.createElement(RevenueAnalyticsPage, shared), activePage === "chemicalAnalytics" && /*#__PURE__*/React.createElement(ChemicalAnalyticsPage, shared), activePage === "inventoryAnalytics" && /*#__PURE__*/React.createElement(InventoryAnalyticsPage, shared), activePage === "glasswareAnalytics" && /*#__PURE__*/React.createElement(GlasswareAnalyticsPage, shared), activePage === "gasAnalytics" && /*#__PURE__*/React.createElement(GasAnalyticsPage, shared), activePage === "predictiveInventory" && /*#__PURE__*/React.createElement(PredictiveInventoryPage, shared), activePage === "equipmentAnalytics" && /*#__PURE__*/React.createElement(EquipmentAnalyticsPage, shared), activePage === "maintenanceAnalytics" && /*#__PURE__*/React.createElement(MaintenanceAnalyticsPage, shared), activePage === "monthlyTrends" && /*#__PURE__*/React.createElement(MonthlyTrendsPage, shared), activePage === "dailyTrends" && /*#__PURE__*/React.createElement(DailyTrendsPage, shared), activePage === "forecast" && /*#__PURE__*/React.createElement(ForecastPage, shared), activePage === "customReport" && /*#__PURE__*/React.createElement(CustomReportGeneratorPage, shared)));
+  }, activePage === "executive" && /*#__PURE__*/React.createElement(ExecutiveDashboardPage, shared), activePage === "insights" && /*#__PURE__*/React.createElement(SmartInsightsPage, shared), activePage === "testAnalytics" && /*#__PURE__*/React.createElement(TestAnalyticsPage, shared), activePage === "technician" && /*#__PURE__*/React.createElement(TechnicianPerformancePage, shared), activePage === "revenue" && /*#__PURE__*/React.createElement(RevenueAnalyticsPage, shared), activePage === "chemicalAnalytics" && /*#__PURE__*/React.createElement(ChemicalAnalyticsPage, shared), activePage === "inventoryAnalytics" && /*#__PURE__*/React.createElement(InventoryAnalyticsPage, shared), activePage === "glasswareAnalytics" && /*#__PURE__*/React.createElement(GlasswareAnalyticsPage, shared), activePage === "gasAnalytics" && /*#__PURE__*/React.createElement(GasAnalyticsPage, shared), activePage === "predictiveInventory" && /*#__PURE__*/React.createElement(PredictiveInventoryPage, shared), activePage === "equipmentAnalytics" && /*#__PURE__*/React.createElement(EquipmentAnalyticsPage, shared), activePage === "maintenanceAnalytics" && /*#__PURE__*/React.createElement(MaintenanceAnalyticsPage, shared), activePage === "monthlyTrends" && /*#__PURE__*/React.createElement(MonthlyTrendsPage, shared), activePage === "dailyTrends" && /*#__PURE__*/React.createElement(DailyTrendsPage, shared), activePage === "forecast" && /*#__PURE__*/React.createElement(ForecastPage, shared), activePage === "customReport" && /*#__PURE__*/React.createElement(CustomReportGeneratorPage, shared), activePage === "customReportSingle" && /*#__PURE__*/React.createElement(CustomReportGeneratorPage, {
+    ...shared,
+    forceMode: "individual"
+  }), activePage === "monthlyProgressReport" && /*#__PURE__*/React.createElement(MonthlyProgressReportPage, shared)));
 }

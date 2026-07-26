@@ -127,7 +127,7 @@ const RANK_TO_SAMPLE_STATUS = {
   4: "approved",
   5: "released"
 };
-const SAMPLE_ROLLUP_ELIGIBLE = ["assigned", "in_progress", "results_entered", "under_review", "approved", "released"];
+const SAMPLE_ROLLUP_ELIGIBLE = ["registered", "received", "assigned", "in_progress", "results_entered", "under_review", "approved", "released"];
 function rollupSampleStatus(sample) {
   if (!SAMPLE_ROLLUP_ELIGIBLE.includes(sample.status)) return sample.status;
   if (!sample.requestedTests || !sample.requestedTests.length) return sample.status;
@@ -432,6 +432,63 @@ function addApproval(sample, {
     next = syncRequestedTestsToStage(next, [fromStatus], toStatus, user, `${step === "review" ? "Reviewed" : "Approved"} (signed by ${user?.name}).`);
   }
   return next;
+}
+// Bulk, signature-gated final decision on ONE parameter across many
+// samples at once — the same attestation requirement as addApproval()
+// above, just applied to a list instead of one sample. This is what
+// drives Sub-Batch-level and Reference(Batch)-level "Final Approve" —
+// Approve was previously only reachable one sample at a time via Sample
+// Detail's SignatureCapture.
+// Returns { updated: [...changed samples...], skipped: N } — samples not
+// currently at under_review for this parameter are left untouched
+// (skipped), so calling this on a mixed list never wrongly force-advances
+// something that isn't actually ready.
+function bulkDecideParameter(samples, testTypeId, testTypeName, {
+  decision,
+  comment,
+  signedName,
+  attested
+}, user) {
+  if (!attested || !signedName || signedName.trim().length < 2) {
+    throw new Error("Electronic signature requires the approver's typed full name and the attestation checkbox.");
+  }
+  const updated = [];
+  let skipped = 0;
+  samples.forEach(sample => {
+    const rt = (sample.requestedTests || []).find(r => r.testTypeId === testTypeId);
+    if (!rt || rt.status !== "under_review") {
+      skipped++;
+      return;
+    }
+    const approval = {
+      id: uid("apr"),
+      testTypeId,
+      testTypeName,
+      decision,
+      comment: comment || "",
+      byUser: user?.name,
+      byRole: user?.role,
+      ts: new Date().toISOString(),
+      signature: {
+        signedName: signedName.trim(),
+        attested: true
+      }
+    };
+    let next = {
+      ...sample,
+      approvals: [...(sample.approvals || []), approval]
+    };
+    if (decision === "approved") {
+      next = setRequestedTestStatus(next, testTypeId, "approved", user, `Approved (signed by ${user?.name}) for ${testTypeName}.`);
+    } else {
+      next = setRequestedTestStatus(next, testTypeId, "in_progress", user, `Approval rejected (signed by ${user?.name}) for ${testTypeName}${comment ? `: ${comment}` : ""}.`);
+    }
+    updated.push(next);
+  });
+  return {
+    updated,
+    skipped
+  };
 }
 function releaseResults(sample, user, note) {
   if (sample.status !== "approved") throw new Error("Only approved samples can be released.");

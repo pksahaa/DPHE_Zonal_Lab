@@ -183,7 +183,8 @@ function CustomReportGeneratorPage({
   users,
   session,
   goToSample,
-  notify
+  notify,
+  forceMode
 }) {
   const [q, setQ] = React.useState("");
   const [selectedSampleIds, setSelectedSampleIds] = React.useState([]);
@@ -211,7 +212,7 @@ function CustomReportGeneratorPage({
       designation: ""
     }]
   });
-  const [selectionMode, setSelectionMode] = React.useState("individual"); // "individual" | "batch" | "subbatch"
+  const [selectionMode, setSelectionMode] = React.useState(forceMode || "individual"); // "individual" | "batch" | "subbatch"
   const [reportReferenceId, setReportReferenceId] = React.useState("");
   const [reportSubBatchId, setReportSubBatchId] = React.useState("");
   const filteredSamples = (samples || []).filter(s => !q || `${s.sampleCode} ${s.clientName} ${s.siteLocation} ${s.village}`.toLowerCase().includes(q.toLowerCase()));
@@ -238,6 +239,10 @@ function CustomReportGeneratorPage({
   }, [availableTestIds.join(","), selectionMode]);
   const selectedTests = testTypes.filter(t => selectedTestIds.includes(t.id));
   function toggleSample(id) {
+    if (forceMode === "individual") {
+      setSelectedSampleIds(prev => prev.includes(id) ? [] : [id]);
+      return;
+    }
     setSelectedSampleIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   }
   function toggleTest(id) {
@@ -321,7 +326,7 @@ function CustomReportGeneratorPage({
   }
   // ---- Step 1 selection, built as plain variables (Individual / Batch-by-
   // Reference / Sub-Batch) instead of one giant nested expression. ----
-  const modeSelectorRow = /*#__PURE__*/React.createElement("label", {
+  const modeSelectorRow = forceMode ? null : /*#__PURE__*/React.createElement("label", {
     className: "flex flex-col gap-1 text-xs mb-2",
     style: { color: C.muted }
   }, "How are you selecting samples?", /*#__PURE__*/React.createElement("select", {

@@ -335,6 +335,38 @@ value(s) and the record date once results exist, via the existing
 someone leave the single source of truth to see the number that's
 supposedly already "entered."
 
+### Final Approve — now available at Batch, Sub-Batch, and Individual level
+
+Previously, once a parameter reached `under_review`, the only way to
+actually approve it was one sample at a time via Sample Detail's
+signature flow — there was no bulk option. `bulkDecideParameter()`
+(`20-sample-model.js`) is the same signature-gated decision as
+`addApproval()`, just applicable to many (sample, testType) pairs in one
+signed action:
+
+- **Sub-Batch level** — a "reviewed" Sub-Batch gets a **Final Approve**
+  button (Sub-Batch Builder's queue, and mirrored in Test Records) that
+  opens the same `SignatureCapture` panel used everywhere else; one
+  signature approves every member still `under_review` for that Sub-
+  Batch's parameter. `bulkApproveSubBatch()` (`16-sub-batch.js`) is the
+  shared implementation both places call.
+- **Batch (Reference) level** — a new "Batch Approve (by Reference)" card
+  in the Sub-Batch Builder tab: pick a Reference, see every (sample,
+  parameter) pair under it that's ready for final approval (could span
+  several different parameters/Sub-Batches at once), one signature
+  approves all of them — grouped by parameter under the hood since the
+  underlying decision is still per-parameter, but the person approving
+  only signs once.
+- **Individual level** — Test Records' expanded view for a standalone
+  (non-Sub-Batch) record now also gets a **Final Approve** button once
+  that parameter reaches `under_review`, instead of only being reachable
+  via Sample Detail.
+
+All three ultimately call the same `bulkDecideParameter()` /
+`setRequestedTestStatus()` machinery, so the rollup, Sub-Batch status
+badges, and audit trail (`sample.approvals[]`) stay consistent regardless
+of which level someone approved from.
+
 ## Custom Report Generator (added)
 
 - Reports tab → "Official Report" group → "Custom Report Generator".
@@ -363,3 +395,54 @@ tests), then add repeatable rows for only what differs per sample
 (Village/Ward, Caretaker Name, Sample Source). Creates one individual
 Sample per row, all sharing a `batchRef`. Alternative to the Excel manifest
 upload for smaller batches typed directly in the browser.
+
+
+### Bug fix: Sample.status stuck at "Registered" forever once testing started
+
+The rollup only applied once `Sample.status` was already `assigned` or
+later (`SAMPLE_ROLLUP_ELIGIBLE`) — but nothing actually requires a sample
+to be manually moved through Received/Assigned before it can be queued
+into a Sub-Batch (Phase 1's eligibility check only looks at on_hold/
+rejected/cancelled). So a sample could go straight from `registered` into
+full testing/review at the parameter level, while the rollup guard kept
+ignoring it because `registered` wasn't in the eligible list — leaving it
+displaying "Registered" forever, no matter how far its parameters actually
+progressed. Fixed by broadening `SAMPLE_ROLLUP_ELIGIBLE` to include
+`registered` and `received` too (`20-sample-model.js`) — the rollup is
+only ever invoked when a parameter's status actually changes, so this
+doesn't cause any premature jumps for samples with no testing activity
+yet; it just lets the rollup catch up from wherever the sample actually
+is instead of only from `assigned` onward.
+
+### Sample Detail now has its own per-parameter Final Approve
+
+The whole-sample signature flow in Sample Detail only ever appears once
+`Sample.status` reaches `under_review` — which (correctly) requires every
+one of a sample's parameters to have independently reached that stage
+first. If only some parameters were ready, Sample Detail showed no way to
+approve anything at all, even though the Sub-Batch/Individual-record
+Final Approve existed elsewhere (Sub-Batch Builder, Test Records) — not
+the first place someone looking at "my sample" would think to check.
+Each Requested Test row in Sample Detail now gets its own **Final
+Approve** button once that specific parameter reaches `under_review`,
+using the same `bulkDecideParameter()` / signature panel as everywhere
+else — so approving one specific parameter no longer requires waiting for
+every other parameter on the sample to catch up first.
+
+### Report tab reorganized into two groups
+
+The Reports browse menu is now exactly two groups, as requested:
+- **Report & Analytics** — every existing analytics page (previously
+  spread across Overview/Operations/Inventory/Equipment/Trends & Forecast)
+  folded into one group.
+- **Custom Report** — three pages: **Multiple Sample Report** (the
+  existing Custom Report Generator, unchanged, just relabeled/relocated),
+  **Single Sample Report** (the same generator with `forceMode="individual"`
+  — hides the selection-mode dropdown and makes picking a sample replace
+  the selection instead of adding to it, so it behaves like a proper
+  single-sample tool instead of a multi-select one locked to "individual"
+  mode), and **Monthly Progress Report** — genuinely new, not built yet.
+  It's an honest placeholder (`MonthlyProgressReportPage` in
+  `14c-analytics-pages-2.js`) rather than something half-working — tell me
+  what fields/layout you want (likely a month-by-month summary of
+  registered/tested/approved/released counts) and I'll build it.

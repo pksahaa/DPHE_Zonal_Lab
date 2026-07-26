@@ -263,3 +263,39 @@ function reviewSubBatchReturn(sb, samples, setSamples, setSubBatches, session, n
   } : x));
   notify?.(`${sb.label} returned to analyst.`, "warn");
 }
+
+// Shared final-approve wrapper for a Sub-Batch — one signature approves
+// every member currently under_review for this Sub-Batch's parameter.
+// Skipped members (already decided some other way) are silently left
+// alone; if every member got approved, the Sub-Batch itself is marked
+// "approved" too (purely a display convenience — the real state lives on
+// each sample's requestedTests[]).
+function bulkApproveSubBatch(sb, samples, setSamples, setSubBatches, session, notify, signaturePayload) {
+  const members = (sb.memberSampleIds || []).map(id => (samples || []).find(s => s.id === id)).filter(Boolean);
+  let result;
+  try {
+    result = bulkDecideParameter(members, sb.testTypeId, sb.testTypeName, signaturePayload, session);
+  } catch (e) {
+    notify?.(e.message, "warn");
+    return;
+  }
+  result.updated.forEach(updated => {
+    setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), updated);
+  });
+  const allApproved = result.skipped === 0 && result.updated.length > 0;
+  if (signaturePayload.decision === "approved") {
+    if (allApproved) {
+      setSubBatches(prev => prev.map(x => x.id === sb.id ? {
+        ...x,
+        status: "approved"
+      } : x));
+    }
+    notify?.(`${result.updated.length} sample(s) approved for ${sb.testTypeName}${result.skipped ? ` (${result.skipped} skipped — not awaiting approval)` : ""}.`, "ok");
+  } else {
+    setSubBatches(prev => prev.map(x => x.id === sb.id ? {
+      ...x,
+      status: "pending"
+    } : x));
+    notify?.(`${result.updated.length} sample(s) sent back to analyst for ${sb.testTypeName}.`, "warn");
+  }
+}
