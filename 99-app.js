@@ -56,16 +56,6 @@ function LabApp({
 }) {
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState("dashboard");
-  // Sample Detail (in the Samples tab) is the single source of truth for
-  // "everything about this sample" — Test Record UI, QC Module, and the
-  // Report Generator each used to show their own ad-hoc slice of a sample
-  // instead of linking to it. This is the shared piece of navigation state
-  // that lets any of them jump straight there.
-  const [focusSampleId, setFocusSampleId] = useState(null);
-  function goToSample(sampleId) {
-    setFocusSampleId(sampleId);
-    setTab("samples");
-  }
   const [invTab, setInvTab] = useState("equipment");
   const [reportTab, setReportTab] = useState("executive");
   const [theme, setTheme] = useState(() => loadKey("theme", "light"));
@@ -90,6 +80,7 @@ function LabApp({
   const [testTypes, setTestTypes] = useState([]);
   const [testRecords, setTestRecords] = useState([]);
   const [subBatches, setSubBatches] = useState([]);
+  const [references, setReferences] = useState([]);
   const [toast, setToast] = useState(null);
   const [editingRecord, setEditingRecord] = useState(null);
   const [showBackendSettings, setShowBackendSettings] = useState(false);
@@ -121,51 +112,6 @@ function LabApp({
       });
     }
   }, [session.name, session.role]);
-
-  // >>> PHASE 1: Reference collection — the real source-of-truth for who a
-  // sample came from (DPHE / institution / walk-in) + their letter/ref no.,
-  // replacing the old free-text Sample.batchRef. Same DataService pattern
-  // as samples above.
-  const [references, setReferencesState] = useState([]);
-  const [referencesLoaded, setReferencesLoaded] = useState(false);
-  useEffect(() => {
-    DataService.list("references").then(list => {
-      setReferencesState(list);
-      setReferencesLoaded(true);
-    });
-  }, []);
-  const setReferences = useCallback(async (updater, changedRecord) => {
-    setReferencesState(prev => updater(prev));
-    if (changedRecord) {
-      await DataService.save("references", changedRecord);
-    }
-  }, []);
-  // One-time, idempotent migration: any sample already carrying a
-  // referenceId (and requestedTests already carrying a status) is left
-  // untouched. Runs once every collection involved has loaded, and only
-  // writes anything if there's actually legacy data to migrate.
-  const [migrationChecked, setMigrationChecked] = useState(false);
-  useEffect(() => {
-    if (!samplesLoaded || !referencesLoaded || !loaded || migrationChecked) return;
-    setMigrationChecked(true);
-    const needsReferenceMigration = samples.some(s => !s.referenceId);
-    const needsStatusBackfill = samples.some(s => (s.requestedTests || []).some(rt => !rt.status));
-    if (!needsReferenceMigration && !needsStatusBackfill) return;
-    let workingSamples = samples;
-    let workingReferences = references;
-    if (needsReferenceMigration) {
-      const migrated = migrateBatchRefsToReferences(workingSamples, workingReferences);
-      workingReferences = migrated.references;
-      workingSamples = migrated.samples;
-    }
-    if (needsStatusBackfill) {
-      workingSamples = backfillRequestedTestStatuses(workingSamples, testRecords, subBatches);
-    }
-    setReferencesState(workingReferences);
-    setSamplesState(workingSamples);
-    DataService.bulkSet("references", workingReferences);
-    DataService.bulkSet("samples", workingSamples);
-  }, [samplesLoaded, referencesLoaded, loaded, migrationChecked, samples, references, testRecords, subBatches]);
   useEffect(() => {
     const chems = markExpiredBatches(normalizeChemicals(loadKey("chemicals", seedChemicals())));
     const equip = normalizeEquipment(loadKey("equipment", seedEquipment()));
@@ -179,7 +125,8 @@ function LabApp({
       ...t
     })));
     setTestRecords(loadKey("testRecords", []));
-    setSubBatches(loadKey("subBatches", []));
+    setSubBatches(normalizeBatches(loadKey("subBatches", [])));
+    setReferences(loadKey("references", []));
     setLoaded(true);
   }, []);
   useEffect(() => {
@@ -206,6 +153,9 @@ function LabApp({
   useEffect(() => {
     if (loaded) saveKey("subBatches", subBatches);
   }, [subBatches, loaded]);
+  useEffect(() => {
+    if (loaded) saveKey("references", references);
+  }, [references, loaded]);
   const notify = useCallback((msg, tone = "ok") => {
     setToast({
       msg,
@@ -403,18 +353,16 @@ function LabApp({
   })), tab === "samples" && (samplesLoaded ? /*#__PURE__*/React.createElement(SamplesTab, {
     samples: samples,
     setSamples: setSamples,
-    references: references,
-    setReferences: setReferences,
     testTypes: testTypes,
     testRecords: testRecords,
     subBatches: subBatches,
     setSubBatches: setSubBatches,
+    references: references,
+    setReferences: setReferences,
     equipment: equipment,
     users: users,
     session: session,
-    notify: notify,
-    focusSampleId: focusSampleId,
-    setFocusSampleId: setFocusSampleId
+    notify: notify
   }) : /*#__PURE__*/React.createElement("div", {
     className: "p-8 text-sm",
     style: {
@@ -460,12 +408,10 @@ function LabApp({
     setTestRecords: setTestRecords,
     samples: samples,
     setSamples: setSamples,
-    references: references,
     subBatches: subBatches,
     setSubBatches: setSubBatches,
     session: session,
     notify: notify,
-    goToSample: goToSample,
     editingRecord: editingRecord,
     onDoneEditing: () => setEditingRecord(null),
     goToTestTypes: () => setTab("testTypes")
@@ -478,7 +424,10 @@ function LabApp({
     setGasList: setGasList,
     samples: samples,
     setSamples: setSamples,
+    subBatches: subBatches,
+    setSubBatches: setSubBatches,
     testTypes: testTypes,
+    session: session,
     notify: notify,
     onEditRecord: r => {
       setEditingRecord(r);
@@ -494,12 +443,8 @@ function LabApp({
     testTypes: testTypes,
     testRecords: testRecords,
     samples: samples,
-    setSamples: setSamples,
-    references: references,
     users: users,
-    session: session,
     notify: notify,
-    goToSample: goToSample,
     onLoadDemoData: loadDemoReportData
   }), tab === "qc" && /*#__PURE__*/React.createElement(QcModuleTab, {
     testTypes: testTypes,

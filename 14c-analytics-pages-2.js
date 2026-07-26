@@ -1958,12 +1958,8 @@ function ReportsTab({
   testTypes,
   testRecords,
   samples,
-  setSamples,
-  references,
   users,
-  session,
   notify,
-  goToSample,
   onLoadDemoData
 }) {
   const [filters, setFilters] = React.useState(DEFAULT_FILTERS);
@@ -2043,11 +2039,7 @@ function ReportsTab({
     rangeDays,
     batchNameById,
     samples,
-    setSamples,
-    references,
     users,
-    session,
-    goToSample,
     notify
   };
   function printReport() {
