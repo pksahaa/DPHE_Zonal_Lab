@@ -1886,78 +1886,72 @@ const REPORT_GROUPS = [{
 const ALL_REPORT_PAGES = REPORT_GROUPS.flatMap(g => g.pages);
 
 // ---------------- Report navigation: one dropdown per group (Overview / Operations / Inventory / Equipment / Trends & Forecast) ----------------
-function ReportGroupNav({
+// Top-level group pills — same rounded-full pill style as the Inventory
+// tab's Equipment/Glassware/Chemicals/Gas nav (see InventoryTab in
+// 11-inventory-ui.js), applied here instead of a dropdown-per-group menu.
+function ReportGroupPills({
+  activeGroup,
+  onSelectGroup
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2 mb-3 flex-wrap"
+  }, REPORT_GROUPS.map(grp => /*#__PURE__*/React.createElement("button", {
+    key: grp.group,
+    type: "button",
+    onClick: () => onSelectGroup(grp),
+    className: "flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium",
+    style: {
+      background: activeGroup === grp.group ? C.teal : "#fff",
+      color: activeGroup === grp.group ? "#fff" : C.muted,
+      border: `1px solid ${activeGroup === grp.group ? C.teal : C.border}`
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: grp.group === "Custom Report" ? "printer" : "chart",
+    size: 14
+  }), grp.group)));
+}
+// Second-level page pills — used for Custom Report (only 3 pages, fits
+// the same pill style cleanly). Report & Analytics has 15 pages, which
+// doesn't fit a pill row — ReportPagePicker below handles that one with a
+// compact dropdown instead.
+function ReportPagePills({
+  pages,
   activePage,
   setReportTab
 }) {
-  const [openGroup, setOpenGroup] = React.useState(null);
-  const navRef = React.useRef(null);
-  React.useEffect(() => {
-    function onDocClick(e) {
-      if (navRef.current && !navRef.current.contains(e.target)) setOpenGroup(null);
-    }
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, []);
   return /*#__PURE__*/React.createElement("div", {
-    ref: navRef,
-    className: "rounded-lg mb-4 no-print px-3 py-2.5 flex items-center gap-2 flex-wrap",
+    className: "flex gap-2 mb-4 flex-wrap"
+  }, pages.map(p => /*#__PURE__*/React.createElement("button", {
+    key: p.k,
+    type: "button",
+    onClick: () => setReportTab(p.k),
+    className: "flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium",
     style: {
-      background: C.card,
-      border: `1px solid ${C.border}`
+      background: activePage === p.k ? C.teal : "#fff",
+      color: activePage === p.k ? "#fff" : C.muted,
+      border: `1px solid ${activePage === p.k ? C.teal : C.border}`
     }
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "text-[10px] font-bold uppercase tracking-wide mr-1 shrink-0",
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: p.icon,
+    size: 14
+  }), p.label)));
+}
+function ReportPagePicker({
+  pages,
+  activePage,
+  setReportTab
+}) {
+  return /*#__PURE__*/React.createElement("select", {
+    className: "border rounded-md px-3 py-1.5 text-sm mb-4",
     style: {
-      color: C.muted
-    }
-  }, "Browse:"), REPORT_GROUPS.map(grp => {
-    const activePageDef = grp.pages.find(p => p.k === activePage);
-    const isOpen = openGroup === grp.group;
-    return /*#__PURE__*/React.createElement("div", {
-      key: grp.group,
-      className: "relative"
-    }, /*#__PURE__*/React.createElement("button", {
-      type: "button",
-      onClick: () => setOpenGroup(isOpen ? null : grp.group),
-      className: "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap",
-      style: {
-        background: activePageDef ? C.teal : "#fff",
-        color: activePageDef ? "#fff" : C.ink,
-        border: `1px solid ${activePageDef ? C.teal : C.border}`
-      }
-    }, grp.group, activePageDef && /*#__PURE__*/React.createElement("span", {
-      className: "hidden md:inline font-normal opacity-90"
-    }, "· ", activePageDef.label), /*#__PURE__*/React.createElement(Icon, {
-      name: isOpen ? "chevronDown" : "chevronRight",
-      size: 10,
-      color: activePageDef ? "#fff" : C.muted
-    })), isOpen && /*#__PURE__*/React.createElement("div", {
-      className: "absolute z-40 mt-1 rounded-lg shadow-lg py-1.5",
-      style: {
-        background: "#fff",
-        border: `1px solid ${C.border}`,
-        minWidth: 230
-      }
-    }, grp.pages.map(p => /*#__PURE__*/React.createElement("button", {
-      key: p.k,
-      type: "button",
-      onClick: () => {
-        setReportTab(p.k);
-        setOpenGroup(null);
-      },
-      className: "w-full text-left px-3 py-2 text-xs flex items-center gap-2 hover:bg-gray-50",
-      style: {
-        color: p.k === activePage ? C.teal : C.ink,
-        fontWeight: p.k === activePage ? 700 : 500,
-        background: p.k === activePage ? C.infoBg : "transparent"
-      }
-    }, /*#__PURE__*/React.createElement(Icon, {
-      name: p.icon,
-      size: 13,
-      color: p.k === activePage ? C.teal : C.muted
-    }), p.label))));
-  }));
+      borderColor: C.border
+    },
+    value: activePage,
+    onChange: e => setReportTab(e.target.value)
+  }, pages.map(p => /*#__PURE__*/React.createElement("option", {
+    key: p.k,
+    value: p.k
+  }, p.label)));
 }
 function rangeDaysCount(filters, testRecords) {
   if (filters.dateFrom && filters.dateTo) return Math.max(1, daysBetweenD(filters.dateFrom, filters.dateTo) + 1);
@@ -2123,7 +2117,15 @@ function ReportsTab({
     filters: filters,
     setFilters: setFilters,
     facets: facets
-  }), /*#__PURE__*/React.createElement(ReportGroupNav, {
+  }), /*#__PURE__*/React.createElement(ReportGroupPills, {
+    activeGroup: activeGroupDef?.group,
+    onSelectGroup: grp => setReportTab(grp.pages[0].k)
+  }), activeGroupDef?.group === "Custom Report" ? /*#__PURE__*/React.createElement(ReportPagePills, {
+    pages: activeGroupDef.pages,
+    activePage: activePage,
+    setReportTab: setReportTab
+  }) : /*#__PURE__*/React.createElement(ReportPagePicker, {
+    pages: activeGroupDef?.pages || [],
     activePage: activePage,
     setReportTab: setReportTab
   }), /*#__PURE__*/React.createElement("div", {

@@ -2087,18 +2087,36 @@ function TestRecordsTab({
         className: "mb-1"
       }, `Samples in this Sub-Batch (${r.memberResults.length})`);
 
+      // Union of every result-parameter name across all members, in first-seen
+      // order — so the table has consistent columns even if some samples'
+      // results haven't been entered yet (blank cell) or a method has more
+      // than one named parameter.
+      const paramNames = [];
+      r.memberResults.forEach(m => (m.results || []).forEach(res => {
+        if (!paramNames.includes(res.name)) paramNames.push(res.name);
+      }));
       const memberListDiv = /*#__PURE__*/React.createElement("div", {
-        className: "grid gap-1"
-      }, r.memberResults.map(m => {
+        className: "overflow-x-auto"
+      }, /*#__PURE__*/React.createElement("table", {
+        className: "w-full text-xs border-collapse"
+      }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ["Sample", "Client / Site", "Reference", "Stage"].concat(paramNames).map(h => /*#__PURE__*/React.createElement("th", {
+        key: h,
+        className: "text-left px-2 py-1.5",
+        style: { borderBottom: `1px solid ${C.border}`, color: C.muted }
+      }, h)))), /*#__PURE__*/React.createElement("tbody", null, r.memberResults.map(m => {
         const sample = (samples || []).find(s => s.id === m.sampleId);
         const ref = sample?.referenceId ? findReferenceById(references, sample.referenceId) : null;
         const stage = sample ? testStageForSample(sample, r.testTypeId, testRecords, subBatches) : null;
         const stageStyle = stage ? testStageChipStyle(stage) : null;
-        const hasAnyValue = (m.results || []).some(res => res.value != null);
-        return /*#__PURE__*/React.createElement("div", {
+        const resultByName = {};
+        (m.results || []).forEach(res => {
+          resultByName[res.name] = res;
+        });
+        return /*#__PURE__*/React.createElement("tr", {
           key: m.sampleId,
-          className: "flex flex-wrap items-center gap-1.5 px-2 py-1 rounded",
-          style: { background: C.bg }
+          style: { borderBottom: `1px solid ${C.border}` }
+        }, /*#__PURE__*/React.createElement("td", {
+          className: "px-2 py-1.5"
         }, goToSample ? /*#__PURE__*/React.createElement("button", {
           type: "button",
           className: "font-semibold underline",
@@ -2107,23 +2125,26 @@ function TestRecordsTab({
         }, m.sampleCode) : /*#__PURE__*/React.createElement("span", {
           className: "font-semibold",
           style: { color: C.ink }
-        }, m.sampleCode),
-        sample && /*#__PURE__*/React.createElement("span", {
+        }, m.sampleCode)), /*#__PURE__*/React.createElement("td", {
+          className: "px-2 py-1.5",
           style: { color: C.muted }
-        }, `${sample.clientName} · ${sample.siteLocation}${ref ? ` · ${referenceDisplayLabel(ref)}` : ""}`),
-        stage && /*#__PURE__*/React.createElement("span", {
+        }, sample ? `${sample.clientName} · ${sample.siteLocation}` : "—"), /*#__PURE__*/React.createElement("td", {
+          className: "px-2 py-1.5",
+          style: { color: C.muted }
+        }, ref ? referenceDisplayLabel(ref) : "—"), /*#__PURE__*/React.createElement("td", {
+          className: "px-2 py-1.5"
+        }, stage && /*#__PURE__*/React.createElement("span", {
           className: "px-1.5 py-0.5 rounded",
           style: { background: stageStyle.bg, color: stageStyle.fg }
-        }, testStageLabel(stage)),
-        ...(m.results || []).filter(res => res.value != null).map(res => /*#__PURE__*/React.createElement("span", {
-          key: res.paramId,
-          className: "px-1.5 py-0.5 rounded",
-          style: { background: C.okBg, color: C.ok }
-        }, `${res.name}: ${fmtNum(res.value)} ${res.unit}`)),
-        !hasAnyValue && /*#__PURE__*/React.createElement("span", {
-          style: { color: C.warn }
-        }, "no result yet"));
-      }));
+        }, testStageLabel(stage))), ...paramNames.map(name => {
+          const res = resultByName[name];
+          return /*#__PURE__*/React.createElement("td", {
+            key: name,
+            className: "px-2 py-1.5",
+            style: { color: res && res.value != null ? C.ok : C.warn }
+          }, res && res.value != null ? `${fmtNum(res.value)} ${res.unit || ""}` : "—");
+        }));
+      }))));
 
       const reviewActionsBlock = (sb && sb.status === "tested" && setSamples) ? /*#__PURE__*/React.createElement("div", {
         className: "flex items-center gap-2 mt-2"

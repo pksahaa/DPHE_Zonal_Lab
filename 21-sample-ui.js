@@ -1445,11 +1445,16 @@ function BatchRegistrationForm({
 // Register New Sample / Register Batch — no more typing test names) ----
 function ImportTestPickerModal({
   testTypes,
+  references,
+  setReferences,
+  session,
   rowCount,
   onConfirm,
-  onClose
+  onClose,
+  notify
 }) {
   const [selectedTests, setSelectedTests] = React.useState([]);
+  const [referenceId, setReferenceId] = React.useState("");
   const [err, setErr] = React.useState("");
   function toggleTest(t) {
     setSelectedTests(prev => prev.some(x => x.testTypeId === t.id) ? prev.filter(x => x.testTypeId !== t.id) : [...prev, {
@@ -1462,10 +1467,14 @@ function ImportTestPickerModal({
       setErr("Select at least one requested test.");
       return;
     }
-    onConfirm(selectedTests);
+    if (!referenceId) {
+      setErr("Select or create a Client Type / Reference for this upload.");
+      return;
+    }
+    onConfirm(selectedTests, referenceId);
   }
   return /*#__PURE__*/React.createElement(Modal, {
-    title: `Requested Tests for ${rowCount} Imported Sample(s)`,
+    title: `${rowCount} Sample(s) Imported — a Few More Details`,
     onClose: onClose
   }, err && /*#__PURE__*/React.createElement("div", {
     className: "text-xs p-2 rounded mb-3",
@@ -1474,6 +1483,17 @@ function ImportTestPickerModal({
       color: C.warn
     }
   }, err), /*#__PURE__*/React.createElement("div", {
+    className: "mb-4"
+  }, /*#__PURE__*/React.createElement(ReferencePicker, {
+    references: references,
+    setReferences: setReferences,
+    value: referenceId,
+    onChange: setReferenceId,
+    session: session,
+    notify: notify,
+    label: "Client Type — required (applies to every sample in this upload)",
+    helpText: "One manifest sheet = one source — every row shares the same Client Type / Reference."
+  })), /*#__PURE__*/React.createElement("div", {
     className: "text-xs mb-2",
     style: {
       color: C.muted
@@ -1591,27 +1611,16 @@ function SamplesTab({
       setPendingImportSkipped(skipped);
     });
   }
-  // Step 2: after the tester picks tests in ImportTestPickerModal, actually
-  // create the samples — every row gets the same requestedTests, same as one
-  // physical manifest sheet requesting the same panel for the whole batch.
-  async function confirmImportSamples(requestedTests) {
+  // Step 2: after the tester picks tests + one Client Type/Reference in
+  // ImportTestPickerModal, actually create the samples — every row shares
+  // the same requestedTests AND the same Reference (one manifest sheet =
+  // one source), instead of each row auto-creating its own Reference from
+  // a BatchRef column.
+  async function confirmImportSamples(requestedTests, referenceId) {
+    const ref = findReferenceById(references, referenceId);
     let runningSamples = [...samples];
-    let runningReferences = [...references];
-    const refNoToReference = new Map(runningReferences.map(r => [r.refNo, r]));
     let count = 0;
     for (const row of pendingImportRows) {
-      const rawRef = String(row.BatchRef || row["Batch Ref"] || "").trim();
-      let ref = rawRef ? refNoToReference.get(rawRef) : null;
-      if (!ref) {
-        ref = createReference({
-          refNo: rawRef,
-          sourceType: rawRef ? "private_org" : "walkin",
-          notes: "Auto-created from bulk manifest import — please verify source type and add organization/contact details."
-        }, runningReferences, session);
-        runningReferences = [...runningReferences, ref];
-        if (rawRef) refNoToReference.set(rawRef, ref);
-        await setReferences(prev => [...prev, ref], ref);
-      }
       const sample = createSample({
         clientName: String(row.ClientName || row["Client Name"] || "").trim(),
         siteLocation: String(row.SiteLocation || row["Site Location"] || "").trim(),
@@ -1619,10 +1628,14 @@ function SamplesTab({
         upazila: String(row.Upazila || row["Upazila/City Corporation"] || "").trim(),
         union: String(row.Union || row["Union/Pourashava"] || "").trim(),
         village: String(row.Village || row["Village/Ward"] || "").trim(),
+        fatherHusbandName: String(row.FatherHusbandName || row["Father's/Husband's Name"] || "").trim(),
+        latitude: String(row.Latitude || "").trim(),
+        longitude: String(row.Longitude || "").trim(),
+        waterPointType: String(row.WaterPointType || row["Type of Water Point"] || "").trim(),
         caretakerName: String(row.CaretakerName || row["Caretaker Name"] || "").trim(),
         sampleSourceId: String(row.SampleSource || row["Sample Source"] || "").trim(),
-        referenceId: ref.id,
-        batchRef: ref.refNo,
+        referenceId: ref ? ref.id : "",
+        batchRef: ref ? ref.refNo : "",
         matrix: String(row.Matrix || "Drinking Water").trim(),
         collectionDate: String(row.CollectionDate || todayStr()),
         collectedBy: String(row.CollectedBy || "").trim(),
@@ -1636,7 +1649,7 @@ function SamplesTab({
       await setSamples(prev => [...prev, sample], sample);
       count++;
     }
-    notify(`Imported ${count} sample(s) from manifest${pendingImportSkipped ? `, skipped ${pendingImportSkipped} row(s) missing Client Name/Site Location` : ""}.`, count ? "ok" : "warn");
+    notify(`Imported ${count} sample(s) from manifest under ${ref ? referenceDisplayLabel(ref) : "(no reference)"}${pendingImportSkipped ? `, skipped ${pendingImportSkipped} row(s) missing Client Name/Site Location` : ""}.`, count ? "ok" : "warn");
     setPendingImportRows(null);
     setPendingImportSkipped(0);
   }
@@ -1921,12 +1934,16 @@ function SamplesTab({
     onClose: () => setShowBatchForm(false)
   }), pendingImportRows && /*#__PURE__*/React.createElement(ImportTestPickerModal, {
     testTypes: testTypes,
+    references: references,
+    setReferences: setReferences,
+    session: session,
     rowCount: pendingImportRows.length,
     onConfirm: confirmImportSamples,
     onClose: () => {
       setPendingImportRows(null);
       setPendingImportSkipped(0);
-    }
+    },
+    notify: notify
   }), openSample && /*#__PURE__*/React.createElement(SampleDetail, {
     sample: openSample,
     users: users,

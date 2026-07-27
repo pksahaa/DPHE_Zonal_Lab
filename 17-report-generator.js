@@ -359,32 +359,55 @@ function CustomReportGeneratorPage({
     size: "sm",
     onClick: () => setSelectedSampleIds([])
   }, "Clear")), /*#__PURE__*/React.createElement("div", {
-    className: "grid gap-1 max-h-56 overflow-y-auto p-1 rounded",
+    className: "max-h-56 overflow-y-auto rounded",
     style: { border: `1px solid ${C.border}` }
   }, filteredSamples.length === 0 ? /*#__PURE__*/React.createElement("div", {
     className: "text-xs p-2",
     style: { color: C.muted }
-  }, "No samples match.") : filteredSamples.map(s => /*#__PURE__*/React.createElement("label", {
-    key: s.id,
-    className: "flex items-center gap-2 px-2 py-1.5 rounded text-xs cursor-pointer",
-    style: { background: selectedSampleIds.includes(s.id) ? `${C.teal}14` : "transparent" }
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "checkbox",
-    checked: selectedSampleIds.includes(s.id),
-    onChange: () => toggleSample(s.id)
-  }), /*#__PURE__*/React.createElement("span", { className: "font-semibold" }, s.sampleCode), /*#__PURE__*/React.createElement("span", {
-    style: { color: C.muted }
-  }, `${s.clientName} · ${s.siteLocation}${s.village ? ` · ${s.village}` : ""}`), goToSample && /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    title: "View full sample record",
-    className: "ml-auto",
-    style: { color: C.info },
-    onClick: e => {
-      e.preventDefault();
-      e.stopPropagation();
-      goToSample(s.id);
-    }
-  }, "↗")))));
+  }, "No samples match.") : /*#__PURE__*/React.createElement("table", {
+    className: "w-full text-xs border-collapse"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ["", "Sample", "Client", "Site / Village", "Reference", ""].map((h, i) => /*#__PURE__*/React.createElement("th", {
+    key: i,
+    className: "text-left px-2 py-1.5 sticky top-0",
+    style: { background: C.card, borderBottom: `1px solid ${C.border}`, color: C.muted }
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, filteredSamples.map(s => {
+    const ref = s.referenceId ? findReferenceById(references, s.referenceId) : null;
+    return /*#__PURE__*/React.createElement("tr", {
+      key: s.id,
+      className: "cursor-pointer",
+      style: { background: selectedSampleIds.includes(s.id) ? `${C.teal}14` : "transparent" },
+      onClick: () => toggleSample(s.id)
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "px-2 py-1.5"
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: selectedSampleIds.includes(s.id),
+      onChange: () => toggleSample(s.id),
+      onClick: e => e.stopPropagation()
+    })), /*#__PURE__*/React.createElement("td", {
+      className: "px-2 py-1.5 font-semibold"
+    }, s.sampleCode), /*#__PURE__*/React.createElement("td", {
+      className: "px-2 py-1.5",
+      style: { color: C.muted }
+    }, s.clientName), /*#__PURE__*/React.createElement("td", {
+      className: "px-2 py-1.5",
+      style: { color: C.muted }
+    }, `${s.siteLocation}${s.village ? ` · ${s.village}` : ""}`), /*#__PURE__*/React.createElement("td", {
+      className: "px-2 py-1.5",
+      style: { color: C.muted }
+    }, ref ? referenceDisplayLabel(ref) : "—"), /*#__PURE__*/React.createElement("td", {
+      className: "px-2 py-1.5"
+    }, goToSample && /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      title: "View full sample record",
+      style: { color: C.info },
+      onClick: e => {
+        e.preventDefault();
+        e.stopPropagation();
+        goToSample(s.id);
+      }
+    }, "↗")));
+  })))));
 
   const batchModeBlock = selectionMode !== "batch" ? null : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("select", {
     className: "border rounded px-2 py-1.5 text-sm w-full mb-2",

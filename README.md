@@ -487,3 +487,29 @@ The Reports browse menu is now exactly two groups, as requested:
 These are all sizable pieces of their own — rather than rush them and risk
 more mistakes, next turn I'll tackle them in this order unless told
 otherwise.
+
+
+## Round after: Reports pill nav, Bulk Upload popup, tables everywhere
+
+- **Reports tab restyled to match Inventory's pill nav** — replaced the
+  dropdown-per-group "Browse:" menu with the same rounded-full pill
+  pattern as Equipment/Glassware/Chemicals/Gas
+  (`ReportGroupPills`/`ReportPagePills` in `14c-analytics-pages-2.js`).
+  Top level: two pills, **Report & Analytics** and **Custom Report**.
+  Custom Report's 3 pages get their own pill row (small set, fits
+  cleanly); Report & Analytics' 15 pages use a compact dropdown
+  (`ReportPagePicker`) instead, since that many wouldn't fit as pills.
+- **Bulk Upload now asks for Client Type/Reference once**, in the same
+  modal where Requested Tests are picked (`ImportTestPickerModal` in
+  `21-sample-ui.js`, extended with a `ReferencePicker`) — instead of the
+  old per-row "auto-create a Reference from the BatchRef column" logic.
+  One manifest sheet = one source, entered once, applied to every row.
+- **Test Record expand → real `<table>`** instead of flex-wrap rows —
+  columns are Sample / Client·Site / Reference / Stage / one column per
+  result parameter (union across all members, so it stays a consistent
+  table even when some samples aren't resulted yet).
+- **Custom Report's sample picker → real `<table>`** too — checkbox /
+  Sample / Client / Site·Village / Reference / view-link columns, click
+  anywhere in the row to toggle selection.
+
+All four of last round's "still outstanding" items are done now.
