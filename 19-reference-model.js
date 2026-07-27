@@ -24,16 +24,32 @@ const REFERENCE_SOURCE_TYPES = [{
   label: "DPHE",
   icon: "clipboard"
 }, {
-  key: "institution",
-  label: "Private / Public Institution",
+  key: "private_org",
+  label: "Private Organization",
   icon: "beaker"
 }, {
+  key: "other_govt",
+  label: "Other Government Institution",
+  icon: "clipboard"
+}, {
   key: "walkin",
-  label: "Walk-in (Individual)",
+  label: "Walk-in Customer",
+  icon: "user"
+}, {
+  key: "others",
+  label: "Others",
   icon: "user"
 }];
+// Reference (source) types that always carry office paperwork — Ref/Memo
+// No., Organization Name, Letter Date, Contact Person, Contact Phone, and
+// Notes are collected for all of these (not just DPHE), since any of them
+// might show up with a letter.
+const REFERENCE_TYPES_WITH_PAPERWORK = ["dphe", "private_org", "other_govt"];
 function referenceSourceMeta(key) {
-  return REFERENCE_SOURCE_TYPES.find(s => s.key === key) || REFERENCE_SOURCE_TYPES[2];
+  // "institution" is the pre-Client-Type-redesign key — treat it the same
+  // as Private Organization rather than losing the distinction.
+  const resolvedKey = key === "institution" ? "private_org" : key;
+  return REFERENCE_SOURCE_TYPES.find(s => s.key === resolvedKey) || REFERENCE_SOURCE_TYPES[3];
 }
 
 // ---- internal ref no. generator — for walk-ins (or any source) that show
@@ -120,7 +136,7 @@ function migrateBatchRefsToReferences(samples, existingReferences) {
     if (!ref) {
       ref = createReference({
         refNo: rawRef,
-        sourceType: rawRef ? "institution" : "walkin",
+        sourceType: rawRef ? "private_org" : "walkin",
         notes: rawRef ? "Auto-migrated from legacy Batch Ref field — please verify source type and add organization/contact details." : "Auto-migrated — individually registered sample with no batch reference; verify source type."
       }, references, {
         name: "System (migration)"

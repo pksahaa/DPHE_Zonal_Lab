@@ -446,3 +446,44 @@ The Reports browse menu is now exactly two groups, as requested:
   `14c-analytics-pages-2.js`) rather than something half-working — tell me
   what fields/layout you want (likely a month-by-month summary of
   registered/tested/approved/released counts) and I'll build it.
+
+
+## Latest round: Release at 3 levels, form field additions, Client Type
+
+- **Release** now mirrors Approve — available at **Individual** (Sample
+  Detail per-parameter, Test Records individual record), **Sub-Batch**
+  (Sub-Batch Builder + Test Records), and **Batch (Reference)** level (new
+  "Batch Release (by Reference)" card in Sub-Batch Builder). Same pattern
+  as approve: `bulkReleaseParameter()` in `20-sample-model.js`,
+  `bulkReleaseSubBatch()` in `16-sub-batch.js`.
+- Fixed: **Batch Approve (by Reference)** wasn't showing the actual test
+  result value for each pending pair — a reviewer was approving blind.
+  Now shows it, same as the Sub-Batch review views.
+- **Registration form fields** now match the DPHE-LIMS v2 spec: added
+  Father's/Husband's Name, Latitude, Longitude, and a Type of Water Point
+  dropdown (`WATER_POINT_TYPES` in `21-sample-ui.js`) to both the
+  registration rows and Sample Detail's edit view. Labels renamed to
+  match ("Customer Name", "Sample Type", "Location / Address").
+- **Client Type** dropdown expanded from 3 to the 5 requested options —
+  DPHE, Private Organization, Other Government Institution, Walk-in
+  Customer, Others (`REFERENCE_SOURCE_TYPES` in `19-reference-model.js`).
+  Reference/Memo No., Organization Name, Letter Date, Contact Person,
+  Contact Phone, and Notes are already collected for all of them via the
+  existing ReferencePicker "+ New" flow (not conditionally hidden by
+  type). Legacy `"institution"` data still resolves correctly (mapped to
+  Private Organization).
+
+### Still outstanding (not done this round — flagging honestly)
+
+- **Bulk Upload → popup asking for Client Type + Reference details once**
+  (instead of per-row / auto-created-per-refNo as it works today).
+- **Test Record expand → proper HTML `<table>`** instead of the current
+  flex-wrap row layout.
+- **Reports tab restyled like the Inventory "Chemical" tab** (need to
+  confirm exactly which visual pattern that refers to before building it).
+- **Custom Report's sample picker → table layout** instead of the
+  checkbox list.
+
+These are all sizable pieces of their own — rather than rush them and risk
+more mistakes, next turn I'll tackle them in this order unless told
+otherwise.

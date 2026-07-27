@@ -241,6 +241,10 @@ function createSample(fields, existingSamples, user) {
     union: fields.union || "",
     village: fields.village || "",
     caretakerName: fields.caretakerName || "",
+    fatherHusbandName: fields.fatherHusbandName || "",
+    latitude: fields.latitude || "",
+    longitude: fields.longitude || "",
+    waterPointType: fields.waterPointType || "",
     sampleSourceId: fields.sampleSourceId || "",
     // e.g. "STW-6"
     batchRef: fields.batchRef || "",
@@ -337,7 +341,7 @@ function transitionSample(sample, newStatus, meta, user) {
 // only the registration fields are editable, never status/results/custody
 // history itself; every edit is logged as its own custody event so the
 // correction is auditable rather than silently overwritten.
-const SAMPLE_EDITABLE_FIELDS = ["clientName", "siteLocation", "district", "upazila", "union", "village", "caretakerName", "sampleSourceId", "batchRef", "referenceId", "matrix", "collectionDate", "collectedBy", "receivedDate", "priority", "numberOfSamples", "requestedTests", "notes"];
+const SAMPLE_EDITABLE_FIELDS = ["clientName", "siteLocation", "district", "upazila", "union", "village", "caretakerName", "fatherHusbandName", "latitude", "longitude", "waterPointType", "sampleSourceId", "batchRef", "referenceId", "matrix", "collectionDate", "collectedBy", "receivedDate", "priority", "numberOfSamples", "requestedTests", "notes"];
 function editSample(sample, patch, user) {
   const changes = [];
   const cleanPatch = {};
@@ -484,6 +488,26 @@ function bulkDecideParameter(samples, testTypeId, testTypeName, {
       next = setRequestedTestStatus(next, testTypeId, "in_progress", user, `Approval rejected (signed by ${user?.name}) for ${testTypeName}${comment ? `: ${comment}` : ""}.`);
     }
     updated.push(next);
+  });
+  return {
+    updated,
+    skipped
+  };
+}
+// Bulk release ONE parameter across many samples at once — same pattern as
+// bulkDecideParameter, but for the Approved -> Released step. Not
+// signature-gated (matching the existing single-sample releaseResults()
+// behavior) — just requires the parameter to already be approved.
+function bulkReleaseParameter(samples, testTypeId, testTypeName, user, note) {
+  const updated = [];
+  let skipped = 0;
+  samples.forEach(sample => {
+    const rt = (sample.requestedTests || []).find(r => r.testTypeId === testTypeId);
+    if (!rt || rt.status !== "approved") {
+      skipped++;
+      return;
+    }
+    updated.push(setRequestedTestStatus(sample, testTypeId, "released", user, note || `Released (by ${user?.name}) for ${testTypeName}.`));
   });
   return {
     updated,

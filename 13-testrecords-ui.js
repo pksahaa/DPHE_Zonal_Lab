@@ -2178,9 +2178,16 @@ function TestRecordsTab({
         }
       }) : null;
 
+      const releaseButton = (sb && sb.status === "approved") ? /*#__PURE__*/React.createElement("div", {
+        className: "mt-2"
+      }, /*#__PURE__*/React.createElement(Button, {
+        size: "sm",
+        onClick: () => bulkReleaseSubBatch(sb, samples, setSamples, setSubBatches, session, notify)
+      }, "Release")) : null;
+
       return /*#__PURE__*/React.createElement("div", {
         className: "col-span-2 md:col-span-3"
-      }, headerLine, memberListDiv, reviewActionsBlock, returnPanel, finalApproveButton, finalApprovePanel);
+      }, headerLine, memberListDiv, reviewActionsBlock, returnPanel, finalApproveButton, finalApprovePanel, releaseButton);
     })(), r.sampleId && !r.memberSampleIds && (() => {
       // Individual (non-Sub-Batch) record — same review controls, applied
       // directly to this one (sample, testType) pair since there's no
@@ -2276,9 +2283,22 @@ function TestRecordsTab({
         }
       }) : null;
 
+      const releaseButton = rt.status !== "approved" ? null : /*#__PURE__*/React.createElement("div", {
+        className: "mt-2"
+      }, /*#__PURE__*/React.createElement(Button, {
+        size: "sm",
+        onClick: () => {
+          const result = bulkReleaseParameter([sample], r.testTypeId, r.testTypeName, session);
+          if (result.updated.length) {
+            setSamples(prev => prev.map(s => s.id === sample.id ? result.updated[0] : s), result.updated[0]);
+            notify?.(`${sample.sampleCode} released for ${r.testTypeName}.`, "ok");
+          }
+        }
+      }, "Release"));
+
       return /*#__PURE__*/React.createElement("div", {
         className: "col-span-2 md:col-span-3"
-      }, headerLine, reviewActionsBlock, returnPanel, finalApproveButton, finalApprovePanel);
+      }, headerLine, reviewActionsBlock, returnPanel, finalApproveButton, finalApprovePanel, releaseButton);
     })(), (r.results || []).filter(res => res.value !== null).length > 0 && /*#__PURE__*/React.createElement("div", {
       className: "col-span-2 md:col-span-3"
     }, /*#__PURE__*/React.createElement("div", {

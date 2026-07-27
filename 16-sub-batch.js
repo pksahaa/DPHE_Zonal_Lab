@@ -299,3 +299,21 @@ function bulkApproveSubBatch(sb, samples, setSamples, setSubBatches, session, no
     notify?.(`${result.updated.length} sample(s) sent back to analyst for ${sb.testTypeName}.`, "warn");
   }
 }
+
+// Shared bulk-release wrapper for a Sub-Batch — releases every member
+// currently "approved" for this Sub-Batch's parameter, marking the
+// Sub-Batch itself "released" for display if every member made it.
+function bulkReleaseSubBatch(sb, samples, setSamples, setSubBatches, session, notify, note) {
+  const members = (sb.memberSampleIds || []).map(id => (samples || []).find(s => s.id === id)).filter(Boolean);
+  const result = bulkReleaseParameter(members, sb.testTypeId, sb.testTypeName, session, note);
+  result.updated.forEach(updated => {
+    setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), updated);
+  });
+  if (result.skipped === 0 && result.updated.length > 0) {
+    setSubBatches(prev => prev.map(x => x.id === sb.id ? {
+      ...x,
+      status: "released"
+    } : x));
+  }
+  notify?.(`${result.updated.length} sample(s) released for ${sb.testTypeName}${result.skipped ? ` (${result.skipped} skipped — not approved yet)` : ""}.`, "ok");
+}

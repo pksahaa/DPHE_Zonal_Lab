@@ -6,6 +6,8 @@
 // never touching storage directly.
 // ============================================================================
 
+const WATER_POINT_TYPES = ["Tube Well (Shallow)", "Tube Well (Deep)", "Pond", "River", "Supply Water (Piped)", "Dug Well", "Rainwater Harvesting", "Pond Sand Filter (PSF)", "Other"];
+
 function SampleStatusBadge({
   status
 }) {
@@ -682,6 +684,10 @@ function SampleDetail({
       upazila: sample.upazila,
       union: sample.union,
       village: sample.village,
+      fatherHusbandName: sample.fatherHusbandName,
+      latitude: sample.latitude,
+      longitude: sample.longitude,
+      waterPointType: sample.waterPointType,
       caretakerName: sample.caretakerName,
       sampleSourceId: sample.sampleSourceId,
       batchRef: sample.batchRef,
@@ -751,7 +757,7 @@ function SampleDetail({
     style: {
       gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))"
     }
-  }, [["clientName", "Client / Requester"], ["siteLocation", "Site / Location"], ["district", "District"], ["upazila", "Upazila / City Corp"], ["union", "Union / Pourashava"], ["village", "Village / Ward"], ["caretakerName", "Caretaker Name"], ["sampleSourceId", "Sample Source"], ["collectedBy", "Collected By"], ["notes", "Notes"]].map(([field, fieldLabel]) => /*#__PURE__*/React.createElement("label", {
+  }, [["clientName", "Customer Name"], ["siteLocation", "Site / Location"], ["district", "District"], ["upazila", "Upazila / City Corp"], ["union", "Union / Pourashava"], ["village", "Location / Address"], ["fatherHusbandName", "Father's / Husband's Name"], ["latitude", "Latitude"], ["longitude", "Longitude"], ["caretakerName", "Caretaker Name"], ["sampleSourceId", "Sample Source ID"], ["collectedBy", "Collected By"], ["notes", "Notes"]].map(([field, fieldLabel]) => /*#__PURE__*/React.createElement("label", {
     key: field,
     className: "flex flex-col gap-0.5 text-xs",
     style: {
@@ -786,6 +792,27 @@ function SampleDetail({
     key: m,
     value: m
   }, m)))), /*#__PURE__*/React.createElement("label", {
+    className: "flex flex-col gap-0.5 text-xs",
+    style: {
+      color: C.muted
+    }
+  }, "Type of Water Point", /*#__PURE__*/React.createElement("select", {
+    className: "border rounded px-2 py-1 text-xs",
+    style: {
+      borderColor: C.border
+    },
+    value: editForm.waterPointType || "",
+    onChange: e => setEditForm(prev => ({
+      ...prev,
+      waterPointType: e.target.value
+    }))
+  }, [/*#__PURE__*/React.createElement("option", {
+    key: "none",
+    value: ""
+  }, "— select —")].concat(WATER_POINT_TYPES.map(wt => /*#__PURE__*/React.createElement("option", {
+    key: wt,
+    value: wt
+  }, wt))))), /*#__PURE__*/React.createElement("label", {
     className: "flex flex-col gap-0.5 text-xs",
     style: {
       color: C.muted
@@ -946,7 +973,16 @@ function SampleDetail({
     }, resultInfo.results.filter(r => r.value != null).map(r => `${r.name}: ${fmtNum(r.value)}${r.unit ? ` ${r.unit}` : ""}`).join(", ") || "no value yet", resultInfo.date ? ` (${resultInfo.date})` : ""), paramStage === "under_review" && approvingParamId !== t.testTypeId && /*#__PURE__*/React.createElement(Button, {
       size: "sm",
       onClick: () => setApprovingParamId(t.testTypeId)
-    }, "Final Approve"));
+    }, "Final Approve"), paramStage === "approved" && /*#__PURE__*/React.createElement(Button, {
+      size: "sm",
+      onClick: () => {
+        const result = bulkReleaseParameter([sample], t.testTypeId, t.testTypeName, session);
+        if (result.updated.length) {
+          onUpdate(result.updated[0]);
+          notify?.(`${t.testTypeName} released.`, "ok");
+        }
+      }
+    }, "Release"));
     const approvalPanel = paramStage !== "under_review" || approvingParamId !== t.testTypeId ? null : /*#__PURE__*/React.createElement(SignatureCapture, {
       user: session,
       label: `Final Approval — ${t.testTypeName} for ${sample.sampleCode}`,
@@ -1103,6 +1139,10 @@ function BatchRegistrationForm({
   const [selectedTests, setSelectedTests] = React.useState([]);
   const [rows, setRows] = React.useState([{
     village: "",
+    fatherHusbandName: "",
+    latitude: "",
+    longitude: "",
+    waterPointType: "",
     caretakerName: "",
     sampleSourceId: ""
   }]);
@@ -1122,6 +1162,10 @@ function BatchRegistrationForm({
   function addRow() {
     setRows(prev => [...prev, {
       village: "",
+      fatherHusbandName: "",
+      latitude: "",
+      longitude: "",
+      waterPointType: "",
       caretakerName: "",
       sampleSourceId: ""
     }]);
@@ -1180,8 +1224,8 @@ function BatchRegistrationForm({
     }),
     session: session,
     notify: notify,
-    label: "Reference (Source) — required",
-    helpText: "DPHE / institution letter+ref no., or a walk-in with no letter (one will be auto-generated)."
+    label: "Client Type — required",
+    helpText: "DPHE / Private Organization / Other Government Institution (with letter+ref no.), or Walk-in Customer / Others (one will be auto-generated if no letter)."
   })), /*#__PURE__*/React.createElement("div", {
     className: "grid gap-3 mb-3",
     style: {
@@ -1189,7 +1233,7 @@ function BatchRegistrationForm({
     }
   }, /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "Client / Requester",
+    label: "Customer Name",
     value: shared.clientName,
     onChange: v => setShared({
       ...shared,
@@ -1221,7 +1265,7 @@ function BatchRegistrationForm({
     })
   }), /*#__PURE__*/React.createElement(SelectField, {
     simple: true,
-    label: "Matrix",
+    label: "Sample Type",
     value: shared.matrix,
     onChange: v => setShared({
       ...shared,
@@ -1293,49 +1337,97 @@ function BatchRegistrationForm({
     size: "sm",
     onClick: addRow
   }, "+ Add Row"))), /*#__PURE__*/React.createElement("div", {
-    className: "grid gap-1.5 max-h-56 overflow-y-auto p-1"
-  }, rows.map((row, i) => /*#__PURE__*/React.createElement("div", {
-    key: i,
-    className: "flex gap-2 items-center"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "text-xs w-5",
-    style: {
-      color: C.muted
-    }
-  }, i + 1), /*#__PURE__*/React.createElement("input", {
-    className: "border rounded px-2 py-1 text-xs flex-1",
-    style: {
-      borderColor: C.border
-    },
-    placeholder: "Village/Ward",
-    value: row.village,
-    onChange: e => updateRow(i, "village", e.target.value)
-  }), /*#__PURE__*/React.createElement("input", {
-    className: "border rounded px-2 py-1 text-xs flex-1",
-    style: {
-      borderColor: C.border
-    },
-    placeholder: "Caretaker Name",
-    value: row.caretakerName,
-    onChange: e => updateRow(i, "caretakerName", e.target.value)
-  }), /*#__PURE__*/React.createElement("input", {
-    className: "border rounded px-2 py-1 text-xs flex-1",
-    style: {
-      borderColor: C.border
-    },
-    placeholder: "Sample Source (e.g. STW-6)",
-    value: row.sampleSourceId,
-    onChange: e => updateRow(i, "sampleSourceId", e.target.value)
-  }), /*#__PURE__*/React.createElement("button", {
-    onClick: () => removeRow(i),
-    title: "Remove row",
-    style: {
-      color: C.warn
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "trash",
-    size: 14
-  }))))), /*#__PURE__*/React.createElement("div", {
+    className: "grid gap-2 max-h-72 overflow-y-auto p-1"
+  }, rows.map((row, i) => {
+    const line1 = /*#__PURE__*/React.createElement("div", {
+      className: "flex gap-2 items-center"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-xs w-5",
+      style: {
+        color: C.muted
+      }
+    }, i + 1), /*#__PURE__*/React.createElement("input", {
+      className: "border rounded px-2 py-1 text-xs flex-1",
+      style: {
+        borderColor: C.border
+      },
+      placeholder: "Location / Address (Village / landmark)",
+      value: row.village,
+      onChange: e => updateRow(i, "village", e.target.value)
+    }), /*#__PURE__*/React.createElement("input", {
+      className: "border rounded px-2 py-1 text-xs flex-1",
+      style: {
+        borderColor: C.border
+      },
+      placeholder: "Father's / Husband's Name",
+      value: row.fatherHusbandName,
+      onChange: e => updateRow(i, "fatherHusbandName", e.target.value)
+    }), /*#__PURE__*/React.createElement("select", {
+      className: "border rounded px-2 py-1 text-xs flex-1",
+      style: {
+        borderColor: C.border
+      },
+      value: row.waterPointType,
+      onChange: e => updateRow(i, "waterPointType", e.target.value)
+    }, [/*#__PURE__*/React.createElement("option", {
+      key: "none",
+      value: ""
+    }, "— Type of Water Point —")].concat(WATER_POINT_TYPES.map(wt => /*#__PURE__*/React.createElement("option", {
+      key: wt,
+      value: wt
+    }, wt)))), /*#__PURE__*/React.createElement("button", {
+      onClick: () => removeRow(i),
+      title: "Remove row",
+      style: {
+        color: C.warn
+      }
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: "trash",
+      size: 14
+    })));
+    const line2 = /*#__PURE__*/React.createElement("div", {
+      className: "flex gap-2 items-center pl-7"
+    }, /*#__PURE__*/React.createElement("input", {
+      className: "border rounded px-2 py-1 text-xs flex-1",
+      style: {
+        borderColor: C.border
+      },
+      placeholder: "Latitude",
+      value: row.latitude,
+      onChange: e => updateRow(i, "latitude", e.target.value)
+    }), /*#__PURE__*/React.createElement("input", {
+      className: "border rounded px-2 py-1 text-xs flex-1",
+      style: {
+        borderColor: C.border
+      },
+      placeholder: "Longitude",
+      value: row.longitude,
+      onChange: e => updateRow(i, "longitude", e.target.value)
+    }), /*#__PURE__*/React.createElement("input", {
+      className: "border rounded px-2 py-1 text-xs flex-1",
+      style: {
+        borderColor: C.border
+      },
+      placeholder: "Caretaker Name",
+      value: row.caretakerName,
+      onChange: e => updateRow(i, "caretakerName", e.target.value)
+    }), /*#__PURE__*/React.createElement("input", {
+      className: "border rounded px-2 py-1 text-xs flex-1",
+      style: {
+        borderColor: C.border
+      },
+      placeholder: "Sample Source ID (e.g. STW-6)",
+      value: row.sampleSourceId,
+      onChange: e => updateRow(i, "sampleSourceId", e.target.value)
+    }));
+    return /*#__PURE__*/React.createElement("div", {
+      key: i,
+      className: "grid gap-1 pb-1.5",
+      style: {
+        borderBottom: `1px solid ${C.border}`
+      }
+    }, line1, line2);
+  })), /*#__PURE__*/React.createElement("div", {
     className: "mt-4 flex justify-end gap-2"
   }, /*#__PURE__*/React.createElement(Button, {
     variant: "outline",
@@ -1513,7 +1605,7 @@ function SamplesTab({
       if (!ref) {
         ref = createReference({
           refNo: rawRef,
-          sourceType: rawRef ? "institution" : "walkin",
+          sourceType: rawRef ? "private_org" : "walkin",
           notes: "Auto-created from bulk manifest import — please verify source type and add organization/contact details."
         }, runningReferences, session);
         runningReferences = [...runningReferences, ref];
@@ -1565,6 +1657,10 @@ function SamplesTab({
         // legacy display fallback — the real source of truth is referenceId
         batchRef: ref ? ref.refNo : "",
         village: row.village,
+        fatherHusbandName: row.fatherHusbandName,
+        latitude: row.latitude,
+        longitude: row.longitude,
+        waterPointType: row.waterPointType,
         caretakerName: row.caretakerName,
         sampleSourceId: row.sampleSourceId,
         numberOfSamples: 1
@@ -1850,6 +1946,12 @@ function SamplesTab({
 // ---- Sub-Batches sub-view: group pending samples for one method into a
 // persistent, named batch that Add Test Record can later consume as a unit ----
 function SUB_BATCH_STATUS_BADGE(status) {
+  if (status === "released") return /*#__PURE__*/React.createElement(Badge, {
+    tone: "ok"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "check",
+    size: 11
+  }), " Released");
   if (status === "approved") return /*#__PURE__*/React.createElement(Badge, {
     tone: "ok"
   }, /*#__PURE__*/React.createElement(Icon, {
@@ -1945,6 +2047,39 @@ function SubBatchBuilder({
     notify?.(`${totalUpdated} parameter-sample pair(s) ${payload.decision === "approved" ? "approved" : "sent back to analyst"} across ${referenceDisplayLabel(selectedBatchApproveReference)}.`, payload.decision === "approved" ? "ok" : "warn");
     setBatchApproveReferenceId("");
     setShowBatchApproveSignature(false);
+  }
+  // ---- Batch (Reference) level bulk RELEASE — same shape as bulk
+  // approve above, but for the Approved -> Released step (no signature
+  // needed, matching the existing single-sample Release button). ----
+  const [batchReleaseReferenceId, setBatchReleaseReferenceId] = React.useState("");
+  const referenceReleaseOptions = Array.from(new Set(samples.map(s => s.referenceId).filter(Boolean))).map(id => findReferenceById(references, id)).filter(Boolean).filter(ref => samples.some(s => s.referenceId === ref.id && (s.requestedTests || []).some(rt => rt.status === "approved"))).sort((a, b) => (a.refNo || "").localeCompare(b.refNo || ""));
+  const selectedBatchReleaseReference = batchReleaseReferenceId ? findReferenceById(references, batchReleaseReferenceId) : null;
+  const pendingReleasePairs = selectedBatchReleaseReference ? samples.filter(s => s.referenceId === selectedBatchReleaseReference.id).flatMap(s => (s.requestedTests || []).filter(rt => rt.status === "approved").map(rt => ({
+    sample: s,
+    testTypeId: rt.testTypeId,
+    testTypeName: rt.testTypeName
+  }))) : [];
+  function batchReleaseByReference() {
+    if (!selectedBatchReleaseReference) return;
+    const byTestType = {};
+    pendingReleasePairs.forEach(p => {
+      (byTestType[p.testTypeId] = byTestType[p.testTypeId] || {
+        testTypeName: p.testTypeName,
+        samples: []
+      }).samples.push(p.sample);
+    });
+    let totalUpdated = 0,
+      totalSkipped = 0;
+    Object.entries(byTestType).forEach(([testTypeId, group]) => {
+      const result = bulkReleaseParameter(group.samples, testTypeId, group.testTypeName, session);
+      result.updated.forEach(updated => {
+        setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), updated);
+      });
+      totalUpdated += result.updated.length;
+      totalSkipped += result.skipped;
+    });
+    notify?.(`${totalUpdated} parameter-sample pair(s) released across ${referenceDisplayLabel(selectedBatchReleaseReference)}.`, "ok");
+    setBatchReleaseReferenceId("");
   }
 
   // Samples eligible for the chosen Test Type — ignoring the sub-batch's own
@@ -2349,7 +2484,10 @@ function SubBatchBuilder({
     }, "Return to Analyst"), sb.status === "reviewed" && /*#__PURE__*/React.createElement(Button, {
       size: "sm",
       onClick: () => setApprovingSubBatchId(sb.id)
-    }, "Final Approve"), /*#__PURE__*/React.createElement(IconButton, {
+    }, "Final Approve"), sb.status === "approved" && /*#__PURE__*/React.createElement(Button, {
+      size: "sm",
+      onClick: () => bulkReleaseSubBatch(sb, samples, setSamples, setSubBatches, session, notify)
+    }, "Release"), /*#__PURE__*/React.createElement(IconButton, {
       name: "edit",
       color: C.teal,
       title: sb.status === "pending" ? "Edit sub-batch" : "Only pending sub-batches can be edited (this one is already tested)",
@@ -2437,28 +2575,37 @@ function SubBatchBuilder({
     style: {
       color: C.muted
     }
-  }, "Nothing awaiting final approval under this Reference right now.") : pendingApprovalPairs.map(p => /*#__PURE__*/React.createElement("div", {
-    key: `${p.sample.id}-${p.testTypeId}`,
-    className: "flex items-center gap-1.5 px-2 py-1 rounded text-xs",
-    style: {
-      background: C.bg
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "font-semibold",
-    style: {
-      color: C.ink
-    }
-  }, p.sample.sampleCode), /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: C.muted
-    }
-  }, p.sample.clientName), /*#__PURE__*/React.createElement("span", {
-    className: "ml-auto px-1.5 py-0.5 rounded",
-    style: {
-      background: `${C.info}1A`,
-      color: C.info
-    }
-  }, p.testTypeName))));
+  }, "Nothing awaiting final approval under this Reference right now.") : pendingApprovalPairs.map(p => {
+    const resultInfo = getSampleResultForTest(p.sample, p.testTypeId, testRecords);
+    return /*#__PURE__*/React.createElement("div", {
+      key: `${p.sample.id}-${p.testTypeId}`,
+      className: "flex flex-wrap items-center gap-1.5 px-2 py-1 rounded text-xs",
+      style: {
+        background: C.bg
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "font-semibold",
+      style: {
+        color: C.ink
+      }
+    }, p.sample.sampleCode), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: C.muted
+      }
+    }, p.sample.clientName), /*#__PURE__*/React.createElement("span", {
+      className: "px-1.5 py-0.5 rounded",
+      style: {
+        background: `${C.info}1A`,
+        color: C.info
+      }
+    }, p.testTypeName), resultInfo && resultInfo.results.length > 0 && /*#__PURE__*/React.createElement("span", {
+      className: "ml-auto px-1.5 py-0.5 rounded",
+      style: {
+        background: C.okBg,
+        color: C.ok
+      }
+    }, resultInfo.results.filter(r => r.value != null).map(r => `${r.name}: ${fmtNum(r.value)}${r.unit ? ` ${r.unit}` : ""}`).join(", ") || "no value yet"));
+  }));
 
   const batchApproveButton = !selectedBatchApproveReference || pendingApprovalPairs.length === 0 || showBatchApproveSignature ? null : /*#__PURE__*/React.createElement(Button, {
     size: "sm",
@@ -2490,7 +2637,85 @@ function SubBatchBuilder({
     }
   }, "One signature approves every parameter across every sample under the chosen Reference that's ready for final approval."), batchApproveReferencePicker, batchApprovePairsList, batchApproveButton, batchApproveSignaturePanel));
 
+  const batchReleaseReferencePicker = /*#__PURE__*/React.createElement("select", {
+    className: "border rounded px-2 py-1.5 text-sm w-full",
+    style: {
+      borderColor: C.border
+    },
+    value: batchReleaseReferenceId,
+    onChange: e => setBatchReleaseReferenceId(e.target.value)
+  }, [/*#__PURE__*/React.createElement("option", {
+    key: "none",
+    value: ""
+  }, "— Select a Reference —")].concat(referenceReleaseOptions.map(ref => /*#__PURE__*/React.createElement("option", {
+    key: ref.id,
+    value: ref.id
+  }, `${referenceSourceMeta(ref.sourceType).label} — ${referenceDisplayLabel(ref)}`))));
+
+  const batchReleasePairsList = !selectedBatchReleaseReference ? null : /*#__PURE__*/React.createElement("div", {
+    className: "grid gap-1 mt-2 max-h-56 overflow-y-auto"
+  }, pendingReleasePairs.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "text-xs",
+    style: {
+      color: C.muted
+    }
+  }, "Nothing approved and awaiting release under this Reference right now.") : pendingReleasePairs.map(p => {
+    const resultInfo = getSampleResultForTest(p.sample, p.testTypeId, testRecords);
+    return /*#__PURE__*/React.createElement("div", {
+      key: `${p.sample.id}-${p.testTypeId}`,
+      className: "flex flex-wrap items-center gap-1.5 px-2 py-1 rounded text-xs",
+      style: {
+        background: C.bg
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "font-semibold",
+      style: {
+        color: C.ink
+      }
+    }, p.sample.sampleCode), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: C.muted
+      }
+    }, p.sample.clientName), /*#__PURE__*/React.createElement("span", {
+      className: "px-1.5 py-0.5 rounded",
+      style: {
+        background: `${C.info}1A`,
+        color: C.info
+      }
+    }, p.testTypeName), resultInfo && resultInfo.results.length > 0 && /*#__PURE__*/React.createElement("span", {
+      className: "ml-auto px-1.5 py-0.5 rounded",
+      style: {
+        background: C.okBg,
+        color: C.ok
+      }
+    }, resultInfo.results.filter(r => r.value != null).map(r => `${r.name}: ${fmtNum(r.value)}${r.unit ? ` ${r.unit}` : ""}`).join(", ") || "no value yet"));
+  }));
+
+  const batchReleaseButton = !selectedBatchReleaseReference || pendingReleasePairs.length === 0 ? null : /*#__PURE__*/React.createElement(Button, {
+    size: "sm",
+    className: "mt-2",
+    onClick: batchReleaseByReference
+  }, `Release All (${pendingReleasePairs.length})`);
+
+  const batchReleaseCard = /*#__PURE__*/React.createElement(SectionCard, {
+    title: "Batch Release (by Reference)",
+    icon: /*#__PURE__*/React.createElement(Icon, {
+      name: "check",
+      size: 15
+    })
+  }, referenceReleaseOptions.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "text-xs",
+    style: {
+      color: C.muted
+    }
+  }, "No Reference currently has approved parameters awaiting release.") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs mb-2",
+    style: {
+      color: C.muted
+    }
+  }, "Releases every approved parameter across every sample under the chosen Reference — no signature needed, same as the single-sample Release button."), batchReleaseReferencePicker, batchReleasePairsList, batchReleaseButton));
+
   return /*#__PURE__*/React.createElement("div", {
     className: "grid gap-4"
-  }, createCard, batchApproveCard, listCard);
+  }, createCard, batchApproveCard, batchReleaseCard, listCard);
 }
