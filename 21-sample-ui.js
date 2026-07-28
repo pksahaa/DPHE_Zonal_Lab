@@ -6,7 +6,7 @@
 // never touching storage directly.
 // ============================================================================
 
-const WATER_POINT_TYPES = ["Tube Well (Shallow)", "Tube Well (Deep)", "Pond", "River", "Supply Water (Piped)", "Dug Well", "Rainwater Harvesting", "Pond Sand Filter (PSF)", "Other"];
+const WATER_POINT_TYPES = ["Shallow TW (STW)", "Deep TW (DTW)", "Tubewell With Submersible Pump (TSP)", "Community Based Tubewell (CTBT)", "Rural Piped Water Scheme (RPWS)", "Pond Sand Filter (PSF)", "Rainwater Harvesting (RWH)", "Other (Pls. Specify)"];
 
 function SampleStatusBadge({
   status
@@ -90,33 +90,21 @@ function ReferencePicker({
   helpText
 }) {
   const [showNew, setShowNew] = React.useState(false);
-  const [newForm, setNewForm] = React.useState({
-    sourceType: "walkin",
-    refNo: "",
-    organizationName: "",
-    letterDate: "",
-    contactPerson: "",
-    contactPhone: "",
-    address: "",
-    notes: ""
-  });
+  const [newForm, setNewForm] = React.useState({ ...CLIENT_PART_EMPTY });
+  const [newErr, setNewErr] = React.useState("");
   const sorted = [...(references || [])].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
   async function createNew() {
-    const ref = createReference(newForm, references, session);
-    await setReferences(prev => [...prev, ref], ref);
-    onChange(ref.id);
+    const result = submitClientPart(newForm, references, session);
+    if (result.error) {
+      setNewErr(result.error);
+      return;
+    }
+    await setReferences(prev => [...prev, result.reference], result.reference);
+    onChange(result.reference.id);
     setShowNew(false);
-    notify?.(`Reference ${ref.refNo} created.`, "ok");
-    setNewForm({
-      sourceType: "walkin",
-      refNo: "",
-      organizationName: "",
-      letterDate: "",
-      contactPerson: "",
-      contactPhone: "",
-      address: "",
-      notes: ""
-    });
+    notify?.(`Client entry ${result.reference.refNo} created.`, "ok");
+    setNewForm({ ...CLIENT_PART_EMPTY });
+    setNewErr("");
   }
   return /*#__PURE__*/React.createElement("div", {
     className: "flex flex-col gap-1 text-xs"
@@ -149,90 +137,23 @@ function ReferencePicker({
     size: "sm",
     onClick: () => setShowNew(true)
   }, "+ New")), showNew && /*#__PURE__*/React.createElement(Modal, {
-    title: "New Reference",
-    onClose: () => setShowNew(false)
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "grid gap-3"
-  }, /*#__PURE__*/React.createElement(SelectField, {
-    simple: true,
-    label: "Source Type",
-    value: newForm.sourceType,
-    onChange: v => setNewForm({
-      ...newForm,
-      sourceType: v
-    }),
-    options: REFERENCE_SOURCE_TYPES.map(s => ({
-      value: s.key,
-      label: s.label
-    }))
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Reference / Memo No. (leave blank for walk-in with no letter — one will be auto-generated)",
-    value: newForm.refNo,
-    onChange: v => setNewForm({
-      ...newForm,
-      refNo: v
-    })
+    title: "New Client Entry",
+    onClose: () => setShowNew(false),
+    wide: true
+  }, newErr && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs p-2 rounded mb-3",
+    style: { background: C.warnBg, color: C.warn }
+  }, newErr), /*#__PURE__*/React.createElement(ClientPartFields, {
+    form: newForm,
+    setForm: setNewForm
   }), /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-2 gap-3"
-  }, /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Organization Name",
-    value: newForm.organizationName,
-    onChange: v => setNewForm({
-      ...newForm,
-      organizationName: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    type: "date",
-    label: "Letter Date",
-    value: newForm.letterDate,
-    onChange: v => setNewForm({
-      ...newForm,
-      letterDate: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Contact Person",
-    value: newForm.contactPerson,
-    onChange: v => setNewForm({
-      ...newForm,
-      contactPerson: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Contact Phone",
-    value: newForm.contactPhone,
-    onChange: v => setNewForm({
-      ...newForm,
-      contactPhone: v
-    })
-  })), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Address",
-    value: newForm.address,
-    onChange: v => setNewForm({
-      ...newForm,
-      address: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    textarea: true,
-    label: "Notes",
-    value: newForm.notes,
-    onChange: v => setNewForm({
-      ...newForm,
-      notes: v
-    })
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "flex justify-end gap-2"
+    className: "flex justify-end gap-2 mt-3"
   }, /*#__PURE__*/React.createElement(Button, {
     variant: "ghost",
     onClick: () => setShowNew(false)
   }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
     onClick: createNew
-  }, "Create Reference")))));
+  }, "Create"))));
 }
 
 // ============================================================================
@@ -294,6 +215,148 @@ function SampleMiniCard({
       title: `${t.testTypeName} — ${testStageLabel(stage)}`
     }, t.testTypeName, " · ", testStageLabel(stage));
   })));
+}
+
+// ============================================================================
+// CLIENT PART FIELDS — always inline, one window, no "+New" popup. Every
+// registration action (manual multi-row, or bulk upload) fills these once
+// and creates one fresh Reference from them — replacing the old
+// picker-dropdown-plus-separate-modal ReferencePicker flow for
+// registration specifically (ReferencePicker itself is kept for the
+// Sample Detail "move this sample to a different existing Reference" case,
+// which is a genuinely different job: picking among EXISTING references).
+// ============================================================================
+const CLIENT_PART_EMPTY = {
+  sourceType: "walkin",
+  sourceTypeOther: "",
+  clientType: "",
+  clientTypeOther: "",
+  refNo: "",
+  letterDate: "",
+  trackingNo: "",
+  organizationName: "",
+  contactPerson: "",
+  contactPhone: "",
+  notes: ""
+};
+function ClientPartFields({
+  form,
+  setForm
+}) {
+  function set(field, value) {
+    setForm(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  }
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-semibold mb-1.5",
+    style: {
+      color: C.ink
+    }
+  }, "Client Part — for tracking"), /*#__PURE__*/React.createElement("div", {
+    className: "grid gap-3 mb-3",
+    style: {
+      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))"
+    }
+  }, /*#__PURE__*/React.createElement(SelectField, {
+    simple: true,
+    label: "Client Source",
+    value: form.sourceType,
+    onChange: v => set("sourceType", v),
+    options: REFERENCE_SOURCE_TYPES.map(s => ({
+      value: s.key,
+      label: s.label
+    }))
+  }), form.sourceType === "others" && /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Client Source — Please Specify",
+    value: form.sourceTypeOther,
+    onChange: v => set("sourceTypeOther", v)
+  }), /*#__PURE__*/React.createElement(SelectField, {
+    simple: true,
+    label: "Client Type",
+    value: form.clientType,
+    onChange: v => set("clientType", v),
+    options: [{
+      value: "",
+      label: "— select —"
+    }, ...CLIENT_TYPES.map(ct => ({
+      value: ct,
+      label: ct
+    }))]
+  }), form.clientType === "Others (Pls Specify)" && /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Client Type — Please Specify",
+    value: form.clientTypeOther,
+    onChange: v => set("clientTypeOther", v)
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Ref / Memo No.",
+    value: form.refNo,
+    onChange: v => set("refNo", v)
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    type: "date",
+    label: "Date",
+    value: form.letterDate,
+    onChange: v => set("letterDate", v)
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Tracking No. — required, must be unique",
+    value: form.trackingNo,
+    onChange: v => set("trackingNo", v)
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Organization Name",
+    value: form.organizationName,
+    onChange: v => set("organizationName", v)
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Client Name",
+    value: form.contactPerson,
+    onChange: v => set("contactPerson", v)
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Client Contact No.",
+    value: form.contactPhone,
+    onChange: v => set("contactPhone", v)
+  })), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    textarea: true,
+    label: "Notes",
+    value: form.notes,
+    onChange: v => set("notes", v)
+  }));
+}
+// Validates the Client Part form + actually creates the Reference. Shared
+// by the registration form and the bulk-upload popup so the Tracking No.
+// uniqueness rule and field mapping only live in one place.
+function submitClientPart(form, references, session) {
+  if (!(form.trackingNo || "").trim()) {
+    return {
+      error: "Tracking No. is required."
+    };
+  }
+  if (isTrackingNoTaken(form.trackingNo, references)) {
+    return {
+      error: `Tracking No. "${form.trackingNo.trim()}" is already used by another Client entry — it must be unique.`
+    };
+  }
+  if (form.sourceType === "others" && !form.sourceTypeOther.trim()) {
+    return {
+      error: "Please specify the Client Source."
+    };
+  }
+  if (form.clientType === "Others (Pls Specify)" && !form.clientTypeOther.trim()) {
+    return {
+      error: "Please specify the Client Type."
+    };
+  }
+  const reference = createReference(form, references, session);
+  return {
+    reference
+  };
 }
 
 function SampleRegistrationForm({
@@ -1125,26 +1188,27 @@ function BatchRegistrationForm({
   onClose
 }) {
   const [shared, setShared] = React.useState({
-    clientName: "",
     matrix: "Drinking Water",
-    district: "",
-    upazila: "",
-    union: "",
     collectionDate: todayStr(),
     collectedBy: "",
     receivedDate: todayStr(),
-    priority: "Routine",
-    referenceId: ""
+    priority: "Routine"
+  });
+  const [clientPart, setClientPart] = React.useState({
+    ...CLIENT_PART_EMPTY
   });
   const [selectedTests, setSelectedTests] = React.useState([]);
   const [rows, setRows] = React.useState([{
-    village: "",
+    customerName: "",
     fatherHusbandName: "",
+    district: "",
+    upazila: "",
+    union: "",
+    village: "",
     latitude: "",
     longitude: "",
     waterPointType: "",
-    caretakerName: "",
-    sampleSourceId: ""
+    waterPointTypeOther: ""
   }]);
   const [err, setErr] = React.useState("");
   function toggleTest(t) {
@@ -1161,13 +1225,16 @@ function BatchRegistrationForm({
   }
   function addRow() {
     setRows(prev => [...prev, {
-      village: "",
+      customerName: "",
       fatherHusbandName: "",
+      district: "",
+      upazila: "",
+      union: "",
+      village: "",
       latitude: "",
       longitude: "",
       waterPointType: "",
-      caretakerName: "",
-      sampleSourceId: ""
+      waterPointTypeOther: ""
     }]);
   }
   function removeRow(i) {
@@ -1179,23 +1246,21 @@ function BatchRegistrationForm({
     }]);
   }
   function submit() {
-    if (!shared.clientName.trim()) {
-      setErr("Client / requester is required.");
+    if (rows.every(r => !r.customerName.trim() && !r.village.trim())) {
+      setErr("Fill in at least one sample row (Customer Name or Site Name).");
       return;
     }
-    if (!shared.referenceId) {
-      setErr("Select or create a Reference (source) first.");
+    const validRows = rows.filter(r => r.customerName.trim() || r.village.trim());
+    const result = submitClientPart(clientPart, references, session);
+    if (result.error) {
+      setErr(result.error);
       return;
     }
-    if (rows.every(r => !r.village.trim() && !r.caretakerName.trim())) {
-      setErr("Fill in at least one sample row (Village/Ward or Caretaker Name).");
-      return;
-    }
-    const validRows = rows.filter(r => r.village.trim() || r.caretakerName.trim());
+    setReferences(prev => [...prev, result.reference], result.reference);
     onCreate({
       ...shared,
       requestedTests: selectedTests
-    }, validRows);
+    }, validRows, result.reference);
   }
   return /*#__PURE__*/React.createElement(Modal, {
     title: "Register Sample(s) — shared info once, per-sample rows below (matches the bulk upload sheet)",
@@ -1212,65 +1277,23 @@ function BatchRegistrationForm({
     style: {
       color: C.ink
     }
-  }, "Shared Info (applies to every sample in this batch)"), /*#__PURE__*/React.createElement("div", {
-    className: "mb-3"
-  }, /*#__PURE__*/React.createElement(ReferencePicker, {
-    references: references,
-    setReferences: setReferences,
-    value: shared.referenceId,
-    onChange: v => setShared({
-      ...shared,
-      referenceId: v
-    }),
-    session: session,
-    notify: notify,
-    label: "Client Type — required",
-    helpText: "DPHE / Private Organization / Other Government Institution (with letter+ref no.), or Walk-in Customer / Others (one will be auto-generated if no letter)."
+  }, "Client Part — for tracking (one entry covers this whole registration)"), /*#__PURE__*/React.createElement("div", {
+    className: "mb-4 p-3 rounded",
+    style: { background: C.bg, border: `1px solid ${C.border}` }
+  }, /*#__PURE__*/React.createElement(ClientPartFields, {
+    form: clientPart,
+    setForm: setClientPart
   })), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-semibold mb-1.5",
+    style: { color: C.ink }
+  }, "Batch Defaults (Sample Type, dates — still editable per row where relevant)"), /*#__PURE__*/React.createElement("div", {
     className: "grid gap-3 mb-3",
-    style: {
-      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))"
-    }
-  }, /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Customer Name",
-    value: shared.clientName,
-    onChange: v => setShared({
-      ...shared,
-      clientName: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "District",
-    value: shared.district,
-    onChange: v => setShared({
-      ...shared,
-      district: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Upazila / City Corporation",
-    value: shared.upazila,
-    onChange: v => setShared({
-      ...shared,
-      upazila: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Union / Pourashava",
-    value: shared.union,
-    onChange: v => setShared({
-      ...shared,
-      union: v
-    })
-  }), /*#__PURE__*/React.createElement(SelectField, {
+    style: { gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }
+  }, /*#__PURE__*/React.createElement(SelectField, {
     simple: true,
     label: "Sample Type",
     value: shared.matrix,
-    onChange: v => setShared({
-      ...shared,
-      matrix: v
-    }),
+    onChange: v => setShared({ ...shared, matrix: v }),
     options: ["Drinking Water", "Surface Water", "Wastewater", "Groundwater", "Other"].map(m => ({
       value: m,
       label: m
@@ -1280,27 +1303,18 @@ function BatchRegistrationForm({
     label: "Collection Date",
     type: "date",
     value: shared.collectionDate,
-    onChange: v => setShared({
-      ...shared,
-      collectionDate: v
-    })
+    onChange: v => setShared({ ...shared, collectionDate: v })
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
     label: "Received Date",
     type: "date",
     value: shared.receivedDate,
-    onChange: v => setShared({
-      ...shared,
-      receivedDate: v
-    })
+    onChange: v => setShared({ ...shared, receivedDate: v })
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
     label: "Collected By",
     value: shared.collectedBy,
-    onChange: v => setShared({
-      ...shared,
-      collectedBy: v
-    })
+    onChange: v => setShared({ ...shared, collectedBy: v })
   })), /*#__PURE__*/React.createElement("div", {
     className: "text-xs font-semibold mb-1.5",
     style: {
@@ -1339,34 +1353,23 @@ function BatchRegistrationForm({
   }, "+ Add Row"))), /*#__PURE__*/React.createElement("div", {
     className: "grid gap-2 max-h-72 overflow-y-auto p-1"
   }, rows.map((row, i) => {
-    const line1 = /*#__PURE__*/React.createElement("div", {
-      className: "flex gap-2 items-center"
-    }, /*#__PURE__*/React.createElement("span", {
-      className: "text-xs w-5",
-      style: {
-        color: C.muted
-      }
-    }, i + 1), /*#__PURE__*/React.createElement("input", {
+    // Small helper so each Sample Part field is one line instead of a
+    // repeated 6-line React.createElement("input", {...}) block — much
+    // easier to verify than the previous fully-inlined version.
+    function field(key, placeholder, extraStyle) {
+      return /*#__PURE__*/React.createElement("input", {
+        key: key,
+        className: "border rounded px-2 py-1 text-xs flex-1",
+        style: Object.assign({ borderColor: C.border }, extraStyle || {}),
+        placeholder: placeholder,
+        value: row[key] || "",
+        onChange: e => updateRow(i, key, e.target.value)
+      });
+    }
+    const waterPointSelect = /*#__PURE__*/React.createElement("select", {
+      key: "waterPointType",
       className: "border rounded px-2 py-1 text-xs flex-1",
-      style: {
-        borderColor: C.border
-      },
-      placeholder: "Location / Address (Village / landmark)",
-      value: row.village,
-      onChange: e => updateRow(i, "village", e.target.value)
-    }), /*#__PURE__*/React.createElement("input", {
-      className: "border rounded px-2 py-1 text-xs flex-1",
-      style: {
-        borderColor: C.border
-      },
-      placeholder: "Father's / Husband's Name",
-      value: row.fatherHusbandName,
-      onChange: e => updateRow(i, "fatherHusbandName", e.target.value)
-    }), /*#__PURE__*/React.createElement("select", {
-      className: "border rounded px-2 py-1 text-xs flex-1",
-      style: {
-        borderColor: C.border
-      },
+      style: { borderColor: C.border },
       value: row.waterPointType,
       onChange: e => updateRow(i, "waterPointType", e.target.value)
     }, [/*#__PURE__*/React.createElement("option", {
@@ -1375,58 +1378,44 @@ function BatchRegistrationForm({
     }, "— Type of Water Point —")].concat(WATER_POINT_TYPES.map(wt => /*#__PURE__*/React.createElement("option", {
       key: wt,
       value: wt
-    }, wt)))), /*#__PURE__*/React.createElement("button", {
+    }, wt))));
+    const removeBtn = /*#__PURE__*/React.createElement("button", {
+      key: "remove",
       onClick: () => removeRow(i),
       title: "Remove row",
-      style: {
-        color: C.warn
-      }
+      style: { color: C.warn }
     }, /*#__PURE__*/React.createElement(Icon, {
       name: "trash",
       size: 14
-    })));
-    const line2 = /*#__PURE__*/React.createElement("div", {
-      className: "flex gap-2 items-center pl-7"
-    }, /*#__PURE__*/React.createElement("input", {
-      className: "border rounded px-2 py-1 text-xs flex-1",
-      style: {
-        borderColor: C.border
-      },
-      placeholder: "Latitude",
-      value: row.latitude,
-      onChange: e => updateRow(i, "latitude", e.target.value)
-    }), /*#__PURE__*/React.createElement("input", {
-      className: "border rounded px-2 py-1 text-xs flex-1",
-      style: {
-        borderColor: C.border
-      },
-      placeholder: "Longitude",
-      value: row.longitude,
-      onChange: e => updateRow(i, "longitude", e.target.value)
-    }), /*#__PURE__*/React.createElement("input", {
-      className: "border rounded px-2 py-1 text-xs flex-1",
-      style: {
-        borderColor: C.border
-      },
-      placeholder: "Caretaker Name",
-      value: row.caretakerName,
-      onChange: e => updateRow(i, "caretakerName", e.target.value)
-    }), /*#__PURE__*/React.createElement("input", {
-      className: "border rounded px-2 py-1 text-xs flex-1",
-      style: {
-        borderColor: C.border
-      },
-      placeholder: "Sample Source ID (e.g. STW-6)",
-      value: row.sampleSourceId,
-      onChange: e => updateRow(i, "sampleSourceId", e.target.value)
     }));
+    const rowNumber = /*#__PURE__*/React.createElement("span", {
+      key: "num",
+      className: "text-xs w-5",
+      style: { color: C.muted }
+    }, i + 1);
+    const line1 = /*#__PURE__*/React.createElement("div", {
+      key: "l1",
+      className: "flex gap-2 items-center"
+    }, rowNumber, field("customerName", "Customer Name"), field("fatherHusbandName", "Father's / Husband's Name"), field("village", "Site Name"), removeBtn);
+    const line2 = /*#__PURE__*/React.createElement("div", {
+      key: "l2",
+      className: "flex gap-2 items-center pl-7"
+    }, field("district", "District"), field("upazila", "City Corp. / Pouroshova / Upazilla"), field("union", "Ward / Union"));
+    const line3 = /*#__PURE__*/React.createElement("div", {
+      key: "l3",
+      className: "flex gap-2 items-center pl-7"
+    }, field("latitude", "Latitude"), field("longitude", "Longitude"), waterPointSelect);
+    const line4 = row.waterPointType === "Other (Pls. Specify)" ? /*#__PURE__*/React.createElement("div", {
+      key: "l4",
+      className: "flex gap-2 items-center pl-7"
+    }, field("waterPointTypeOther", "Water Point Type — Please Specify")) : null;
     return /*#__PURE__*/React.createElement("div", {
       key: i,
       className: "grid gap-1 pb-1.5",
       style: {
         borderBottom: `1px solid ${C.border}`
       }
-    }, line1, line2);
+    }, line1, line2, line3, line4);
   })), /*#__PURE__*/React.createElement("div", {
     className: "mt-4 flex justify-end gap-2"
   }, /*#__PURE__*/React.createElement(Button, {
@@ -1454,7 +1443,7 @@ function ImportTestPickerModal({
   notify
 }) {
   const [selectedTests, setSelectedTests] = React.useState([]);
-  const [referenceId, setReferenceId] = React.useState("");
+  const [clientPart, setClientPart] = React.useState({ ...CLIENT_PART_EMPTY });
   const [err, setErr] = React.useState("");
   function toggleTest(t) {
     setSelectedTests(prev => prev.some(x => x.testTypeId === t.id) ? prev.filter(x => x.testTypeId !== t.id) : [...prev, {
@@ -1467,15 +1456,18 @@ function ImportTestPickerModal({
       setErr("Select at least one requested test.");
       return;
     }
-    if (!referenceId) {
-      setErr("Select or create a Client Type / Reference for this upload.");
+    const result = submitClientPart(clientPart, references, session);
+    if (result.error) {
+      setErr(result.error);
       return;
     }
-    onConfirm(selectedTests, referenceId);
+    setReferences(prev => [...prev, result.reference], result.reference);
+    onConfirm(selectedTests, result.reference);
   }
   return /*#__PURE__*/React.createElement(Modal, {
     title: `${rowCount} Sample(s) Imported — a Few More Details`,
-    onClose: onClose
+    onClose: onClose,
+    wide: true
   }, err && /*#__PURE__*/React.createElement("div", {
     className: "text-xs p-2 rounded mb-3",
     style: {
@@ -1483,16 +1475,11 @@ function ImportTestPickerModal({
       color: C.warn
     }
   }, err), /*#__PURE__*/React.createElement("div", {
-    className: "mb-4"
-  }, /*#__PURE__*/React.createElement(ReferencePicker, {
-    references: references,
-    setReferences: setReferences,
-    value: referenceId,
-    onChange: setReferenceId,
-    session: session,
-    notify: notify,
-    label: "Client Type — required (applies to every sample in this upload)",
-    helpText: "One manifest sheet = one source — every row shares the same Client Type / Reference."
+    className: "mb-4 p-3 rounded",
+    style: { background: C.bg, border: `1px solid ${C.border}` }
+  }, /*#__PURE__*/React.createElement(ClientPartFields, {
+    form: clientPart,
+    setForm: setClientPart
   })), /*#__PURE__*/React.createElement("div", {
     className: "text-xs mb-2",
     style: {
@@ -1556,7 +1543,9 @@ function SamplesTab({
   const openSample = samples.find(s => s.id === openId) || null;
   const filtered = samples.filter(s => {
     if (statusFilter && s.status !== statusFilter) return false;
-    if (q && !`${s.sampleCode} ${s.clientName} ${s.siteLocation}`.toLowerCase().includes(q.toLowerCase())) return false;
+    const ref = s.referenceId ? findReferenceById(references, s.referenceId) : null;
+    const haystack = `${s.sampleCode} ${s.clientName} ${s.siteLocation} ${ref?.trackingNo || ""} ${ref?.refNo || ""}`;
+    if (q && !haystack.toLowerCase().includes(q.toLowerCase())) return false;
     return true;
   }).sort((a, b) => a.createdAt < b.createdAt ? 1 : -1);
   function toggleBatchExpand(ref) {
@@ -1604,9 +1593,13 @@ function SamplesTab({
   function importSamples(file) {
     readWorkbook(file, (err, rows) => {
       if (err) return notify("Could not read Excel file", "warn");
-      const usableRows = rows.filter(row => String(row.ClientName || row["Client Name"] || "").trim() && String(row.SiteLocation || row["Site Location"] || "").trim());
+      const usableRows = rows.filter(row => {
+        const hasName = String(row.CustomerName || row["Customer Name"] || row.ClientName || row["Client Name"] || "").trim();
+        const hasSite = String(row.SiteName || row["Site Name"] || row.SiteLocation || row["Site Location"] || "").trim();
+        return hasName && hasSite;
+      });
       const skipped = rows.length - usableRows.length;
-      if (!usableRows.length) return notify("No usable rows found (need Client Name and Site Location in every row).", "warn");
+      if (!usableRows.length) return notify("No usable rows found (need Customer Name and Site Name in every row).", "warn");
       setPendingImportRows(usableRows);
       setPendingImportSkipped(skipped);
     });
@@ -1616,24 +1609,22 @@ function SamplesTab({
   // the same requestedTests AND the same Reference (one manifest sheet =
   // one source), instead of each row auto-creating its own Reference from
   // a BatchRef column.
-  async function confirmImportSamples(requestedTests, referenceId) {
-    const ref = findReferenceById(references, referenceId);
+  async function confirmImportSamples(requestedTests, ref) {
     let runningSamples = [...samples];
     let count = 0;
     for (const row of pendingImportRows) {
       const sample = createSample({
-        clientName: String(row.ClientName || row["Client Name"] || "").trim(),
-        siteLocation: String(row.SiteLocation || row["Site Location"] || "").trim(),
+        clientName: String(row.CustomerName || row["Customer Name"] || row.ClientName || row["Client Name"] || "").trim(),
+        siteLocation: String(row.SiteLocation || row["Site Location"] || row.SiteName || row["Site Name"] || "").trim(),
         district: String(row.District || "").trim(),
-        upazila: String(row.Upazila || row["Upazila/City Corporation"] || "").trim(),
-        union: String(row.Union || row["Union/Pourashava"] || "").trim(),
-        village: String(row.Village || row["Village/Ward"] || "").trim(),
+        upazila: String(row.Upazila || row["City Corp/Pouroshova/Upazilla"] || row["Upazila/City Corporation"] || "").trim(),
+        union: String(row.Union || row["Ward/Union"] || row["Union/Pourashava"] || "").trim(),
+        village: String(row.SiteName || row["Site Name"] || row.Village || row["Village/Ward"] || "").trim(),
         fatherHusbandName: String(row.FatherHusbandName || row["Father's/Husband's Name"] || "").trim(),
         latitude: String(row.Latitude || "").trim(),
         longitude: String(row.Longitude || "").trim(),
         waterPointType: String(row.WaterPointType || row["Type of Water Point"] || "").trim(),
-        caretakerName: String(row.CaretakerName || row["Caretaker Name"] || "").trim(),
-        sampleSourceId: String(row.SampleSource || row["Sample Source"] || "").trim(),
+        waterPointTypeOther: String(row.WaterPointTypeOther || row["Type of Water Point - Other"] || "").trim(),
         referenceId: ref ? ref.id : "",
         batchRef: ref ? ref.refNo : "",
         matrix: String(row.Matrix || "Drinking Water").trim(),
@@ -1660,22 +1651,25 @@ function SamplesTab({
     await setSamples(prev => prev.filter(s => s.id !== sample.id));
     notify?.(`${sample.sampleCode} deleted.`, "ok");
   }
-  async function handleBatchCreate(shared, rows) {
-    const ref = findReferenceById(references, shared.referenceId);
+  async function handleBatchCreate(shared, rows, ref) {
     let runningSamples = [...samples];
     let count = 0;
     for (const row of rows) {
       const sample = createSample({
         ...shared,
-        // legacy display fallback — the real source of truth is referenceId
-        batchRef: ref ? ref.refNo : "",
+        clientName: row.customerName,
+        siteLocation: row.village,
+        referenceId: ref.id,
+        batchRef: ref.refNo,
+        district: row.district,
+        upazila: row.upazila,
+        union: row.union,
         village: row.village,
         fatherHusbandName: row.fatherHusbandName,
         latitude: row.latitude,
         longitude: row.longitude,
         waterPointType: row.waterPointType,
-        caretakerName: row.caretakerName,
-        sampleSourceId: row.sampleSourceId,
+        waterPointTypeOther: row.waterPointTypeOther,
         numberOfSamples: 1
       }, runningSamples, session);
       runningSamples = [...runningSamples, sample];
@@ -1683,7 +1677,7 @@ function SamplesTab({
       count++;
     }
     setShowBatchForm(false);
-    notify?.(`${count} sample(s) registered under Reference ${ref ? referenceDisplayLabel(ref) : "(none)"}.`, "ok");
+    notify?.(`${count} sample(s) registered under Reference ${referenceDisplayLabel(ref)} (Tracking No. ${ref.trackingNo}).`, "ok");
   }
   const stats = sampleLifecycleStats(samples);
   function renderSampleRow(s, indented) {
@@ -1741,11 +1735,11 @@ function SamplesTab({
     className: "flex gap-2 mb-4 flex-wrap"
   }, [{
     k: "samples",
-    label: "Samples",
+    label: "Samples Registration",
     icon: "beaker"
   }, {
     k: "subBatches",
-    label: "Create and Edit Sub-Batches",
+    label: "Create Analytical Batch",
     icon: "flask"
   }].map(t => /*#__PURE__*/React.createElement("button", {
     key: t.k,
@@ -1828,7 +1822,7 @@ function SamplesTab({
   }, /*#__PURE__*/React.createElement("input", {
     value: q,
     onChange: e => setQ(e.target.value),
-    placeholder: "Search sample code, client, site…",
+    placeholder: "Search sample code, client, site, Tracking No…",
     className: "px-3 py-1.5 rounded text-sm",
     style: {
       border: `1px solid ${C.border}`,
@@ -1897,7 +1891,13 @@ function SamplesTab({
       style: {
         color: C.ink
       }
-    }, item.reference ? `${referenceSourceMeta(item.reference.sourceType).label}: ${referenceDisplayLabel(item.reference)}` : "Reference: (unknown)"), /*#__PURE__*/React.createElement("span", {
+    }, item.reference ? `${referenceSourceMeta(item.reference.sourceType).label}: ${referenceDisplayLabel(item.reference)}` : "Reference: (unknown)"), item.reference?.clientType && /*#__PURE__*/React.createElement("span", {
+      className: "text-[11px] px-2 py-0.5 rounded-full",
+      style: {
+        background: `${C.info}1A`,
+        color: C.info
+      }
+    }, item.reference.clientType), /*#__PURE__*/React.createElement("span", {
       className: "text-xs",
       style: {
         color: C.muted

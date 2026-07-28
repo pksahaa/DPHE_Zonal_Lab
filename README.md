@@ -513,3 +513,38 @@ otherwise.
   anywhere in the row to toggle selection.
 
 All four of last round's "still outstanding" items are done now.
+
+
+## Major registration redesign: Client Part / Sample Part, Tracking No.
+
+- **Sub-tabs renamed**: "Samples" → **Samples Registration**, "Create and
+  Edit Sub-Batches" → **Create Analytical Batch**.
+- **Registration split into two clearly divided sections, one window, no
+  popup**: **Client Part** (tracking info, filled once per registration/
+  upload) and **Sample Part** (per-sample site details, one row per
+  sample). The old ReferencePicker "+ New" separate-modal pattern is gone
+  from the registration flow — `ClientPartFields` (`21-sample-ui.js`) is
+  always inline now, in `BatchRegistrationForm`, the bulk-upload
+  `ImportTestPickerModal`, and (for consistency) `ReferencePicker`'s own
+  "+ New" modal too.
+- **Client Part fields**: Client Source (DPHE / Other Govt. organization /
+  Private organization / Walk-in-Client / Others — with a "please specify"
+  box for Others), Client Type (ADP / Non-ADP / Calamity / Monitoring /
+  VVIP / Others — same pattern), Ref/Memo No., Date, **Tracking No.**
+  (required, validated unique across every Client entry via
+  `isTrackingNoTaken()` in `19-reference-model.js`), Organization Name,
+  Client Name, Client Contact No., Notes.
+- **Sample Part fields** (per row): Customer Name, Father's/Husband's
+  Name, District, City Corp./Pouroshova/Upazilla, Ward/Union, Site Name,
+  Latitude, Longitude, Type of Water Point (Shallow TW/Deep TW/TSP/CTBT/
+  RPWS/PSF/RWH/Other — updated `WATER_POINT_TYPES` list with a "please
+  specify" box for Other). District/Upazilla/Union moved from
+  batch-shared to per-row, since a bulk upload can span more than one
+  administrative area.
+- **Samples list**: group header (Reference/Client Part entry) now shows
+  Tracking No. inline (folded into `referenceDisplayLabel()`) plus a
+  Client Type badge; search box also matches Tracking No. and Ref No.
+  Collapse/expand per batch group already existed — unchanged.
+- `submitClientPart()` is the one shared validate-and-create function used
+  everywhere a Client Part gets submitted, so the Tracking No. uniqueness
+  rule and field mapping only live in one place.
