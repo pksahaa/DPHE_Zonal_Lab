@@ -217,14 +217,7 @@ function InventoryTab({
     size: 14
   }), t.label))), invTab === "chemicals" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "flex justify-end gap-2 mb-3 flex-wrap"
-  }, /*#__PURE__*/React.createElement(Button, {
-    variant: "ghost",
-    size: "sm",
-    onClick: () => downloadTemplate("chemicals")
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "download",
-    size: 14
-  }), "Download Template"), /*#__PURE__*/React.createElement("input", {
+  }, /*#__PURE__*/React.createElement("input", {
     ref: chemUploadRef,
     type: "file",
     accept: ".xlsx,.xls,.csv",
@@ -240,7 +233,14 @@ function InventoryTab({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "upload",
     size: 14
-  }), "Import from Excel"), /*#__PURE__*/React.createElement(Button, {
+  }), "Import Data"), /*#__PURE__*/React.createElement(Button, {
+    variant: "ghost",
+    size: "sm",
+    onClick: () => downloadTemplate("chemicals")
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "download",
+    size: 14
+  }), "Download Template"), /*#__PURE__*/React.createElement(Button, {
     variant: "outline",
     size: "sm",
     onClick: () => setShowMasterList(true)
@@ -519,14 +519,7 @@ function InventoryTab({
     }),
     right: /*#__PURE__*/React.createElement("div", {
       className: "flex gap-2 flex-wrap"
-    }, /*#__PURE__*/React.createElement(Button, {
-      variant: "ghost",
-      size: "sm",
-      onClick: () => downloadTemplate("glassware")
-    }, /*#__PURE__*/React.createElement(Icon, {
-      name: "download",
-      size: 13
-    }), "Template"), /*#__PURE__*/React.createElement("input", {
+    }, /*#__PURE__*/React.createElement("input", {
       ref: glassUploadRef,
       type: "file",
       accept: ".xlsx,.xls,.csv",
@@ -542,7 +535,14 @@ function InventoryTab({
     }, /*#__PURE__*/React.createElement(Icon, {
       name: "upload",
       size: 13
-    }), "Import"), /*#__PURE__*/React.createElement(Button, {
+    }), "Import Data"), /*#__PURE__*/React.createElement(Button, {
+      variant: "ghost",
+      size: "sm",
+      onClick: () => downloadTemplate("glassware")
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: "download",
+      size: 13
+    }), "Download Template"), /*#__PURE__*/React.createElement(Button, {
       size: "sm",
       onClick: () => setShowAddGlass(true)
     }, /*#__PURE__*/React.createElement(Icon, {
@@ -732,14 +732,7 @@ function InventoryTab({
     onCancel: () => setMoveFormFor(null)
   }))), invTab === "equipment" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "flex justify-end gap-2 mb-3 flex-wrap"
-  }, /*#__PURE__*/React.createElement(Button, {
-    variant: "ghost",
-    size: "sm",
-    onClick: () => downloadTemplate("equipment")
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "download",
-    size: 14
-  }), "Download Template"), /*#__PURE__*/React.createElement("input", {
+  }, /*#__PURE__*/React.createElement("input", {
     ref: equipUploadRef,
     type: "file",
     accept: ".xlsx,.xls,.csv",
@@ -755,7 +748,14 @@ function InventoryTab({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "upload",
     size: 14
-  }), "Import from Excel"), /*#__PURE__*/React.createElement(Button, {
+  }), "Import Data"), /*#__PURE__*/React.createElement(Button, {
+    variant: "ghost",
+    size: "sm",
+    onClick: () => downloadTemplate("equipment")
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "download",
+    size: 14
+  }), "Download Template"), /*#__PURE__*/React.createElement(Button, {
     size: "sm",
     onClick: () => setShowAddEquip(true)
   }, /*#__PURE__*/React.createElement(Icon, {

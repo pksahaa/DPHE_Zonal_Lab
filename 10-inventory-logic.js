@@ -306,11 +306,14 @@ function readWorkbook(file, cb) {
 function downloadTemplate(kind) {
   let headers, rows;
   if (kind === "samples") {
-    // Note: Requested Tests are no longer a text column — after uploading this
-    // file you'll pick the tests (multi-select from Test Types) once for the
-    // whole batch, in-app.
-    headers = ["BatchRef", "ClientName", "SiteLocation", "District", "Upazila", "Union", "Village", "CaretakerName", "SampleSource", "Matrix", "CollectionDate", "CollectedBy", "ReceivedDate", "Priority", "Notes"];
-    rows = [["46.03.8500.106.16.004.25.1298", "Asst. Engineer, DPHE, Sadar Upazila, Rangpur", "Sreerampur", "Rangpur", "Sadar", "Chandanpat", "Sreerampur", "Md. Musha Mia", "STW-6", "Drinking Water", "2026-01-10", "Field Team A", "2026-01-12", "Routine", ""], ["46.03.8500.106.16.004.25.1298", "Asst. Engineer, DPHE, Sadar Upazila, Rangpur", "New Jummapara", "Rangpur", "Sadar", "City Corporation", "New Jummapara", "Md. Moynul Hossain", "STW-7", "Drinking Water", "2026-01-10", "Field Team A", "2026-01-12", "Routine", ""]];
+    // Columns come from SAMPLE_IMPORT_COLUMNS (00-core.js) — the same definition
+    // the Bulk Upload parser reads from — so the template can't drift out of
+    // sync with what's actually accepted on import again.
+    // Note: Requested Tests, Client Type/Source, and Tracking No./Reference are
+    // no longer per-row columns — after uploading this file you'll pick the
+    // tests and enter the Client/Reference details once, in-app.
+    headers = SAMPLE_IMPORT_COLUMNS.map(c => c.header);
+    rows = [["Md. Musha Mia", "Md. Abdul Karim", "Rangpur", "Sadar", "Chandanpat", "Sreerampur", "25.7439", "89.2752", "Shallow TW (STW)", "", "Drinking Water", "2026-01-10", "Field Team A", "2026-01-12", "Routine", ""], ["Md. Moynul Hossain", "Md. Rafiqul Islam", "Rangpur", "Sadar", "City Corporation", "New Jummapara", "25.7501", "89.2612", "Deep TW (DTW)", "", "Drinking Water", "2026-01-10", "Field Team A", "2026-01-12", "Routine", ""]];
   } else if (kind === "chemicals") {
     headers = ["ChemicalName", "Unit", "DateReceived", "ExpiryDate", "Amount", "Origin", "ReceivedFrom"];
     rows = [["Fe Standard", "ml", "2026-01-10", "2026-07-10", 500, "Central Reagent Store", "DPHE Water Safety Project"], ["HCl", "ml", "2026-01-10", "2026-12-31", 1000, "Local Chemical Supplier", "Zonal Office Procurement"]];

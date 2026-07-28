@@ -146,7 +146,7 @@ function AddTestTab({
     const interval = Number(matchedQcRule?.bracketingInterval) || 0;
     const total = bracketingRunLength;
     if (!total) {
-      notify?.("Pick a Sub-Batch (or enter No. of Field Samples) first so positions can be laid out.", "warn");
+      notify?.("Pick an Analytical Batch (or enter No. of Field Samples) first so positions can be laid out.", "warn");
       return;
     }
     const positions = new Set([1, total]);
@@ -1015,7 +1015,7 @@ function AddTestTab({
       setSelectedReferenceId("");
       setBatchModeTestId("");
     }
-  }, /*#__PURE__*/React.createElement("option", { value: "individual" }, "Individual Sample"), /*#__PURE__*/React.createElement("option", { value: "batch" }, "Batch (by Reference)"), /*#__PURE__*/React.createElement("option", { value: "subbatch" }, "Existing Sub-Batch")));
+  }, /*#__PURE__*/React.createElement("option", { value: "individual" }, "Individual Sample"), /*#__PURE__*/React.createElement("option", { value: "batch" }, "Batch (by Reference)"), /*#__PURE__*/React.createElement("option", { value: "subbatch" }, "Existing Analytical Batch")));
 
   const individualPickerField = selectionMode !== "individual" ? null : /*#__PURE__*/React.createElement("label", {
     className: "flex flex-col gap-1 text-xs",
@@ -1033,7 +1033,7 @@ function AddTestTab({
   const subBatchPickerField = selectionMode !== "subbatch" ? null : /*#__PURE__*/React.createElement("label", {
     className: "flex flex-col gap-1 text-xs",
     style: { color: C.muted }
-  }, "Select Sub-Batch (many samples, shared QC)", /*#__PURE__*/React.createElement("select", {
+  }, "Select Analytical Batch (many samples, shared QC)", /*#__PURE__*/React.createElement("select", {
     className: "border rounded px-2 py-1.5 text-sm",
     style: { borderColor: C.border },
     value: selectedSubBatchId,
@@ -1397,7 +1397,7 @@ function AddTestTab({
       size: 11
     }), res.error));
   }))), selectedSubBatch && resultParameters.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
-    title: "Individual Results per Sample (Sub-Batch)",
+    title: "Individual Results per Sample (Analytical Batch)",
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "chart",
       size: 16,
@@ -1938,7 +1938,7 @@ function TestRecordsTab({
     }, /*#__PURE__*/React.createElement(Icon, {
       name: "download",
       size: 13
-    }), "Export Excel"), /*#__PURE__*/React.createElement(Button, {
+    }), "Export Data"), /*#__PURE__*/React.createElement(Button, {
       size: "sm",
       variant: "outline",
       onClick: () => window.print()
@@ -1999,7 +1999,7 @@ function TestRecordsTab({
         }, /*#__PURE__*/React.createElement(Icon, {
           name: "clipboard",
           size: 11
-        }), " Sub-Batch: ", sb ? sb.label : r.subBatchLabel || "(deleted)");
+        }), " Analytical Batch: ", sb ? sb.label : r.subBatchLabel || "(deleted)");
       }
       const sample = r.sampleId ? (samples || []).find(s => s.id === r.sampleId) : null;
       return /*#__PURE__*/React.createElement(Badge, {
@@ -2085,7 +2085,7 @@ function TestRecordsTab({
       const headerLine = /*#__PURE__*/React.createElement("div", {
         style: { color: C.muted },
         className: "mb-1"
-      }, `Samples in this Sub-Batch (${r.memberResults.length})`);
+      }, `Samples in this Analytical Batch (${r.memberResults.length})`);
 
       // Union of every result-parameter name across all members, in first-seen
       // order — so the table has consistent columns even if some samples'

@@ -392,4 +392,91 @@ function Icon({
   }
 }
 
+// ---------------- Sample Register field definitions (single source of truth) ----------------
+// Shared by the Excel manifest template generator (downloadTemplate("samples") in
+// 10-inventory-logic.js) and the Bulk Upload parser (importSamples/confirmImportSamples
+// in 21-sample-ui.js), and mirrors the per-row fields collected in Register Sample's
+// "Sample Part" (BatchRegistrationForm rows, 21-sample-ui.js). Add/rename a field here
+// once and both the template and the parser stay in sync automatically.
+// `header` is the exact Excel column header written to the template AND read back on
+// import (with `aliases` accepted too, for backward compatibility with older sheets).
+const SAMPLE_IMPORT_COLUMNS = [{
+  key: "customerName",
+  header: "Customer Name",
+  aliases: ["CustomerName", "ClientName", "Client Name"],
+  required: true
+}, {
+  key: "fatherHusbandName",
+  header: "Father's/Husband's Name",
+  aliases: ["FatherHusbandName"]
+}, {
+  key: "district",
+  header: "District",
+  aliases: []
+}, {
+  key: "upazila",
+  header: "City Corp/Pouroshova/Upazilla",
+  aliases: ["Upazila", "Upazila/City Corporation"]
+}, {
+  key: "union",
+  header: "Ward/Union",
+  aliases: ["Union", "Union/Pourashava"]
+}, {
+  key: "siteName",
+  header: "Site Name",
+  aliases: ["SiteName", "SiteLocation", "Site Location"],
+  required: true
+}, {
+  key: "latitude",
+  header: "Latitude",
+  aliases: []
+}, {
+  key: "longitude",
+  header: "Longitude",
+  aliases: []
+}, {
+  key: "waterPointType",
+  header: "Type of Water Point",
+  aliases: ["WaterPointType"]
+}, {
+  key: "waterPointTypeOther",
+  header: "Type of Water Point - Other",
+  aliases: ["WaterPointTypeOther"]
+}, {
+  key: "matrix",
+  header: "Matrix",
+  aliases: []
+}, {
+  key: "collectionDate",
+  header: "CollectionDate",
+  aliases: ["Collection Date"]
+}, {
+  key: "collectedBy",
+  header: "CollectedBy",
+  aliases: ["Collected By"]
+}, {
+  key: "receivedDate",
+  header: "ReceivedDate",
+  aliases: ["Received Date"]
+}, {
+  key: "priority",
+  header: "Priority",
+  aliases: []
+}, {
+  key: "notes",
+  header: "Notes",
+  aliases: []
+}];
+// Looks up a field's value from a parsed Excel row, trying the canonical header first,
+// then every accepted alias — so old manifests and the current template both work.
+function readSampleImportField(row, colKey) {
+  const col = SAMPLE_IMPORT_COLUMNS.find(c => c.key === colKey);
+  if (!col) return "";
+  if (row[col.header] !== undefined && row[col.header] !== "") return row[col.header];
+  for (const alias of col.aliases) {
+    if (row[alias] !== undefined && row[alias] !== "") return row[alias];
+  }
+  return "";
+}
+
 // ---------------- Seed data ----------------

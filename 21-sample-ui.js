@@ -751,8 +751,7 @@ function SampleDetail({
       latitude: sample.latitude,
       longitude: sample.longitude,
       waterPointType: sample.waterPointType,
-      caretakerName: sample.caretakerName,
-      sampleSourceId: sample.sampleSourceId,
+      waterPointTypeOther: sample.waterPointTypeOther,
       batchRef: sample.batchRef,
       referenceId: sample.referenceId,
       matrix: sample.matrix,
@@ -820,7 +819,7 @@ function SampleDetail({
     style: {
       gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))"
     }
-  }, [["clientName", "Customer Name"], ["siteLocation", "Site / Location"], ["district", "District"], ["upazila", "Upazila / City Corp"], ["union", "Union / Pourashava"], ["village", "Location / Address"], ["fatherHusbandName", "Father's / Husband's Name"], ["latitude", "Latitude"], ["longitude", "Longitude"], ["caretakerName", "Caretaker Name"], ["sampleSourceId", "Sample Source ID"], ["collectedBy", "Collected By"], ["notes", "Notes"]].map(([field, fieldLabel]) => /*#__PURE__*/React.createElement("label", {
+  }, [["clientName", "Customer Name"], ["siteLocation", "Site / Location"], ["district", "District"], ["upazila", "Upazila / City Corp"], ["union", "Union / Pourashava"], ["village", "Site Name"], ["fatherHusbandName", "Father's / Husband's Name"], ["latitude", "Latitude"], ["longitude", "Longitude"], ["waterPointTypeOther", "Type of Water Point - Other"], ["collectedBy", "Collected By"], ["notes", "Notes"]].map(([field, fieldLabel]) => /*#__PURE__*/React.createElement("label", {
     key: field,
     className: "flex flex-col gap-0.5 text-xs",
     style: {
@@ -1426,7 +1425,7 @@ function BatchRegistrationForm({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "check",
     size: 13
-  }), "Register ", rows.filter(r => r.village.trim() || r.caretakerName.trim()).length, " Sample(s)")));
+  }), "Register ", rows.filter(r => r.village.trim() || r.customerName.trim()).length, " Sample(s)")));
 }
 
 // ---- shown right after a bulk manifest file is picked: choose which tests
@@ -1594,8 +1593,8 @@ function SamplesTab({
     readWorkbook(file, (err, rows) => {
       if (err) return notify("Could not read Excel file", "warn");
       const usableRows = rows.filter(row => {
-        const hasName = String(row.CustomerName || row["Customer Name"] || row.ClientName || row["Client Name"] || "").trim();
-        const hasSite = String(row.SiteName || row["Site Name"] || row.SiteLocation || row["Site Location"] || "").trim();
+        const hasName = String(readSampleImportField(row, "customerName")).trim();
+        const hasSite = String(readSampleImportField(row, "siteName")).trim();
         return hasName && hasSite;
       });
       const skipped = rows.length - usableRows.length;
@@ -1614,27 +1613,27 @@ function SamplesTab({
     let count = 0;
     for (const row of pendingImportRows) {
       const sample = createSample({
-        clientName: String(row.CustomerName || row["Customer Name"] || row.ClientName || row["Client Name"] || "").trim(),
-        siteLocation: String(row.SiteLocation || row["Site Location"] || row.SiteName || row["Site Name"] || "").trim(),
-        district: String(row.District || "").trim(),
-        upazila: String(row.Upazila || row["City Corp/Pouroshova/Upazilla"] || row["Upazila/City Corporation"] || "").trim(),
-        union: String(row.Union || row["Ward/Union"] || row["Union/Pourashava"] || "").trim(),
-        village: String(row.SiteName || row["Site Name"] || row.Village || row["Village/Ward"] || "").trim(),
-        fatherHusbandName: String(row.FatherHusbandName || row["Father's/Husband's Name"] || "").trim(),
-        latitude: String(row.Latitude || "").trim(),
-        longitude: String(row.Longitude || "").trim(),
-        waterPointType: String(row.WaterPointType || row["Type of Water Point"] || "").trim(),
-        waterPointTypeOther: String(row.WaterPointTypeOther || row["Type of Water Point - Other"] || "").trim(),
+        clientName: String(readSampleImportField(row, "customerName")).trim(),
+        siteLocation: String(readSampleImportField(row, "siteName")).trim(),
+        district: String(readSampleImportField(row, "district")).trim(),
+        upazila: String(readSampleImportField(row, "upazila")).trim(),
+        union: String(readSampleImportField(row, "union")).trim(),
+        village: String(readSampleImportField(row, "siteName")).trim(),
+        fatherHusbandName: String(readSampleImportField(row, "fatherHusbandName")).trim(),
+        latitude: String(readSampleImportField(row, "latitude")).trim(),
+        longitude: String(readSampleImportField(row, "longitude")).trim(),
+        waterPointType: String(readSampleImportField(row, "waterPointType")).trim(),
+        waterPointTypeOther: String(readSampleImportField(row, "waterPointTypeOther")).trim(),
         referenceId: ref ? ref.id : "",
         batchRef: ref ? ref.refNo : "",
-        matrix: String(row.Matrix || "Drinking Water").trim(),
-        collectionDate: String(row.CollectionDate || todayStr()),
-        collectedBy: String(row.CollectedBy || "").trim(),
-        receivedDate: String(row.ReceivedDate || todayStr()),
-        priority: String(row.Priority || "Routine").trim(),
+        matrix: String(readSampleImportField(row, "matrix") || "Drinking Water").trim(),
+        collectionDate: String(readSampleImportField(row, "collectionDate") || todayStr()),
+        collectedBy: String(readSampleImportField(row, "collectedBy")).trim(),
+        receivedDate: String(readSampleImportField(row, "receivedDate") || todayStr()),
+        priority: String(readSampleImportField(row, "priority") || "Routine").trim(),
         numberOfSamples: 1,
         requestedTests,
-        notes: String(row.Notes || "").trim()
+        notes: String(readSampleImportField(row, "notes")).trim()
       }, runningSamples, session);
       runningSamples = [...runningSamples, sample];
       await setSamples(prev => [...prev, sample], sample);
@@ -1774,14 +1773,7 @@ function SamplesTab({
     size: 13
   }), "Register Sample(s)"))), /*#__PURE__*/React.createElement("div", {
     className: "flex justify-end gap-2 mb-3 flex-wrap"
-  }, /*#__PURE__*/React.createElement(Button, {
-    variant: "ghost",
-    size: "sm",
-    onClick: () => downloadTemplate("samples")
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "download",
-    size: 14
-  }), "Download Manifest Template"), perms.canRegister && /*#__PURE__*/React.createElement("input", {
+  }, perms.canRegister && /*#__PURE__*/React.createElement("input", {
     ref: bulkUploadInputRef,
     type: "file",
     accept: ".xlsx,.xls,.csv",
@@ -1797,7 +1789,14 @@ function SamplesTab({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "upload",
     size: 14
-  }), "Bulk Upload Samples")), /*#__PURE__*/React.createElement("div", {
+  }), "Import Data"), /*#__PURE__*/React.createElement(Button, {
+    variant: "ghost",
+    size: "sm",
+    onClick: () => downloadTemplate("samples")
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "download",
+    size: 14
+  }), "Download Template")), /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-4 gap-3 mb-4"
   }, /*#__PURE__*/React.createElement(StatCard, {
     label: "Active Samples",
@@ -2292,7 +2291,7 @@ function SubBatchBuilder({
     placeholder: "Select a method"
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "Sub-Batch Label (optional)",
+    label: "Analytical Batch Label (optional)",
     value: label,
     onChange: v => setLabel(v),
     placeholder: "auto-generated if left blank"
@@ -2421,7 +2420,7 @@ function SubBatchBuilder({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "check",
     size: 13
-  }), editingSubBatchId ? "Save Changes" : `Create Sub-Batch (${selectedSampleIds.length})`));
+  }), editingSubBatchId ? "Save Changes" : `Create Analytical Batch (${selectedSampleIds.length})`));
 
   const pickerBlock = !selectedTestId ? /*#__PURE__*/React.createElement("div", {
     className: "text-xs p-3 rounded mt-3",
@@ -2440,7 +2439,7 @@ function SubBatchBuilder({
   }, "No pending samples match this Test Type", selectedReferenceIds.length ? " + Reference filter" : "", " (or all are already in another pending sub-batch).") : /*#__PURE__*/React.createElement("div", null, pickerHeaderRow, pickerListBox, mixedBatchWarning, actionRow));
 
   const createCard = /*#__PURE__*/React.createElement(SectionCard, {
-    title: editingSubBatchId ? "Edit Sub-Batch" : "Create a Sub-Batch",
+    title: editingSubBatchId ? "Edit Analytical Batch" : "Create an Analytical Batch",
     subtitle: "Group pending samples requesting the same test into one batch — shares one QC check, tested together in Add Test Record.",
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "flask",
@@ -2553,7 +2552,7 @@ function SubBatchBuilder({
   }
 
   const listCard = /*#__PURE__*/React.createElement(SectionCard, {
-    title: "All Sub-Batches",
+    title: "All Analytical Batches",
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "clipboard",
       size: 15

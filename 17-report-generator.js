@@ -41,7 +41,7 @@ function buildReportHtml({
     }).join("");
     return `<tr>
       <td>${s.sampleCode}</td>
-      <td>${s.caretakerName || "-"}</td>
+      <td>${s.clientName || "-"}</td>
       <td>${s.village || "-"}</td>
       <td>${s.union || "-"}</td>
       <td>${s.upazila || "-"}</td>
@@ -340,7 +340,7 @@ function CustomReportGeneratorPage({
       setReportSubBatchId("");
       setSelectedSampleIds([]);
     }
-  }, /*#__PURE__*/React.createElement("option", { value: "individual" }, "Individual Samples"), /*#__PURE__*/React.createElement("option", { value: "batch" }, "Batch (by Reference)"), /*#__PURE__*/React.createElement("option", { value: "subbatch" }, "Sub-Batch")));
+  }, /*#__PURE__*/React.createElement("option", { value: "individual" }, "Individual Samples"), /*#__PURE__*/React.createElement("option", { value: "batch" }, "Batch (by Reference)"), /*#__PURE__*/React.createElement("option", { value: "subbatch" }, "Analytical Batch")));
 
   const individualModeBlock = selectionMode !== "individual" ? null : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("input", {
     className: "border rounded px-2 py-1.5 text-xs w-full mb-2",
@@ -455,7 +455,7 @@ function CustomReportGeneratorPage({
       setSelectedSampleIds(sb.memberSampleIds || []);
       setSelectedTestIds([sb.testTypeId]);
     }
-  }, [/*#__PURE__*/React.createElement("option", { key: "none", value: "" }, "— Select a Sub-Batch —")].concat(reportSubBatchOptions.map(sb => /*#__PURE__*/React.createElement("option", {
+  }, [/*#__PURE__*/React.createElement("option", { key: "none", value: "" }, "— Select an Analytical Batch —")].concat(reportSubBatchOptions.map(sb => /*#__PURE__*/React.createElement("option", {
     key: sb.id,
     value: sb.id
   }, `${sb.label} — ${sb.testTypeName} (${(sb.memberSampleIds || []).length} samples) · ${sb.status}`)))), selectedReportSubBatch && /*#__PURE__*/React.createElement("div", {
