@@ -1176,7 +1176,166 @@ function SampleDetail({
   }, "Released by ", sample.resultRelease.releasedBy, " on ", new Date(sample.resultRelease.releasedAt).toLocaleString(), "."))));
 }
 
-// ---- manual batch registration: shared fields once + repeatable per-sample rows ----
+// ---- Step indicator for the two-step registration flow ----
+function RegistrationStepper({ step, step1Confirmed, onJumpToStep1 }) {
+  function pill(n, label, active, done, clickable) {
+    return /*#__PURE__*/React.createElement("button", {
+      key: n,
+      type: "button",
+      disabled: !clickable,
+      onClick: clickable ? onJumpToStep1 : undefined,
+      className: "flex items-center gap-2 rounded-full pl-1.5 pr-3 py-1 text-xs font-medium transition " + (clickable ? "cursor-pointer" : "cursor-default"),
+      style: {
+        background: active ? C.teal : done ? `${C.teal}14` : "#F1F5F9",
+        color: active ? "#fff" : done ? C.teal : "#94A3B8"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "grid place-items-center w-5 h-5 rounded-full text-[11px] font-semibold",
+      style: {
+        background: active ? "rgba(255,255,255,0.25)" : done ? C.teal : "#fff",
+        color: active ? "#fff" : done ? "#fff" : "#94A3B8",
+        border: !active && !done ? "1px solid #CBD5E1" : "none"
+      }
+    }, done ? /*#__PURE__*/React.createElement(Icon, { name: "check", size: 12 }) : n), label);
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3"
+  }, pill(1, "Client & Batch Info", step === 1, step1Confirmed && step !== 1, step === 2), /*#__PURE__*/React.createElement(Icon, {
+    name: "chevronRight",
+    size: 14,
+    color: "#CBD5E1"
+  }), pill(2, "Sample Details", step === 2, false, false));
+}
+
+// ---- Collapsed one-line summary of a confirmed Step 1, with an Edit link ----
+function ClientPartSummaryBar({ clientPart, selectedTests, onEdit }) {
+  const clientLabel = clientPart.organizationName || clientPart.contactPerson || "—";
+  const testNames = selectedTests.map(t => t.testTypeName).join(", ") || "None selected";
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex items-start justify-between gap-4 rounded-xl px-4 py-3 mb-5",
+    style: { background: `${C.teal}0D`, border: "1px solid border-slate-200".replace("border-slate-200", "#E2E8F0") }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap items-center gap-x-2 gap-y-1 text-sm"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-semibold",
+    style: { color: C.ink }
+  }, clientLabel), /*#__PURE__*/React.createElement("span", { style: { color: "#CBD5E1" } }, "\u2022"), /*#__PURE__*/React.createElement("span", {
+    style: { color: C.muted }
+  }, "Tracking #", clientPart.trackingNo || "—"), clientPart.refNo && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", { style: { color: "#CBD5E1" } }, "\u2022"), /*#__PURE__*/React.createElement("span", { style: { color: C.muted } }, "Memo #", clientPart.refNo)), /*#__PURE__*/React.createElement("span", { style: { color: "#CBD5E1" } }, "\u2022"), /*#__PURE__*/React.createElement("span", {
+    style: { color: C.muted }
+  }, "Tests: ", testNames)), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onEdit,
+    className: "shrink-0 flex items-center gap-1 text-xs font-medium",
+    style: { color: C.teal }
+  }, /*#__PURE__*/React.createElement(Icon, { name: "edit", size: 12 }), "Edit"));
+}
+
+// ---- One clean card per sample (replaces the cramped 4-line flex rows) ----
+function SampleEntryCard({ index, row, updateRow, onDuplicate, onRemove, canRemove }) {
+  const gridCls = "grid gap-3";
+  const gridStyle = { gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" };
+  const waterPointOptions = [{ value: "", label: "— Type of Water Point —" }].concat(WATER_POINT_TYPES.map(wt => ({ value: wt, label: wt })));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "rounded-xl p-4 border border-slate-200"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mb-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "grid place-items-center w-6 h-6 rounded-full text-xs font-semibold",
+    style: { background: "#F1F5F9", color: C.muted }
+  }, index + 1), /*#__PURE__*/React.createElement("span", {
+    className: "text-sm font-semibold",
+    style: { color: C.ink }
+  }, "Sample ", index + 1)), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onDuplicate,
+    title: "Duplicate this sample",
+    style: { color: C.muted }
+  }, /*#__PURE__*/React.createElement(Icon, { name: "clipboard", size: 14 })), canRemove && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: onRemove,
+    title: "Remove this sample",
+    style: { color: C.warn }
+  }, /*#__PURE__*/React.createElement(Icon, { name: "trash", size: 14 })))), /*#__PURE__*/React.createElement("div", {
+    className: gridCls,
+    style: gridStyle
+  }, /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Customer Name",
+    value: row.customerName,
+    onChange: v => updateRow("customerName", v)
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Father's / Husband's Name",
+    value: row.fatherHusbandName,
+    onChange: v => updateRow("fatherHusbandName", v)
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Site Name",
+    value: row.village,
+    onChange: v => updateRow("village", v)
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "District",
+    value: row.district,
+    onChange: v => updateRow("district", v)
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "City Corp. / Pouroshova / Upazilla",
+    value: row.upazila,
+    onChange: v => updateRow("upazila", v)
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Ward / Union",
+    value: row.union,
+    onChange: v => updateRow("union", v)
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Latitude",
+    value: row.latitude,
+    onChange: v => updateRow("latitude", v)
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Longitude",
+    value: row.longitude,
+    onChange: v => updateRow("longitude", v)
+  }), /*#__PURE__*/React.createElement(SelectField, {
+    simple: true,
+    label: "Type of Water Point",
+    value: row.waterPointType,
+    onChange: v => updateRow("waterPointType", v),
+    options: waterPointOptions
+  }), row.waterPointType === "Other (Pls. Specify)" && /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "Water Point Type — Please Specify",
+    value: row.waterPointTypeOther,
+    onChange: v => updateRow("waterPointTypeOther", v)
+  })));
+}
+
+const MAX_BATCH_ROWS = 5;
+function emptySampleRow() {
+  return {
+    customerName: "",
+    fatherHusbandName: "",
+    district: "",
+    upazila: "",
+    union: "",
+    village: "",
+    latitude: "",
+    longitude: "",
+    waterPointType: "",
+    waterPointTypeOther: ""
+  };
+}
+
+// ---- manual batch registration: Step 1 (Client & Batch Info, collapses once
+// confirmed) then Step 2 (one card per sample, 1-5 rows) — sticky header/
+// footer so Cancel/Register are always reachable regardless of scroll ----
 function BatchRegistrationForm({
   testTypes,
   references,
@@ -1186,6 +1345,8 @@ function BatchRegistrationForm({
   onCreate,
   onClose
 }) {
+  const [step, setStep] = React.useState(1);
+  const [step1Confirmed, setStep1Confirmed] = React.useState(false);
   const [shared, setShared] = React.useState({
     matrix: "Drinking Water",
     collectionDate: todayStr(),
@@ -1197,19 +1358,9 @@ function BatchRegistrationForm({
     ...CLIENT_PART_EMPTY
   });
   const [selectedTests, setSelectedTests] = React.useState([]);
-  const [rows, setRows] = React.useState([{
-    customerName: "",
-    fatherHusbandName: "",
-    district: "",
-    upazila: "",
-    union: "",
-    village: "",
-    latitude: "",
-    longitude: "",
-    waterPointType: "",
-    waterPointTypeOther: ""
-  }]);
+  const [rows, setRows] = React.useState([emptySampleRow()]);
   const [err, setErr] = React.useState("");
+
   function toggleTest(t) {
     setSelectedTests(prev => prev.some(x => x.testTypeId === t.id) ? prev.filter(x => x.testTypeId !== t.id) : [...prev, {
       testTypeId: t.id,
@@ -1217,33 +1368,41 @@ function BatchRegistrationForm({
     }]);
   }
   function updateRow(i, field, value) {
-    setRows(prev => prev.map((r, idx) => idx === i ? {
-      ...r,
-      [field]: value
-    } : r));
+    setRows(prev => prev.map((r, idx) => idx === i ? { ...r, [field]: value } : r));
   }
   function addRow() {
-    setRows(prev => [...prev, {
-      customerName: "",
-      fatherHusbandName: "",
-      district: "",
-      upazila: "",
-      union: "",
-      village: "",
-      latitude: "",
-      longitude: "",
-      waterPointType: "",
-      waterPointTypeOther: ""
-    }]);
+    setRows(prev => prev.length >= MAX_BATCH_ROWS ? prev : [...prev, emptySampleRow()]);
+  }
+  function duplicateRow(i) {
+    setRows(prev => [...prev.slice(0, i + 1), { ...prev[i] }, ...prev.slice(i + 1)].slice(0, MAX_BATCH_ROWS));
   }
   function removeRow(i) {
     setRows(prev => prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev);
   }
-  function duplicateLastRow() {
-    setRows(prev => [...prev, {
-      ...prev[prev.length - 1]
-    }]);
+
+  // Local, side-effect-free validation gate for "Continue to Sample Details" —
+  // the real uniqueness check + Reference creation still happens exactly
+  // once, in submit() below via the shared submitClientPart(), same as
+  // every other Client Part entry point in the app.
+  function validateStep1() {
+    if (!(clientPart.trackingNo || "").trim()) return "Tracking No. is required.";
+    if (!clientPart.sourceType) return "Client Source is required.";
+    if (clientPart.sourceType === "others" && !(clientPart.sourceTypeOther || "").trim()) return "Please specify the Client Source.";
+    if (clientPart.clientType === "Others (Pls Specify)" && !(clientPart.clientTypeOther || "").trim()) return "Please specify the Client Type.";
+    if (selectedTests.length === 0) return "Select at least one requested test.";
+    return "";
   }
+  function goToStep2() {
+    const validationError = validateStep1();
+    if (validationError) {
+      setErr(validationError);
+      return;
+    }
+    setErr("");
+    setStep1Confirmed(true);
+    setStep(2);
+  }
+
   function submit() {
     if (rows.every(r => !r.customerName.trim() && !r.village.trim())) {
       setErr("Fill in at least one sample row (Customer Name or Site Name).");
@@ -1252,7 +1411,10 @@ function BatchRegistrationForm({
     const validRows = rows.filter(r => r.customerName.trim() || r.village.trim());
     const result = submitClientPart(clientPart, references, session);
     if (result.error) {
+      // Tracking No. / Client Source live in Step 1 — jump back so the
+      // person can see and fix the field the error refers to.
       setErr(result.error);
+      setStep(1);
       return;
     }
     setReferences(prev => [...prev, result.reference], result.reference);
@@ -1261,42 +1423,64 @@ function BatchRegistrationForm({
       requestedTests: selectedTests
     }, validRows, result.reference);
   }
-  return /*#__PURE__*/React.createElement(Modal, {
-    title: "Register Sample(s) — shared info once, per-sample rows below (matches the bulk upload sheet)",
-    onClose: onClose,
-    wide: true
+
+  const validCount = rows.filter(r => r.village.trim() || r.customerName.trim()).length;
+
+  return /*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 flex items-center justify-center p-4 z-50",
+    style: { background: "rgba(10,30,32,0.45)" }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "w-full rounded-2xl flex flex-col overflow-hidden shadow-xl",
+    style: { background: "#fff", maxWidth: "900px", maxHeight: "90vh" }
+  },
+  // ---- sticky header: title + stepper ----
+  /*#__PURE__*/React.createElement("div", {
+    className: "shrink-0 flex items-center justify-between px-6 py-4 border-b border-slate-200"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h3", {
+    className: "text-base font-semibold",
+    style: { color: C.ink }
+  }, "Register Samples"), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs mt-0.5",
+    style: { color: C.muted }
+  }, "One Client Part, then one row per physical sample.")), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-4"
+  }, /*#__PURE__*/React.createElement(RegistrationStepper, {
+    step: step,
+    step1Confirmed: step1Confirmed,
+    onJumpToStep1: () => setStep(1)
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: { color: C.muted }
+  }, /*#__PURE__*/React.createElement(Icon, { name: "x", size: 18 })))),
+  // ---- scrollable content ----
+  /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 overflow-y-auto px-6 py-5"
   }, err && /*#__PURE__*/React.createElement("div", {
-    className: "text-xs p-2 rounded mb-3",
-    style: {
-      background: C.warnBg,
-      color: C.warn
-    }
-  }, err), /*#__PURE__*/React.createElement("div", {
-    className: "text-xs font-semibold mb-1.5",
-    style: {
-      color: C.ink
-    }
-  }, "Client Part — for tracking (one entry covers this whole registration)"), /*#__PURE__*/React.createElement("div", {
-    className: "mb-4 p-3 rounded",
-    style: { background: C.bg, border: `1px solid ${C.border}` }
-  }, /*#__PURE__*/React.createElement(ClientPartFields, {
+    className: "text-xs p-2 rounded mb-4",
+    style: { background: C.warnBg, color: C.warn }
+  }, err), step === 1 && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-6"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-sm font-semibold mb-3",
+    style: { color: C.ink }
+  }, "Client Part"), /*#__PURE__*/React.createElement(ClientPartFields, {
     form: clientPart,
     setForm: setClientPart
   })), /*#__PURE__*/React.createElement("div", {
-    className: "text-xs font-semibold mb-1.5",
+    className: "h-px",
+    style: { background: "#E2E8F0" }
+  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-sm font-semibold mb-3",
     style: { color: C.ink }
-  }, "Batch Defaults (Sample Type, dates — still editable per row where relevant)"), /*#__PURE__*/React.createElement("div", {
-    className: "grid gap-3 mb-3",
+  }, "Batch Defaults"), /*#__PURE__*/React.createElement("div", {
+    className: "grid gap-3",
     style: { gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }
   }, /*#__PURE__*/React.createElement(SelectField, {
     simple: true,
     label: "Sample Type",
     value: shared.matrix,
     onChange: v => setShared({ ...shared, matrix: v }),
-    options: ["Drinking Water", "Surface Water", "Wastewater", "Groundwater", "Other"].map(m => ({
-      value: m,
-      label: m
-    }))
+    options: ["Drinking Water", "Surface Water", "Wastewater", "Groundwater", "Other"].map(m => ({ value: m, label: m }))
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
     label: "Collection Date",
@@ -1314,119 +1498,85 @@ function BatchRegistrationForm({
     label: "Collected By",
     value: shared.collectedBy,
     onChange: v => setShared({ ...shared, collectedBy: v })
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "text-xs font-semibold mb-1.5",
-    style: {
-      color: C.ink
-    }
-  }, "Requested Tests (applies to every sample)"), /*#__PURE__*/React.createElement("div", {
-    className: "flex flex-wrap gap-2 mb-4"
-  }, testTypes.map(t => /*#__PURE__*/React.createElement("label", {
-    key: t.id,
-    className: "flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer",
-    style: {
-      border: `1px solid ${selectedTests.some(x => x.testTypeId === t.id) ? C.teal : C.border}`,
-      background: selectedTests.some(x => x.testTypeId === t.id) ? `${C.teal}14` : "transparent"
-    }
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "checkbox",
-    checked: selectedTests.some(x => x.testTypeId === t.id),
-    onChange: () => toggleTest(t)
-  }), t.name))), /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-between mb-1.5"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "text-xs font-semibold",
-    style: {
-      color: C.ink
-    }
-  }, "Per-Sample Rows (", rows.length, ") — only what differs per sample"), /*#__PURE__*/React.createElement("div", {
-    className: "flex gap-2"
-  }, /*#__PURE__*/React.createElement(Button, {
-    variant: "ghost",
-    size: "sm",
-    onClick: duplicateLastRow
-  }, "Duplicate Last Row"), /*#__PURE__*/React.createElement(Button, {
-    variant: "outline",
-    size: "sm",
-    onClick: addRow
-  }, "+ Add Row"))), /*#__PURE__*/React.createElement("div", {
-    className: "grid gap-2 max-h-72 overflow-y-auto p-1"
-  }, rows.map((row, i) => {
-    // Small helper so each Sample Part field is one line instead of a
-    // repeated 6-line React.createElement("input", {...}) block — much
-    // easier to verify than the previous fully-inlined version.
-    function field(key, placeholder, extraStyle) {
-      return /*#__PURE__*/React.createElement("input", {
-        key: key,
-        className: "border rounded px-2 py-1 text-xs flex-1",
-        style: Object.assign({ borderColor: C.border }, extraStyle || {}),
-        placeholder: placeholder,
-        value: row[key] || "",
-        onChange: e => updateRow(i, key, e.target.value)
-      });
-    }
-    const waterPointSelect = /*#__PURE__*/React.createElement("select", {
-      key: "waterPointType",
-      className: "border rounded px-2 py-1 text-xs flex-1",
-      style: { borderColor: C.border },
-      value: row.waterPointType,
-      onChange: e => updateRow(i, "waterPointType", e.target.value)
-    }, [/*#__PURE__*/React.createElement("option", {
-      key: "none",
-      value: ""
-    }, "— Type of Water Point —")].concat(WATER_POINT_TYPES.map(wt => /*#__PURE__*/React.createElement("option", {
-      key: wt,
-      value: wt
-    }, wt))));
-    const removeBtn = /*#__PURE__*/React.createElement("button", {
-      key: "remove",
-      onClick: () => removeRow(i),
-      title: "Remove row",
-      style: { color: C.warn }
-    }, /*#__PURE__*/React.createElement(Icon, {
-      name: "trash",
-      size: 14
-    }));
-    const rowNumber = /*#__PURE__*/React.createElement("span", {
-      key: "num",
-      className: "text-xs w-5",
-      style: { color: C.muted }
-    }, i + 1);
-    const line1 = /*#__PURE__*/React.createElement("div", {
-      key: "l1",
-      className: "flex gap-2 items-center"
-    }, rowNumber, field("customerName", "Customer Name"), field("fatherHusbandName", "Father's / Husband's Name"), field("village", "Site Name"), removeBtn);
-    const line2 = /*#__PURE__*/React.createElement("div", {
-      key: "l2",
-      className: "flex gap-2 items-center pl-7"
-    }, field("district", "District"), field("upazila", "City Corp. / Pouroshova / Upazilla"), field("union", "Ward / Union"));
-    const line3 = /*#__PURE__*/React.createElement("div", {
-      key: "l3",
-      className: "flex gap-2 items-center pl-7"
-    }, field("latitude", "Latitude"), field("longitude", "Longitude"), waterPointSelect);
-    const line4 = row.waterPointType === "Other (Pls. Specify)" ? /*#__PURE__*/React.createElement("div", {
-      key: "l4",
-      className: "flex gap-2 items-center pl-7"
-    }, field("waterPointTypeOther", "Water Point Type — Please Specify")) : null;
-    return /*#__PURE__*/React.createElement("div", {
-      key: i,
-      className: "grid gap-1 pb-1.5",
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "h-px",
+    style: { background: "#E2E8F0" }
+  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "text-sm font-semibold mb-1",
+    style: { color: C.ink }
+  }, "Requested Tests"), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs mb-3",
+    style: { color: C.muted }
+  }, "Applies to every sample in this batch."), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-2"
+  }, testTypes.map(t => {
+    const on = selectedTests.some(x => x.testTypeId === t.id);
+    return /*#__PURE__*/React.createElement("button", {
+      key: t.id,
+      type: "button",
+      onClick: () => toggleTest(t),
+      className: "px-3 py-1.5 rounded-full text-xs font-medium transition",
       style: {
-        borderBottom: `1px solid ${C.border}`
+        border: `1px solid ${on ? C.teal : "#E2E8F0"}`,
+        background: on ? C.teal : "transparent",
+        color: on ? "#fff" : C.muted
       }
-    }, line1, line2, line3, line4);
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "mt-4 flex justify-end gap-2"
+    }, t.name);
+  })))), step === 2 && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement(ClientPartSummaryBar, {
+    clientPart: clientPart,
+    selectedTests: selectedTests,
+    onEdit: () => setStep(1)
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-sm font-semibold",
+    style: { color: C.ink }
+  }, "Sample Details ", /*#__PURE__*/React.createElement("span", {
+    className: "font-normal",
+    style: { color: C.muted }
+  }, "(", rows.length, ")")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: addRow,
+    disabled: rows.length >= MAX_BATCH_ROWS,
+    className: "flex items-center gap-1 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed",
+    style: { color: C.teal }
+  }, /*#__PURE__*/React.createElement(Icon, { name: "plus", size: 13 }), "Add Another Sample")), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3"
+  }, rows.map((row, i) => /*#__PURE__*/React.createElement(SampleEntryCard, {
+    key: i,
+    index: i,
+    row: row,
+    updateRow: (field, v) => updateRow(i, field, v),
+    onDuplicate: () => duplicateRow(i),
+    onRemove: () => removeRow(i),
+    canRemove: rows.length > 1
+  }))), rows.length >= MAX_BATCH_ROWS && /*#__PURE__*/React.createElement("p", {
+    className: "text-xs",
+    style: { color: C.muted }
+  }, MAX_BATCH_ROWS, " samples is the manual-entry limit — use the bulk manifest upload for larger batches."))),
+  // ---- sticky footer: Cancel + Back + Continue/Register ----
+  /*#__PURE__*/React.createElement("div", {
+    className: "shrink-0 flex items-center justify-between px-6 py-4 border-t border-slate-200"
   }, /*#__PURE__*/React.createElement(Button, {
     variant: "outline",
     onClick: onClose
-  }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
+  }, "Cancel"), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, step === 2 && /*#__PURE__*/React.createElement(Button, {
+    variant: "ghost",
+    onClick: () => setStep(1)
+  }, "Back"), step === 1 ? /*#__PURE__*/React.createElement(Button, {
+    onClick: goToStep2
+  }, "Continue to Sample Details", /*#__PURE__*/React.createElement(Icon, { name: "chevronRight", size: 14 })) : /*#__PURE__*/React.createElement(Button, {
     onClick: submit
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "check",
     size: 13
-  }), "Register ", rows.filter(r => r.village.trim() || r.customerName.trim()).length, " Sample(s)")));
+  }), "Register ", validCount, " Sample(s)")))));
 }
+
 
 // ---- shown right after a bulk manifest file is picked: choose which tests
 // apply to every row in that file (checkbox multi-select, same pattern as

@@ -548,3 +548,46 @@ All four of last round's "still outstanding" items are done now.
 - `submitClientPart()` is the one shared validate-and-create function used
   everywhere a Client Part gets submitted, so the Tracking No. uniqueness
   rule and field mapping only live in one place.
+
+
+## Register Samples modal — progressive-disclosure redesign
+
+`BatchRegistrationForm` (`21-sample-ui.js`) rebuilt as an explicit two-step
+flow instead of one long scroll with a nested Client Part box sitting on
+top of cramped per-sample rows:
+
+- **Step 1 — Client & Batch Info**: `ClientPartFields` (unchanged) plus
+  Batch Defaults and Requested Tests, with nothing about individual
+  samples visible yet. "Continue to Sample Details" runs a local,
+  side-effect-free check (Tracking No. present, "please specify" fields,
+  at least one test selected) — the real uniqueness check and Reference
+  creation still happen exactly once, in `submitClientPart()` at final
+  submit, same as before.
+- Once confirmed, Step 1 collapses into a one-line **`ClientPartSummaryBar`**
+  (client name · Tracking No. · Ref No. · requested tests) with an Edit
+  link that jumps straight back — Sample Details gets the modal's full
+  width instead of competing with the Client Part form for space.
+- **Step 2 — Sample Details**: each sample is now its own **`SampleEntryCard`**
+  (max 5 — `MAX_BATCH_ROWS` — with a note pointing to the bulk manifest
+  upload beyond that) instead of a 4-line flex-wrap row of tiny inputs.
+  Fields keep their existing names/order (Customer Name → Father's/
+  Husband's Name → Site Name → District → Upazilla → Union → Lat/Long →
+  Water Point Type), just laid out in a readable grid per card. Per-card
+  **duplicate** (inserts a copy directly after that row, not just
+  appended at the end) and **remove** actions replace the old "Duplicate
+  Last Row" button.
+- If final submit's `submitClientPart()` call does return an error (e.g.
+  Tracking No. turned out to be taken), the form now automatically jumps
+  back to Step 1 so the person lands on the field the error refers to,
+  instead of showing the error while Step 2's sample cards are still on
+  screen.
+- Modal shell is bespoke (not the shared `Modal` component) so it can be
+  wider (`max-width: 900px`) and have a sticky header (title + step
+  indicator) and sticky footer (Cancel / Back / Continue-or-Register)
+  that stay reachable regardless of how many sample cards are open —
+  the shared `Modal` doesn't support either.
+- New small presentational components, all local to `21-sample-ui.js`:
+  `RegistrationStepper`, `ClientPartSummaryBar`, `SampleEntryCard`. No
+  changes to `20-sample-model.js`, `19-reference-model.js`, or any other
+  file — `onCreate(shared, validRows, reference)`'s shape is identical to
+  before, so nothing downstream needed touching.
