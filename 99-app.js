@@ -68,16 +68,6 @@ function LabApp({
   }
   const [invTab, setInvTab] = useState("equipment");
   const [reportTab, setReportTab] = useState("executive");
-  // Header used to line up 6 always-visible controls (lang, theme, backend
-  // settings, lab identity, user pill, logout) — crowded on anything less
-  // than a wide desktop. Backend/Lab Identity now live behind one
-  // "Settings" popover, and the user pill + Log Out behind one user menu.
-  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
-  function closeHeaderMenus() {
-    setSettingsMenuOpen(false);
-    setUserMenuOpen(false);
-  }
   const [theme, setTheme] = useState(() => loadKey("theme", "light"));
   const [lang, setLangState] = useState(() => loadKey("lang", "en"));
   applyTheme(theme);
@@ -275,13 +265,13 @@ function LabApp({
       color: "#BFE3E0"
     }
   }, t("appSub"))), /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center gap-2 text-xs no-print relative",
+    className: "flex items-center gap-2 text-xs no-print",
     style: {
       color: "#DDF2F0"
     }
   }, /*#__PURE__*/React.createElement("button", {
     onClick: toggleLang,
-    className: "flex items-center gap-1 px-2 py-1 rounded hover:bg-white/10 transition-colors",
+    className: "flex items-center gap-1 px-2 py-1 rounded",
     style: {
       background: "rgba(255,255,255,0.12)",
       color: "#fff"
@@ -292,7 +282,7 @@ function LabApp({
     size: 13
   }), lang === "en" ? "বাংলা" : "EN"), /*#__PURE__*/React.createElement("button", {
     onClick: toggleTheme,
-    className: "flex items-center gap-1 px-2 py-1 rounded hover:bg-white/10 transition-colors",
+    className: "flex items-center gap-1 px-2 py-1 rounded",
     style: {
       background: "rgba(255,255,255,0.12)",
       color: "#fff"
@@ -301,136 +291,53 @@ function LabApp({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: theme === "dark" ? "sun" : "moon",
     size: 13
-  })),
-  /* ---- Settings popover: Backend Settings + Lab Identity ---- */
-  /*#__PURE__*/React.createElement("div", {
-    className: "relative"
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => {
-      setUserMenuOpen(false);
-      setSettingsMenuOpen(o => !o);
-    },
-    className: "flex items-center gap-1 px-2 py-1 rounded hover:bg-white/10 transition-colors",
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setShowBackendSettings(true),
+    className: "flex items-center gap-1 px-2 py-1 rounded",
     style: {
-      background: settingsMenuOpen ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.12)",
+      background: "rgba(255,255,255,0.12)",
       color: "#fff"
     },
-    title: "Settings"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "wrench",
-    size: 13
-  }), "Settings", /*#__PURE__*/React.createElement(Icon, {
-    name: "chevronDown",
-    size: 11
-  })), settingsMenuOpen && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
-    className: "fixed inset-0",
-    style: {
-      zIndex: 40
-    },
-    onClick: closeHeaderMenus
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "absolute right-0 top-full mt-1.5 w-52 rounded-lg shadow-xl py-1 text-left",
-    style: {
-      background: C.card,
-      border: `1px solid ${C.border}`,
-      zIndex: 50
-    }
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => {
-      setShowBackendSettings(true);
-      closeHeaderMenus();
-    },
-    className: "w-full flex items-center gap-2 text-left px-3 py-2 text-xs hover:bg-black/5",
-    style: {
-      color: C.ink
-    }
+    title: "Backend settings"
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "link",
-    size: 13,
-    color: C.muted
-  }), "Backend Settings"), /*#__PURE__*/React.createElement("button", {
-    onClick: () => {
-      setShowLabIdentitySettings(true);
-      closeHeaderMenus();
-    },
-    className: "w-full flex items-center gap-2 text-left px-3 py-2 text-xs hover:bg-black/5",
+    size: 13
+  }), "Backend"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setShowLabIdentitySettings(true),
+    className: "flex items-center gap-1 px-2 py-1 rounded",
     style: {
-      color: C.ink
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "clipboard",
-    size: 13,
-    color: C.muted
-  }), "Lab Identity / Letterhead")))),
-  /* ---- User popover: role + Log Out ---- */
-  /*#__PURE__*/React.createElement("div", {
-    className: "relative"
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => {
-      setSettingsMenuOpen(false);
-      setUserMenuOpen(o => !o);
-    },
-    className: "flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded hover:bg-white/10 transition-colors",
-    style: {
-      background: userMenuOpen ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.12)",
+      background: "rgba(255,255,255,0.12)",
       color: "#fff"
     },
-    title: "Account"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "rounded-full p-1",
+    title: "Lab identity / report letterhead"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "clipboard",
+    size: 13
+  }), "Lab Identity"), /*#__PURE__*/React.createElement("span", {
+    className: "rounded-full p-1.5",
     style: {
-      background: "rgba(255,255,255,0.2)"
+      background: "rgba(255,255,255,0.15)"
     }
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "user",
-    size: 12,
+    size: 14,
     color: "#fff"
-  })), /*#__PURE__*/React.createElement("span", {
-    className: "max-w-[110px] truncate"
-  }, session.name), /*#__PURE__*/React.createElement(Icon, {
-    name: "chevronDown",
-    size: 11
-  })), userMenuOpen && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
-    className: "fixed inset-0",
+  })), /*#__PURE__*/React.createElement("span", null, session.name, " ", /*#__PURE__*/React.createElement("span", {
     style: {
-      zIndex: 40
+      color: "#9FCFCB"
+    }
+  }, "· ", session.role)), /*#__PURE__*/React.createElement("button", {
+    onClick: onLogout,
+    className: "flex items-center gap-1 px-2 py-1 rounded",
+    style: {
+      background: "rgba(255,255,255,0.12)",
+      color: "#fff"
     },
-    onClick: closeHeaderMenus
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "absolute right-0 top-full mt-1.5 w-56 rounded-lg shadow-xl py-1 text-left",
-    style: {
-      background: C.card,
-      border: `1px solid ${C.border}`,
-      zIndex: 50
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "px-3 py-2",
-    style: {
-      borderBottom: `1px solid ${C.border}`
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "text-sm font-semibold",
-    style: {
-      color: C.ink
-    }
-  }, session.name), /*#__PURE__*/React.createElement("div", {
-    className: "text-xs",
-    style: {
-      color: C.muted
-    }
-  }, session.role)), /*#__PURE__*/React.createElement("button", {
-    onClick: () => {
-      closeHeaderMenus();
-      onLogout();
-    },
-    className: "w-full flex items-center gap-2 text-left px-3 py-2 text-xs hover:bg-black/5 mt-1",
-    style: {
-      color: C.warn
-    }
+    title: "Log out"
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "logout",
     size: 13
-  }), t("logOut"))))))), /*#__PURE__*/React.createElement("div", {
+  }), t("logOut")))), /*#__PURE__*/React.createElement("div", {
     className: "max-w-6xl mx-auto px-5 flex gap-1 flex-wrap no-print"
   }, [{
     k: "dashboard",
@@ -470,11 +377,10 @@ function LabApp({
       if (t.k !== "addTest") setEditingRecord(null);
       setTab(t.k);
     },
-    className: `flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium rounded-t border-b-2 transition-colors ${tab === t.k ? "" : "hover:bg-white/10 hover:text-white"}`,
+    className: "flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium rounded-t",
     style: {
       color: tab === t.k ? C.tealDark : "#DDF2F0",
-      background: tab === t.k ? C.bg : "transparent",
-      borderBottomColor: tab === t.k ? C.mint : "transparent"
+      background: tab === t.k ? C.bg : "transparent"
     }
   }, /*#__PURE__*/React.createElement(Icon, {
     name: t.icon,

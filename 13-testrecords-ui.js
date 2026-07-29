@@ -821,7 +821,7 @@ function AddTestTab({
         className: "border rounded px-2 py-1.5 text-sm w-40 text-center",
         style: {
           borderColor: C.border,
-          background: C.bg,
+          background: "#F3FAF9",
           color: C.muted
         },
         title: countTitle === "dilution" ? "No. of Samples Requiring Dilution" : `driven by: ${sampleSourceLabel[item.sampleSource] || "std+field"}`
@@ -929,7 +929,7 @@ function AddTestTab({
         className: "border rounded px-2 py-1.5 text-sm flex items-center gap-1.5 font-medium",
         style: {
           borderColor: C.border,
-          background: C.bg,
+          background: "#F3FAF9",
           color: C.ink
         }
       }, /*#__PURE__*/React.createElement(Icon, {
@@ -1094,7 +1094,7 @@ function AddTestTab({
   }, batchModeSamples.map(s => /*#__PURE__*/React.createElement("span", {
     key: s.id,
     className: "text-[11px] px-2 py-0.5 rounded-full",
-    style: { background: C.card, color: C.ink }
+    style: { background: "#fff", color: C.ink }
   }, `${s.sampleCode} · ${s.clientName}`))));
 
   const selectedSampleBox = !selectedSample ? null : /*#__PURE__*/React.createElement(SampleMiniCard, {
@@ -1118,7 +1118,7 @@ function AddTestTab({
     return /*#__PURE__*/React.createElement("div", {
       key: s.id,
       className: "flex flex-wrap items-center gap-1.5 px-2 py-1 rounded text-xs",
-      style: { background: C.card }
+      style: { background: "#fff" }
     }, goToSample ? /*#__PURE__*/React.createElement("button", {
       type: "button",
       className: "font-semibold underline",
@@ -1708,8 +1708,12 @@ function RecordBulkUploadModal({
     title: `Bulk Upload Results — ${testType?.name || record.testTypeName}`,
     onClose: onClose,
     wide: true
-  }, isGeneric && /*#__PURE__*/React.createElement(Banner, {
-    tone: "warn"
+  }, isGeneric && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs mb-3 p-2 rounded",
+    style: {
+      background: C.infoBg,
+      color: C.info
+    }
   }, "This test type has no Result Parameters configured yet, so the template uses one generic \"", GENERIC_VALUE_HEADER, "\" column. For multi-parameter methods (e.g. pH + Turbidity), set up named parameters under Test Types \u2192 the method \u2192 Calculated Results, then this template will use those column names instead."), /*#__PURE__*/React.createElement("div", {
     className: "text-xs mb-3",
     style: {
@@ -1942,9 +1946,12 @@ function TestRecordsTab({
       name: "printer",
       size: 13
     }), "Print / Save as PDF"))
-  }, /*#__PURE__*/React.createElement(Banner, {
-    tone: "info",
-    storageKey: "testrecords-delete-restore-tip"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs mb-3 p-2 rounded",
+    style: {
+      background: C.infoBg,
+      color: C.info
+    }
   }, "Deleting a test record returns the chemical amounts it used back to the exact bottles (batches) they were drawn from."), /*#__PURE__*/React.createElement("div", {
     className: "flex flex-col gap-2"
   }, pageRows.length === 0 && /*#__PURE__*/React.createElement("div", {
@@ -1952,7 +1959,7 @@ function TestRecordsTab({
     style: {
       color: C.muted
     }
-  }, testRecords.length === 0 ? "No test records yet." : "No records match your search."), pageRows.map((r, rowIdx) => {
+  }, testRecords.length === 0 ? "No test records yet." : "No records match your search."), pageRows.map(r => {
     const isOpen = !!expanded[r.id];
     const chemPairs = Object.entries(r.consumption);
     return /*#__PURE__*/React.createElement("div", {
@@ -1965,7 +1972,7 @@ function TestRecordsTab({
       onClick: () => toggleExpand(r.id),
       className: "w-full flex items-center gap-3 px-3 py-2 text-left flex-wrap",
       style: {
-        background: isOpen ? `${C.teal}14` : rowIdx % 2 === 1 ? C.bg : C.card
+        background: isOpen ? "#F3FAF9" : "#fff"
       }
     }, /*#__PURE__*/React.createElement(Icon, {
       name: isOpen ? "chevronDown" : "chevronRight",
@@ -2420,13 +2427,24 @@ function TestRecordsTab({
       onConfirm: () => doDelete(r),
       onCancel: () => setDeleteRecord(null)
     })));
-  })), /*#__PURE__*/React.createElement(Pagination, {
-    page: pageClamped,
-    totalPages: totalPages,
-    totalItems: filtered.length,
-    pageSize: PAGE_SIZE,
-    onPageChange: setPage
-  })), bulkUploadRecord && /*#__PURE__*/React.createElement(RecordBulkUploadModal, {
+  })), filtered.length > PAGE_SIZE && /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mt-3 text-xs",
+    style: {
+      color: C.muted
+    }
+  }, /*#__PURE__*/React.createElement("span", null, "Page ", pageClamped, " of ", totalPages, " · ", filtered.length, " record(s)"), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2"
+  }, /*#__PURE__*/React.createElement(Button, {
+    size: "sm",
+    variant: "outline",
+    disabled: pageClamped <= 1,
+    onClick: () => setPage(pageClamped - 1)
+  }, "Prev"), /*#__PURE__*/React.createElement(Button, {
+    size: "sm",
+    variant: "outline",
+    disabled: pageClamped >= totalPages,
+    onClick: () => setPage(pageClamped + 1)
+  }, "Next")))), bulkUploadRecord && /*#__PURE__*/React.createElement(RecordBulkUploadModal, {
     record: bulkUploadRecord,
     testType: testTypes?.find(t => t.id === bulkUploadRecord.testTypeId),
     samples: samples,

@@ -19,10 +19,6 @@ function Badge({
       color: C.warn,
       background: C.warnBg
     },
-    danger: {
-      color: "#fff",
-      background: C.warn
-    },
     muted: {
       color: C.muted,
       background: "#EEF4F3"
@@ -34,113 +30,12 @@ function Badge({
   };
   return /*#__PURE__*/React.createElement("span", {
     title: title,
-    className: "inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold whitespace-nowrap",
+    className: "inline-block px-2 py-0.5 rounded text-xs font-semibold",
     style: {
       color: tones[tone].color,
       background: tones[tone].background
     }
   }, children);
-}
-
-// ---- Dismissible alert Banner ----
-// Replaces the old pattern of a permanent little "text-xs p-2 rounded"
-// instructional paragraph sitting at the top of a card forever. Same tone
-// palette as Badge (info/ok/warn/danger). Dismissal is per-mount state by
-// default; pass a `storageKey` to remember the dismissal across reloads
-// (sessionStorage) for banners that are genuinely one-time tips.
-function Banner({
-  tone = "info",
-  icon,
-  children,
-  storageKey,
-  onDismiss
-}) {
-  const tones = {
-    info: { color: C.info, background: C.infoBg, iconName: "clipboard" },
-    ok: { color: C.ok, background: C.okBg, iconName: "check" },
-    warn: { color: C.warn, background: C.warnBg, iconName: "warning" },
-    danger: { color: "#fff", background: C.warn, iconName: "warning" }
-  };
-  const t = tones[tone] || tones.info;
-  const [dismissed, setDismissed] = React.useState(() => {
-    if (!storageKey) return false;
-    try {
-      return sessionStorage.getItem(`wq_banner_dismissed_${storageKey}`) === "1";
-    } catch (e) {
-      return false;
-    }
-  });
-  if (dismissed) return null;
-  function handleDismiss() {
-    setDismissed(true);
-    if (storageKey) {
-      try {
-        sessionStorage.setItem(`wq_banner_dismissed_${storageKey}`, "1");
-      } catch (e) {}
-    }
-    onDismiss?.();
-  }
-  return /*#__PURE__*/React.createElement("div", {
-    className: "text-xs mb-3 px-3 py-2 rounded-lg flex items-start gap-2",
-    style: {
-      background: t.background,
-      color: t.color,
-      border: tone === "danger" ? "none" : `1px solid ${t.color}22`
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: icon || t.iconName,
-    size: 13,
-    color: t.color
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "flex-1 leading-relaxed"
-  }, children), /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    onClick: handleDismiss,
-    title: "Dismiss",
-    className: "shrink-0 rounded p-0.5 hover:bg-black/10 -mt-0.5 -mr-0.5"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "x",
-    size: 12,
-    color: t.color
-  })));
-}
-
-// ---- Reusable table Pagination footer ----
-// "Showing X–Y of Z" + Prev/Next, consistent look everywhere a list is
-// paged (Test Types, Test Records, ...).
-function Pagination({
-  page,
-  totalPages,
-  totalItems,
-  pageSize,
-  onPageChange
-}) {
-  if (totalItems === 0) return null;
-  const start = (page - 1) * pageSize + 1;
-  const end = Math.min(page * pageSize, totalItems);
-  return /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-between gap-2 px-1 pt-3 mt-1 text-xs flex-wrap",
-    style: {
-      borderTop: `1px solid ${C.border}`,
-      color: C.muted
-    }
-  }, /*#__PURE__*/React.createElement("span", null, "Showing ", /*#__PURE__*/React.createElement("strong", {
-    style: { color: C.ink }
-  }, start, "–", end), " of ", /*#__PURE__*/React.createElement("strong", {
-    style: { color: C.ink }
-  }, totalItems)), /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center gap-2"
-  }, /*#__PURE__*/React.createElement("span", null, "Page ", page, " of ", totalPages), /*#__PURE__*/React.createElement(Button, {
-    size: "sm",
-    variant: "outline",
-    disabled: page <= 1,
-    onClick: () => onPageChange(page - 1)
-  }, /*#__PURE__*/React.createElement(Icon, { name: "arrowLeft", size: 12 }), "Prev"), /*#__PURE__*/React.createElement(Button, {
-    size: "sm",
-    variant: "outline",
-    disabled: page >= totalPages,
-    onClick: () => onPageChange(page + 1)
-  }, "Next", /*#__PURE__*/React.createElement(Icon, { name: "arrowRight", size: 12 }))));
 }
 function SectionCard({
   title,
