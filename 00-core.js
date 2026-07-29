@@ -379,6 +379,40 @@ function Icon({
       }), /*#__PURE__*/React.createElement("path", {
         d: "M3 9h18M3 15h18M9 4v16"
       }));
+    case "moreVertical":
+      return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("circle", {
+        cx: "12",
+        cy: "5",
+        r: "1.5",
+        fill: color,
+        stroke: "none"
+      }), /*#__PURE__*/React.createElement("circle", {
+        cx: "12",
+        cy: "12",
+        r: "1.5",
+        fill: color,
+        stroke: "none"
+      }), /*#__PURE__*/React.createElement("circle", {
+        cx: "12",
+        cy: "19",
+        r: "1.5",
+        fill: color,
+        stroke: "none"
+      }));
+    case "list":
+      return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("path", {
+        d: "M8 6h13M8 12h13M8 18h13"
+      }), /*#__PURE__*/React.createElement("path", {
+        d: "M3 6h.01M3 12h.01M3 18h.01"
+      }));
+    case "layers":
+      return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("path", {
+        d: "M12 2 2 7l10 5 10-5-10-5z"
+      }), /*#__PURE__*/React.createElement("path", {
+        d: "M2 17l10 5 10-5"
+      }), /*#__PURE__*/React.createElement("path", {
+        d: "M2 12l10 5 10-5"
+      }));
     case "maximize":
       return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("path", {
         d: "M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"

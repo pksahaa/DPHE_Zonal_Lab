@@ -1688,6 +1688,17 @@ function SamplesTab({
   const [expandedBatches, setExpandedBatches] = React.useState(new Set());
   const [pendingImportRows, setPendingImportRows] = React.useState(null);
   const [pendingImportSkipped, setPendingImportSkipped] = React.useState(0);
+  // ---- Flat Data Table redesign: "Flat View" (every row = one sample,
+  // default) vs "Group by Batch" (legacy accordion-by-Reference). Flat is
+  // the default so sample IDs are visible on landing without any clicks —
+  // see README "Flat Data Table" note.
+  const [viewMode, setViewMode] = React.useState("flat");
+  // Real-time Registration Sync — ids of samples created in the last few
+  // seconds get a highlight + "New" chip so a just-registered/imported
+  // sample is unmistakable even in a long list (it also floats to the top
+  // naturally since `filtered` is sorted by createdAt desc).
+  const [recentlyAddedIds, setRecentlyAddedIds] = React.useState(new Set());
+  const [openMenuId, setOpenMenuId] = React.useState(null);
   const perms = permissionsFor(session.role);
   const openSample = samples.find(s => s.id === openId) || null;
   const filtered = samples.filter(s => {
@@ -1703,6 +1714,40 @@ function SamplesTab({
       if (next.has(ref)) next.delete(ref);else next.add(ref);
       return next;
     });
+  }
+  // ---- Real-time Registration Sync UX ----
+  // Called right after Register Sample(s) / Bulk Import finishes creating
+  // samples. New rows already land at the top of the table (sort is by
+  // createdAt desc), this just (1) marks them for the highlight style in
+  // renderSampleRow, (2) auto-fades that highlight after a few seconds, and
+  // (3) scrolls the first new row into view so it's impossible to miss —
+  // the "where did my sample go" problem the accordion version had.
+  function flagRecentlyAdded(ids) {
+    if (!ids || !ids.length) return;
+    setRecentlyAddedIds(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => next.add(id));
+      return next;
+    });
+    setTimeout(() => {
+      const el = document.getElementById(`sample-row-${ids[0]}`);
+      if (el) el.scrollIntoView({
+        behavior: "smooth",
+        block: "center"
+      });
+    }, 150);
+    setTimeout(() => {
+      setRecentlyAddedIds(prev => {
+        const next = new Set(prev);
+        ids.forEach(id => next.delete(id));
+        return next;
+      });
+    }, 5000);
+  }
+  function isSampleOverdue(s) {
+    if (["released", "rejected", "cancelled"].includes(s.status)) return false;
+    const days = daysBetweenD(s.collectionDate, todayStr());
+    return s.priority === "Urgent" && days > 1 || s.priority !== "Urgent" && days > 5;
   }
   // Group filtered samples by Reference (bulk upload / Register Batch) while
   // keeping individually-registered samples (no reference) as plain rows, all
@@ -1761,6 +1806,7 @@ function SamplesTab({
   async function confirmImportSamples(requestedTests, ref) {
     let runningSamples = [...samples];
     let count = 0;
+    const newIds = [];
     for (const row of pendingImportRows) {
       const sample = createSample({
         clientName: String(readSampleImportField(row, "customerName")).trim(),
@@ -1787,11 +1833,14 @@ function SamplesTab({
       }, runningSamples, session);
       runningSamples = [...runningSamples, sample];
       await setSamples(prev => [...prev, sample], sample);
+      newIds.push(sample.id);
       count++;
     }
     notify(`Imported ${count} sample(s) from manifest under ${ref ? referenceDisplayLabel(ref) : "(no reference)"}${pendingImportSkipped ? `, skipped ${pendingImportSkipped} row(s) missing Client Name/Site Location` : ""}.`, count ? "ok" : "warn");
     setPendingImportRows(null);
     setPendingImportSkipped(0);
+    if (ref) setExpandedBatches(prev => new Set(prev).add(ref.id));
+    flagRecentlyAdded(newIds);
   }
   async function handleUpdate(next) {
     await setSamples(prev => prev.map(s => s.id === next.id ? next : s), next);
@@ -1803,6 +1852,7 @@ function SamplesTab({
   async function handleBatchCreate(shared, rows, ref) {
     let runningSamples = [...samples];
     let count = 0;
+    const newIds = [];
     for (const row of rows) {
       const sample = createSample({
         ...shared,
@@ -1823,19 +1873,110 @@ function SamplesTab({
       }, runningSamples, session);
       runningSamples = [...runningSamples, sample];
       await setSamples(prev => [...prev, sample], sample);
+      newIds.push(sample.id);
       count++;
     }
     setShowBatchForm(false);
+    setExpandedBatches(prev => new Set(prev).add(ref.id));
     notify?.(`${count} sample(s) registered under Reference ${referenceDisplayLabel(ref)} (Tracking No. ${ref.trackingNo}).`, "ok");
+    flagRecentlyAdded(newIds);
   }
   const stats = sampleLifecycleStats(samples);
+  function renderBatchTag(s) {
+    const ref = s.referenceId ? findReferenceById(references, s.referenceId) : null;
+    if (!ref) return /*#__PURE__*/React.createElement("span", {
+      className: "text-xs",
+      style: {
+        color: C.muted
+      }
+    }, "—");
+    const meta = referenceSourceMeta(ref.sourceType);
+    return /*#__PURE__*/React.createElement("span", {
+      title: `${meta.label}: ${referenceDisplayLabel(ref)}`,
+      className: "inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium max-w-[170px]"
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: "clipboard",
+      size: 10
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "truncate"
+    }, referenceDisplayLabel(ref)));
+  }
+  function renderRowActions(s) {
+    const ref = s.referenceId ? findReferenceById(references, s.referenceId) : null;
+    const menuOpen = openMenuId === s.id;
+    return /*#__PURE__*/React.createElement("div", {
+      className: "relative inline-block text-left",
+      onClick: e => e.stopPropagation()
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      title: "Row actions",
+      onClick: () => setOpenMenuId(menuOpen ? null : s.id),
+      className: "p-1.5 rounded hover:bg-black/5"
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: "moreVertical",
+      size: 15,
+      color: C.muted
+    })), menuOpen && /*#__PURE__*/React.createElement("div", {
+      className: "absolute right-0 top-full mt-1 w-48 rounded-lg shadow-lg py-1",
+      style: {
+        background: "#fff",
+        border: `1px solid ${C.border}`,
+        zIndex: 30
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      className: "w-full flex items-center gap-2 text-left px-3 py-1.5 text-xs hover:bg-black/5",
+      style: {
+        color: C.ink
+      },
+      onClick: () => {
+        setOpenId(s.id);
+        setOpenMenuId(null);
+      }
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: "search",
+      size: 12
+    }), "View Details"), ref && /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      className: "w-full flex items-center gap-2 text-left px-3 py-1.5 text-xs hover:bg-black/5",
+      style: {
+        color: C.ink
+      },
+      onClick: () => {
+        setViewMode("grouped");
+        setExpandedBatches(prev => new Set(prev).add(s.referenceId));
+        setOpenMenuId(null);
+      }
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: "layers",
+      size: 12
+    }), "View Full Batch"), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      className: "w-full flex items-center gap-2 text-left px-3 py-1.5 text-xs hover:bg-black/5",
+      style: {
+        color: C.muted
+      },
+      onClick: () => {
+        if (navigator.clipboard) navigator.clipboard.writeText(s.sampleCode);
+        notify?.(`Copied ${s.sampleCode} to clipboard.`, "ok");
+        setOpenMenuId(null);
+      }
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: "link",
+      size: 12
+    }), "Copy Sample ID")));
+  }
   function renderSampleRow(s, indented) {
+    const isNew = recentlyAddedIds.has(s.id);
+    const overdue = isSampleOverdue(s);
     return /*#__PURE__*/React.createElement("tr", {
       key: s.id,
+      id: `sample-row-${s.id}`,
       className: "cursor-pointer",
       style: {
         borderTop: `1px solid ${C.border}`,
-        background: indented ? C.card : "transparent"
+        background: isNew ? `${C.teal}14` : indented ? C.card : "transparent",
+        transition: "background-color 1.5s ease"
       },
       onClick: () => setOpenId(s.id)
     }, /*#__PURE__*/React.createElement("td", {
@@ -1844,7 +1985,17 @@ function SamplesTab({
         color: C.ink,
         paddingLeft: indented ? 28 : undefined
       }
-    }, s.sampleCode), /*#__PURE__*/React.createElement("td", {
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "inline-flex items-center gap-1.5"
+    }, s.sampleCode, isNew && /*#__PURE__*/React.createElement("span", {
+      className: "inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wide",
+      style: {
+        background: C.teal,
+        color: "#fff"
+      }
+    }, "New"))), /*#__PURE__*/React.createElement("td", {
+      className: "px-3 py-2"
+    }, renderBatchTag(s)), /*#__PURE__*/React.createElement("td", {
       className: "px-3 py-2",
       style: {
         color: C.ink
@@ -1865,20 +2016,27 @@ function SamplesTab({
       priority: s.priority
     })), /*#__PURE__*/React.createElement("td", {
       className: "px-3 py-2"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-1 flex-wrap"
     }, /*#__PURE__*/React.createElement(SampleStatusBadge, {
       status: s.status
-    })), /*#__PURE__*/React.createElement("td", {
+    }), overdue && /*#__PURE__*/React.createElement("span", {
+      className: "inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold",
+      style: {
+        background: C.warnBg,
+        color: C.warn
+      }
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: "warning",
+      size: 9
+    }), "Overdue"))), /*#__PURE__*/React.createElement("td", {
       className: "px-3 py-2",
       style: {
         color: C.muted
       }
     }, s.assignedTo || "—"), /*#__PURE__*/React.createElement("td", {
       className: "px-3 py-2 text-right"
-    }, /*#__PURE__*/React.createElement(Icon, {
-      name: "chevronRight",
-      size: 14,
-      color: C.muted
-    })));
+    }, renderRowActions(s)));
   }
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "flex gap-2 mb-4 flex-wrap"
@@ -1993,24 +2151,54 @@ function SamplesTab({
   }, "All statuses"), SAMPLE_STATUSES.map(s => /*#__PURE__*/React.createElement("option", {
     key: s.key,
     value: s.key
-  }, s.label)))), /*#__PURE__*/React.createElement("div", {
+  }, s.label))), /*#__PURE__*/React.createElement("span", {
+    className: "flex-1"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "inline-flex rounded-lg p-0.5",
+    style: {
+      background: C.bg,
+      border: `1px solid ${C.border}`
+    }
+  }, [{
+    k: "flat",
+    label: "Flat View",
+    icon: "list"
+  }, {
+    k: "grouped",
+    label: "Group by Batch",
+    icon: "layers"
+  }].map(v => /*#__PURE__*/React.createElement("button", {
+    key: v.k,
+    type: "button",
+    onClick: () => setViewMode(v.k),
+    className: "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors",
+    style: {
+      background: viewMode === v.k ? C.card : "transparent",
+      color: viewMode === v.k ? C.ink : C.muted,
+      boxShadow: viewMode === v.k ? "0 1px 2px rgba(0,0,0,0.08)" : "none"
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: v.icon,
+    size: 13
+  }), v.label)))), /*#__PURE__*/React.createElement("div", {
     className: "rounded-lg overflow-hidden",
     style: {
       border: `1px solid ${C.border}`
-    }
+    },
+    onClick: () => openMenuId && setOpenMenuId(null)
   }, /*#__PURE__*/React.createElement("table", {
     className: "w-full text-sm"
   }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
     style: {
       background: C.bg
     }
-  }, ["Sample Code", "Client", "Site", "Matrix", "Priority", "Status", "Assigned To", ""].map(h => /*#__PURE__*/React.createElement("th", {
+  }, ["Sample Code", "Batch / Memo Ref", "Client", "Site", "Matrix", "Priority", "Status", "Assigned To", ""].map(h => /*#__PURE__*/React.createElement("th", {
     key: h,
     className: "text-left px-3 py-2 text-xs font-semibold",
     style: {
       color: C.muted
     }
-  }, h)))), /*#__PURE__*/React.createElement("tbody", null, listItems.map(item => {
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, viewMode === "flat" ? filtered.map(s => renderSampleRow(s, false)) : listItems.map(item => {
     if (item.type === "single") return renderSampleRow(item.sample, false);
     const isOpen = expandedBatches.has(item.referenceId);
     return /*#__PURE__*/React.createElement(React.Fragment, {
@@ -2023,7 +2211,7 @@ function SamplesTab({
       },
       onClick: () => toggleBatchExpand(item.referenceId)
     }, /*#__PURE__*/React.createElement("td", {
-      colSpan: 8,
+      colSpan: 9,
       className: "px-3 py-2"
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex items-center gap-2 flex-wrap"
@@ -2056,8 +2244,8 @@ function SamplesTab({
     }), /*#__PURE__*/React.createElement(BatchStatusSummary, {
       members: item.members
     })))), isOpen && item.members.map(s => renderSampleRow(s, true)));
-  }), !listItems.length && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
-    colSpan: 8,
+  }), (viewMode === "flat" ? !filtered.length : !listItems.length) && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    colSpan: 9,
     className: "px-3 py-8 text-center text-sm",
     style: {
       color: C.muted
@@ -2167,6 +2355,10 @@ function SubBatchBuilder({
   const [returningSubBatchId, setReturningSubBatchId] = React.useState(null);
   const [returnNote, setReturnNote] = React.useState("");
   const [approvingSubBatchId, setApprovingSubBatchId] = React.useState(null);
+  // Which Batch Action panel (Approve / Release) is expanded in the
+  // consolidated toolbar above "All Analytical Batches" — replaces the two
+  // separate always-visible "Batch Approve"/"Batch Release" cards.
+  const [activeBatchAction, setActiveBatchAction] = React.useState(null); // "approve" | "release" | null
   // ---- Batch (Reference) level bulk approve — the same signed decision as
   // Sub-Batch approve, just scoped to "every parameter under_review for any
   // sample under this Reference" instead of one Sub-Batch's single
@@ -2529,28 +2721,65 @@ function SubBatchBuilder({
     onClick: () => setSelectedSampleIds([])
   }, "Clear")));
 
+  // Interactive selection GRID (real table + checkboxes) instead of a passive
+  // info box / flex list — this is what actually shows up once a Test Type
+  // is picked, addressing "poor interactive feedback" from the old design.
   const pickerListBox = /*#__PURE__*/React.createElement("div", {
-    className: "grid gap-1 max-h-56 overflow-y-auto p-1 rounded",
+    className: "rounded-lg overflow-hidden",
     style: {
       border: `1px solid ${C.border}`
     }
-  }, eligibleSamples.map(s => /*#__PURE__*/React.createElement("label", {
-    key: s.id,
-    className: "flex items-center gap-2 px-2 py-1.5 rounded text-xs cursor-pointer",
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "max-h-64 overflow-y-auto"
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "w-full text-xs"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
     style: {
-      background: selectedSampleIds.includes(s.id) ? `${C.teal}14` : "transparent"
+      background: C.bg,
+      position: "sticky",
+      top: 0
     }
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "checkbox",
-    checked: selectedSampleIds.includes(s.id),
-    onChange: () => toggleMember(s.id)
-  }), /*#__PURE__*/React.createElement("span", {
-    className: "font-semibold"
-  }, s.sampleCode), /*#__PURE__*/React.createElement("span", {
+  }, ["", "Sample Code", "Client", "Reference"].map(h => /*#__PURE__*/React.createElement("th", {
+    key: h,
+    className: "text-left px-2 py-1.5 font-semibold",
     style: {
       color: C.muted
     }
-  }, s.clientName, s.referenceId ? ` · ref: ${referenceDisplayLabel(findReferenceById(references, s.referenceId))}` : ""))));
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, eligibleSamples.map(s => {
+    const checked = selectedSampleIds.includes(s.id);
+    const ref = s.referenceId ? findReferenceById(references, s.referenceId) : null;
+    return /*#__PURE__*/React.createElement("tr", {
+      key: s.id,
+      className: "cursor-pointer",
+      style: {
+        borderTop: `1px solid ${C.border}`,
+        background: checked ? `${C.teal}14` : "transparent"
+      },
+      onClick: () => toggleMember(s.id)
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "px-2 py-1.5",
+      onClick: e => e.stopPropagation()
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: checked,
+      onChange: () => toggleMember(s.id)
+    })), /*#__PURE__*/React.createElement("td", {
+      className: "px-2 py-1.5 font-semibold",
+      style: {
+        color: C.ink
+      }
+    }, s.sampleCode), /*#__PURE__*/React.createElement("td", {
+      className: "px-2 py-1.5",
+      style: {
+        color: C.muted
+      }
+    }, s.clientName), /*#__PURE__*/React.createElement("td", {
+      className: "px-2 py-1.5",
+      style: {
+        color: C.muted
+      }
+    }, ref ? referenceDisplayLabel(ref) : "—"));
+  })))));
 
   const mixedBatchWarning = distinctReferences.length > 1 ? /*#__PURE__*/React.createElement("div", {
     className: "text-xs p-2 rounded mt-2",
@@ -2588,18 +2817,46 @@ function SubBatchBuilder({
     }
   }, "No pending samples match this Test Type", selectedReferenceIds.length ? " + Reference filter" : "", " (or all are already in another pending sub-batch).") : /*#__PURE__*/React.createElement("div", null, pickerHeaderRow, pickerListBox, mixedBatchWarning, actionRow));
 
-  const createCard = /*#__PURE__*/React.createElement(SectionCard, {
-    title: editingSubBatchId ? "Edit Analytical Batch" : "Create an Analytical Batch",
+  // ---- Two-Column Dashboard Layout ----
+  // Left: the creation form (Test Type / Label / Tester). Right: the live,
+  // dynamic "Eligible Pending Samples" picker for whichever Test Type is
+  // selected on the left — replaces the old single stacked card where the
+  // picker sat awkwardly below a wall of form fields.
+  const formCard = /*#__PURE__*/React.createElement(SectionCard, {
+    title: editingSubBatchId ? "Edit Analytical Batch" : "Create Analytical Batch",
     subtitle: "Group pending samples requesting the same test into one batch — shares one QC check, tested together in Add Test Record.",
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "flask",
       size: 15
     })
-  }, filterFields, pickerBlock);
+  }, filterFields);
+  const pickerCard = /*#__PURE__*/React.createElement(SectionCard, {
+    title: "Eligible Pending Samples",
+    subtitle: selectedTestId ? `${eligibleSamples.length} sample(s) pending ${testTypes.find(t => t.id === selectedTestId)?.name || "this test"} — check the ones to include.` : "Pick a Test Type on the left to load the live picker.",
+    icon: /*#__PURE__*/React.createElement(Icon, {
+      name: "clipboard",
+      size: 15
+    })
+  }, pickerBlock);
+  const creationSection = /*#__PURE__*/React.createElement("div", {
+    className: "grid gap-4",
+    style: {
+      gridTemplateColumns: "minmax(240px, 1fr) minmax(320px, 1.6fr)"
+    }
+  }, formCard, pickerCard);
 
+  // ---- Consolidated "All Analytical Batches" data table ----
+  // Each sub-batch is a real <tr> now (Analytical Batch / Samples / Tester /
+  // Status / Actions columns) instead of a standalone bordered card, so the
+  // whole list reads as one aligned enterprise table. Review/Return/Final
+  // Approve/Release live as row-level action buttons on the right — this is
+  // also where Batch Approve/Release (by Reference) results ultimately show
+  // up once applied. Any inline panel a row needs (delete confirm, return
+  // note, signature capture) renders as a second, full-width <tr> directly
+  // beneath it rather than breaking table alignment.
   function renderSubBatchRow(sb) {
     const testerControl = sb.status === "pending" ? /*#__PURE__*/React.createElement("select", {
-      className: "border rounded px-2 py-1 text-xs",
+      className: "border rounded px-2 py-1 text-xs w-full",
       style: {
         borderColor: C.border
       },
@@ -2616,15 +2873,14 @@ function SubBatchBuilder({
         color: C.muted
       }
     }, sb.assignedTester || "—");
-    return /*#__PURE__*/React.createElement("div", {
-      key: sb.id,
-      className: "px-3 py-2 rounded",
+    const hasPanel = deleteSubBatchId === sb.id || returningSubBatchId === sb.id || approvingSubBatchId === sb.id;
+    const mainRow = /*#__PURE__*/React.createElement("tr", {
       style: {
-        border: `1px solid ${C.border}`
+        borderTop: `1px solid ${C.border}`
       }
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "px-3 py-2"
     }, /*#__PURE__*/React.createElement("div", {
-      className: "flex items-center justify-between gap-2"
-    }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
       className: "text-xs font-semibold",
       style: {
         color: C.ink
@@ -2634,9 +2890,20 @@ function SubBatchBuilder({
       style: {
         color: C.muted
       }
-    }, sb.memberSampleIds.length, " samples · created ", new Date(sb.createdAt).toLocaleDateString())), /*#__PURE__*/React.createElement("div", {
-      className: "flex items-center gap-2"
-    }, testerControl, SUB_BATCH_STATUS_BADGE(sb.status), sb.status === "tested" && /*#__PURE__*/React.createElement(Button, {
+    }, "created ", new Date(sb.createdAt).toLocaleDateString())), /*#__PURE__*/React.createElement("td", {
+      className: "px-3 py-2 text-xs",
+      style: {
+        color: C.ink
+      }
+    }, sb.memberSampleIds.length), /*#__PURE__*/React.createElement("td", {
+      className: "px-3 py-2"
+    }, testerControl), /*#__PURE__*/React.createElement("td", {
+      className: "px-3 py-2"
+    }, SUB_BATCH_STATUS_BADGE(sb.status)), /*#__PURE__*/React.createElement("td", {
+      className: "px-3 py-2 text-right"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center justify-end gap-1.5 flex-wrap"
+    }, sb.status === "tested" && /*#__PURE__*/React.createElement(Button, {
       variant: "outline",
       size: "sm",
       onClick: () => approveSubBatch(sb)
@@ -2647,7 +2914,7 @@ function SubBatchBuilder({
         setReturningSubBatchId(sb.id);
         setReturnNote("");
       }
-    }, "Return to Analyst"), sb.status === "reviewed" && /*#__PURE__*/React.createElement(Button, {
+    }, "Return"), sb.status === "reviewed" && /*#__PURE__*/React.createElement(Button, {
       size: "sm",
       onClick: () => setApprovingSubBatchId(sb.id)
     }, "Final Approve"), sb.status === "approved" && /*#__PURE__*/React.createElement(Button, {
@@ -2665,7 +2932,11 @@ function SubBatchBuilder({
       title: sb.status === "pending" ? "Delete sub-batch" : "Delete the linked test record first to remove a tested sub-batch",
       disabled: sb.status !== "pending",
       onClick: () => setDeleteSubBatchId(sb.id)
-    }))), deleteSubBatchId === sb.id && /*#__PURE__*/React.createElement(ConfirmBar, {
+    }))));
+    const panelRow = !hasPanel ? null : /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+      colSpan: 5,
+      className: "px-3 pb-3"
+    }, deleteSubBatchId === sb.id && /*#__PURE__*/React.createElement(ConfirmBar, {
       text: `Delete sub-batch "${sb.label}"? Its ${sb.memberSampleIds.length} member sample(s) become available for another sub-batch again.`,
       onConfirm: () => doDeleteSubBatch(sb),
       onCancel: () => setDeleteSubBatchId(null)
@@ -2698,11 +2969,15 @@ function SubBatchBuilder({
         bulkApproveSubBatch(sb, samples, setSamples, setSubBatches, session, notify, payload);
         setApprovingSubBatchId(null);
       }
-    }));
+    })));
+    return /*#__PURE__*/React.createElement(React.Fragment, {
+      key: sb.id
+    }, mainRow, panelRow);
   }
 
   const listCard = /*#__PURE__*/React.createElement(SectionCard, {
     title: "All Analytical Batches",
+    subtitle: "Review, approve, and release results directly from the batch list.",
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "clipboard",
       size: 15
@@ -2713,8 +2988,23 @@ function SubBatchBuilder({
       color: C.muted
     }
   }, "No sub-batches created yet.") : /*#__PURE__*/React.createElement("div", {
-    className: "grid gap-1.5"
-  }, subBatches.map(sb => renderSubBatchRow(sb))));
+    className: "rounded-lg overflow-hidden",
+    style: {
+      border: `1px solid ${C.border}`
+    }
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "w-full text-sm"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
+    style: {
+      background: C.bg
+    }
+  }, ["Analytical Batch", "Samples", "Tester", "Status", ""].map(h => /*#__PURE__*/React.createElement("th", {
+    key: h,
+    className: "text-left px-3 py-2 text-xs font-semibold",
+    style: {
+      color: C.muted
+    }
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, subBatches.map(sb => renderSubBatchRow(sb))))));
 
   const batchApproveReferencePicker = /*#__PURE__*/React.createElement("select", {
     className: "border rounded px-2 py-1.5 text-sm w-full",
@@ -2881,7 +3171,47 @@ function SubBatchBuilder({
     }
   }, "Releases every approved parameter across every sample under the chosen Reference — no signature needed, same as the single-sample Release button."), batchReleaseReferencePicker, batchReleasePairsList, batchReleaseButton));
 
+  // ---- Consolidated Batch Actions toolbar ----
+  // Batch Approve / Batch Release used to be two large, always-open cards
+  // sitting between "Create" and "All Analytical Batches" — most of the
+  // time empty or single-line. They're now two toggle buttons; the picked
+  // one's panel (unchanged content/logic — batchApproveCard/batchReleaseCard
+  // above) expands directly beneath, right above the batch table it acts on.
+  const batchActionsToolbar = /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 mb-3 flex-wrap"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-semibold",
+    style: {
+      color: C.muted
+    }
+  }, "Batch Actions:"), /*#__PURE__*/React.createElement(Button, {
+    variant: activeBatchAction === "approve" ? "primary" : "outline",
+    size: "sm",
+    onClick: () => setActiveBatchAction(activeBatchAction === "approve" ? null : "approve")
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "check",
+    size: 12
+  }), `Batch Approve (by Reference)${referenceApproveOptions.length ? ` · ${referenceApproveOptions.length}` : ""}`), /*#__PURE__*/React.createElement(Button, {
+    variant: activeBatchAction === "release" ? "primary" : "outline",
+    size: "sm",
+    onClick: () => setActiveBatchAction(activeBatchAction === "release" ? null : "release")
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "printer",
+    size: 12
+  }), `Batch Release (by Reference)${referenceReleaseOptions.length ? ` · ${referenceReleaseOptions.length}` : ""}`));
+
+  const batchActionsPanel = activeBatchAction === "approve" ? batchApproveCard : activeBatchAction === "release" ? batchReleaseCard : null;
+
+  const batchActionsCard = /*#__PURE__*/React.createElement(SectionCard, {
+    title: "Batch Actions",
+    subtitle: "Approve or release every parameter across a whole Reference in one signed action.",
+    icon: /*#__PURE__*/React.createElement(Icon, {
+      name: "check",
+      size: 15
+    })
+  }, batchActionsToolbar, batchActionsPanel);
+
   return /*#__PURE__*/React.createElement("div", {
     className: "grid gap-4"
-  }, createCard, batchApproveCard, batchReleaseCard, listCard);
+  }, creationSection, batchActionsCard, listCard);
 }
