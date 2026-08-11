@@ -28,8 +28,22 @@ function buildReportHtml({
   const firstCode = sorted[0]?.sampleCode || "";
   const lastCode = sorted[sorted.length - 1]?.sampleCode || "";
   const sampleIdLine = sorted.length > 1 ? `${firstCode} To ${lastCode}, Total: ${String(sorted.length).padStart(2, "0")}` : `${firstCode}, Total: 01`;
-  const logoLeftSrc = labIdentity.leftLogoDataUrl || labIdentity.leftLogoUrl || "assets/logo_left.png";
-  const logoRightSrc = labIdentity.rightLogoDataUrl || labIdentity.rightLogoUrl || "assets/logo_right.png";
+  // The report is rendered into a fresh popup window (window.open("") +
+  // document.write) whose base URL is about:blank, not this site — so a
+  // relative logo path like "assets/logo_left.png" silently fails to load
+  // there (the onerror handler below then hides it). Resolve relative
+  // paths to an absolute URL against *this* document first; data URLs and
+  // already-absolute URLs pass through the URL constructor unchanged.
+  const resolveLogoUrl = src => {
+    if (!src) return src;
+    try {
+      return new URL(src, document.baseURI).href;
+    } catch (e) {
+      return src;
+    }
+  };
+  const logoLeftSrc = resolveLogoUrl(labIdentity.leftLogoDataUrl || labIdentity.leftLogoUrl || "assets/logo_left.png");
+  const logoRightSrc = resolveLogoUrl(labIdentity.rightLogoDataUrl || labIdentity.rightLogoUrl || "assets/logo_right.png");
   const logoLeft = logoLeftSrc ? `<img src="${logoLeftSrc}" style="height:56px" onerror="this.style.display='none'">` : "";
   const logoRight = logoRightSrc ? `<img src="${logoRightSrc}" style="height:56px" onerror="this.style.display='none'">` : "";
   const testHeaderCells = selectedTests.map(t => `<th colspan="2">${t.name}${t.reportLimit ? ` <br><span style="font-weight:400">${t.reportLimit}</span>` : ""}</th>`).join("");

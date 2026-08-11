@@ -413,7 +413,7 @@ function LabApp({
     saveKey("lang", next);
   }
   const [chemicals, setChemicals] = useState([]);
-  const [masterChemicals, setMasterChemicals] = useState(() => loadKey("masterChemicals", DEFAULT_MASTER_CHEMICALS));
+  const [masterChemicals, setMasterChemicals] = useState(() => loadKey("masterChemicals", []));
   const [glassware, setGlassware] = useState([]);
   const [equipment, setEquipment] = useState([]);
   const [gasList, setGasList] = useState([]);
@@ -522,16 +522,22 @@ function LabApp({
       DataService.list("subBatches"),
       DataService.getSingleton("masterChemicals")
     ]).then(([rawChems, rawGlass, rawEquip, rawGas, rawParams, rawTestTypes, rawTestRecs, rawSubBatches, rawMasterChem]) => {
-      const chems = markExpiredBatches(normalizeChemicals(rawChems && rawChems.length ? rawChems : seedChemicals()));
-      const equip = normalizeEquipment(rawEquip && rawEquip.length ? rawEquip : seedEquipment());
-      const gases = normalizeGas(rawGas && rawGas.length ? rawGas : seedGas());
+      // NOTE: production deployments must NOT fall back to seed/demo data
+      // when a collection comes back empty from the backend — an empty
+      // result is a legitimate state (e.g. the admin deleted everything),
+      // not a signal to repopulate. No demo/seed data exists anywhere in
+      // this app — inventory starts genuinely empty and stays that way
+      // until an admin adds real data.
+      const chems = markExpiredBatches(normalizeChemicals(rawChems || []));
+      const equip = normalizeEquipment(rawEquip || []);
+      const gases = normalizeGas(rawGas || []);
       setChemicals(chems);
-      setGlassware(normalizeGlassware(rawGlass && rawGlass.length ? rawGlass : seedGlassware()));
+      setGlassware(normalizeGlassware(rawGlass || []));
       setEquipment(equip);
       setGasList(gases);
-      const params = normalizeParameters(rawParams && rawParams.length ? rawParams : seedParameters());
+      const params = normalizeParameters(rawParams || []);
       setParameters(params);
-      setTestTypes(normalizeTestTypes(rawTestTypes && rawTestTypes.length ? rawTestTypes : seedTestTypes(chems, equip, gases, params)).map(t => ({
+      setTestTypes(normalizeTestTypes(rawTestTypes || []).map(t => ({
         costPerTest: 0,
         ...t
       })));
@@ -547,32 +553,43 @@ function LabApp({
     });
   }, []);
 
+  // Auto-save effects below persist every in-memory change to the backend.
+  // Previously these had no .catch — if a save/delete failed (network drop,
+  // wrong/expired Apps Script URL, bad token, Apps Script quota, etc.) the
+  // UI would still show the change as done, but the backend never actually
+  // received it — so on the next reload the old data would come back,
+  // looking exactly like "delete doesn't work". Every write now surfaces a
+  // toast on failure so a failed save is never silent.
+  const notifyBackendSaveError = (what, err) => {
+    console.error(`Failed to save ${what} to backend:`, err);
+    notify(`Could not save ${what} to the backend — your change may be lost on reload. (${err && err.message || err})`, "warn");
+  };
   useEffect(() => {
-    if (loaded) DataService.bulkSet("chemicals", chemicals);
+    if (loaded) DataService.bulkSet("chemicals", chemicals).catch(err => notifyBackendSaveError("chemicals/inventory", err));
   }, [chemicals, loaded]);
   useEffect(() => {
-    if (loaded) DataService.saveSingleton("masterChemicals", { list: masterChemicals });
+    if (loaded) DataService.saveSingleton("masterChemicals", { list: masterChemicals }).catch(err => notifyBackendSaveError("master chemical list", err));
   }, [masterChemicals, loaded]);
   useEffect(() => {
-    if (loaded) DataService.bulkSet("glassware", glassware);
+    if (loaded) DataService.bulkSet("glassware", glassware).catch(err => notifyBackendSaveError("glassware", err));
   }, [glassware, loaded]);
   useEffect(() => {
-    if (loaded) DataService.bulkSet("equipment", equipment);
+    if (loaded) DataService.bulkSet("equipment", equipment).catch(err => notifyBackendSaveError("equipment", err));
   }, [equipment, loaded]);
   useEffect(() => {
-    if (loaded) DataService.bulkSet("gas", gasList);
+    if (loaded) DataService.bulkSet("gas", gasList).catch(err => notifyBackendSaveError("gas cylinders", err));
   }, [gasList, loaded]);
   useEffect(() => {
-    if (loaded) DataService.bulkSet("parameters", parameters);
+    if (loaded) DataService.bulkSet("parameters", parameters).catch(err => notifyBackendSaveError("parameters", err));
   }, [parameters, loaded]);
   useEffect(() => {
-    if (loaded) DataService.bulkSet("testTypes", testTypes);
+    if (loaded) DataService.bulkSet("testTypes", testTypes).catch(err => notifyBackendSaveError("test types", err));
   }, [testTypes, loaded]);
   useEffect(() => {
-    if (loaded) DataService.bulkSet("testRecords", testRecords);
+    if (loaded) DataService.bulkSet("testRecords", testRecords).catch(err => notifyBackendSaveError("test records", err));
   }, [testRecords, loaded]);
   useEffect(() => {
-    if (loaded) DataService.bulkSet("subBatches", subBatches);
+    if (loaded) DataService.bulkSet("subBatches", subBatches).catch(err => notifyBackendSaveError("sub-batches", err));
   }, [subBatches, loaded]);
   const notify = useCallback((msg, tone = "ok") => {
     setToast({
@@ -584,22 +601,6 @@ function LabApp({
   // A failed localStorage save/load now surfaces as a toast instead of
   // failing silently — see reportStorageError() in 00-core.js.
   registerStorageErrorHandler(notify);
-  const loadDemoReportData = useCallback(() => {
-    const demo = buildDemoReportData();
-    const chems = markExpiredBatches(normalizeChemicals(demo.chemicals));
-    const equip = normalizeEquipment(demo.equipment);
-    const gases = normalizeGas(demo.gasList);
-    setChemicals(chems);
-    setEquipment(equip);
-    setGasList(gases);
-    setTestTypes(normalizeTestTypes(demo.testTypes).map(t => ({
-      costPerTest: 0,
-      ...t
-    })));
-    setTestRecords(demo.testRecords);
-    setMasterChemicals(prev => [...new Set([...prev, ...demo.masterChemicals])]);
-    notify("Demo dataset loaded — 15 test records across Arsenic, Iron, Manganese & Chloride.", "ok");
-  }, [notify]);
   if (!loaded) return /*#__PURE__*/React.createElement("div", {
     className: "p-8 text-sm",
     style: {
@@ -909,8 +910,7 @@ function LabApp({
     session: session,
     permissionMatrix: permissionMatrix,
     notify: notify,
-    goToSample: goToSample,
-    onLoadDemoData: loadDemoReportData
+    goToSample: goToSample
   }), tab === "qc" && /*#__PURE__*/React.createElement(QcModuleTab, {
     testTypes: testTypes,
     testRecords: testRecords

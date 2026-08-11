@@ -1978,8 +1978,7 @@ function ReportsTab({
   session,
   permissionMatrix,
   notify,
-  goToSample,
-  onLoadDemoData
+  goToSample
 }) {
   const [filters, setFilters] = React.useState(DEFAULT_FILTERS);
   const activePage = ALL_REPORT_PAGES.some(p => p.k === reportTab) ? reportTab : "executive";
@@ -2078,15 +2077,7 @@ function ReportsTab({
   // right away instead of underneath descriptive text.
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-end mb-4 no-print flex-wrap gap-2"
-  }, onLoadDemoData && /*#__PURE__*/React.createElement(Button, {
-    size: "sm",
-    variant: "outline",
-    onClick: onLoadDemoData,
-    title: "Populate 15 demo test records (Arsenic, Iron, Manganese, Chloride) with matching inventory"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "beaker",
-    size: 13
-  }), "Load Demo Data"), /*#__PURE__*/React.createElement(Button, {
+  }, /*#__PURE__*/React.createElement(Button, {
     size: "sm",
     variant: "outline",
     onClick: printReport
