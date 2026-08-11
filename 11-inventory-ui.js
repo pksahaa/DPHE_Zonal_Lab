@@ -18,8 +18,16 @@ function InventoryTab({
   setGasList,
   testTypes,
   testRecords,
+  session,
+  permissionMatrix,
   notify
 }) {
+  const invCreateGate = permGate(permissionMatrix, session, "inventory", "create", notify, "add inventory items");
+  const invEditGate = permGate(permissionMatrix, session, "inventory", "edit", notify, "edit inventory items");
+  const invDeleteGate = permGate(permissionMatrix, session, "inventory", "delete", notify, "delete inventory items");
+  const canCreateInv = invCreateGate.visible;
+  const canEditInv = invEditGate.visible;
+  const canDeleteInv = invDeleteGate.visible;
   const [showAddChemical, setShowAddChemical] = useState(false);
   const chemUploadRef = useRef(null);
   const glassUploadRef = useRef(null);
@@ -80,17 +88,38 @@ function InventoryTab({
     }
     setGasList(prev => prev.filter(x => x.id !== g.id));
     setDeleteGasFor(null);
+    DataService.appendAudit({
+      entity: "gas",
+      entityId: g.id,
+      action: "delete",
+      user: session.username,
+      role: session.role,
+      note: `Deleted gas "${g.name}"`
+    });
     notify(`Deleted gas "${g.name}"`);
   }
   function deleteCylinderNow(gasId, cylinder) {
+    const gasName = gasList.find(g => g.id === gasId)?.name || "gas";
     setGasList(prev => prev.map(g => g.id === gasId ? {
       ...g,
       cylinders: g.cylinders.filter(c => c.id !== cylinder.id)
     } : g));
     setDeleteCylinder(null);
+    DataService.appendAudit({
+      entity: "gas",
+      entityId: gasId,
+      action: "delete",
+      user: session.username,
+      role: session.role,
+      note: `Removed a ${gasName} cylinder from inventory`
+    });
     notify("Cylinder removed from inventory");
   }
   function importChemicals(file) {
+    if (!invCreateGate.allowed) {
+      notify?.("Guest access can't import inventory data — this login is view-only for this action.", "warn");
+      return;
+    }
     readWorkbook(file, (err, rows) => {
       if (err) return notify("Could not read Excel file", "warn");
       let count = 0;
@@ -128,9 +157,21 @@ function InventoryTab({
         return markExpiredBatches(next);
       });
       notify(`Imported ${count} chemical batch row(s) across possibly multiple chemical types`);
+      DataService.appendAudit({
+        entity: "chemical",
+        entityId: "bulk-import",
+        action: "create",
+        user: session.username,
+        role: session.role,
+        note: `Imported ${count} chemical batch row(s) from Excel/CSV`
+      });
     });
   }
   function importGlassware(file) {
+    if (!invCreateGate.allowed) {
+      notify?.("Guest access can't import inventory data — this login is view-only for this action.", "warn");
+      return;
+    }
     readWorkbook(file, (err, rows) => {
       if (err) return notify("Could not read Excel file", "warn");
       setGlassware(prev => [...prev, ...rows.filter(row => String(row.Name || row.Item || "").trim()).map(row => ({
@@ -144,9 +185,21 @@ function InventoryTab({
         receivedFrom: String(row.ReceivedFrom || row["Received From"] || "")
       }))]);
       notify(`Imported ${rows.length} glassware row(s) — different item types can be mixed in one file`);
+      DataService.appendAudit({
+        entity: "glassware",
+        entityId: "bulk-import",
+        action: "create",
+        user: session.username,
+        role: session.role,
+        note: `Imported ${rows.length} glassware row(s) from Excel/CSV`
+      });
     });
   }
   function importEquipment(file) {
+    if (!invCreateGate.allowed) {
+      notify?.("Guest access can't import inventory data — this login is view-only for this action.", "warn");
+      return;
+    }
     readWorkbook(file, (err, rows) => {
       if (err) return notify("Could not read Excel file", "warn");
       setEquipment(prev => [...prev, ...rows.filter(row => String(row.Name || row.Equipment || "").trim()).map(row => ({
@@ -159,6 +212,14 @@ function InventoryTab({
         history: []
       }))]);
       notify(`Imported ${rows.length} equipment row(s) — different equipment types can be mixed in one file`);
+      DataService.appendAudit({
+        entity: "equipment",
+        entityId: "bulk-import",
+        action: "create",
+        user: session.username,
+        role: session.role,
+        note: `Imported ${rows.length} equipment row(s) from Excel/CSV`
+      });
     });
   }
 
@@ -170,6 +231,14 @@ function InventoryTab({
     }
     setChemicals(prev => prev.filter(c => c.id !== chem.id));
     setDeleteChemicalFor(null);
+    DataService.appendAudit({
+      entity: "chemical",
+      entityId: chem.id,
+      action: "delete",
+      user: session.username,
+      role: session.role,
+      note: `Deleted chemical "${chem.name}"`
+    });
     notify(`Deleted chemical "${chem.name}"`);
   }
   function deleteBatchNow(chemId, batch) {
@@ -178,11 +247,20 @@ function InventoryTab({
       setDeleteBatch(null);
       return;
     }
+    const chemName = chemicals.find(c => c.id === chemId)?.name || "chemical";
     setChemicals(prev => prev.map(c => c.id === chemId ? {
       ...c,
       batches: c.batches.filter(b => b.id !== batch.id)
     } : c));
     setDeleteBatch(null);
+    DataService.appendAudit({
+      entity: "chemical",
+      entityId: chemId,
+      action: "delete",
+      user: session.username,
+      role: session.role,
+      note: `Deleted a batch of "${chemName}" (received ${batch.dateReceived})`
+    });
     notify("Batch deleted from inventory");
   }
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
@@ -226,10 +304,10 @@ function InventoryTab({
       if (e.target.files[0]) importChemicals(e.target.files[0]);
       e.target.value = "";
     }
-  }), /*#__PURE__*/React.createElement(Button, {
+  }), canCreateInv && /*#__PURE__*/React.createElement(Button, {
     variant: "outline",
     size: "sm",
-    onClick: () => chemUploadRef.current && chemUploadRef.current.click()
+    onClick: invCreateGate.guard(() => chemUploadRef.current && chemUploadRef.current.click())
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "upload",
     size: 14
@@ -247,24 +325,27 @@ function InventoryTab({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "wrench",
     size: 14
-  }), "Master Chemical List"), /*#__PURE__*/React.createElement(Button, {
+  }), "Master Chemical List"), canCreateInv && /*#__PURE__*/React.createElement(Button, {
     size: "sm",
-    onClick: () => setShowAddChemical(true)
+    onClick: invCreateGate.guard(() => setShowAddChemical(true))
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "plus",
     size: 14
-  }), "Add Chemical")), /*#__PURE__*/React.createElement("div", {
-    className: "text-xs mb-3 p-2 rounded",
-    style: {
-      background: C.infoBg,
-      color: C.info
-    }
-  }, "One Excel file can contain rows for many different chemicals at once — rows are grouped automatically by \"ChemicalName\". New chemicals must be picked from the Master Chemical List — this prevents the same chemical being added twice by mistake."), chemicals.length === 0 && /*#__PURE__*/React.createElement("div", {
-    className: "text-sm mb-3",
-    style: {
-      color: C.muted
-    }
-  }, "No chemicals yet — add one to get started."), chemicals.map(chem => {
+  }), "Add Chemical")), /*#__PURE__*/React.createElement(Banner, {
+    tone: "info",
+    storageKey: "inventory-chemicals-import-tip"
+  }, "One Excel file can contain rows for many different chemicals at once — rows are grouped automatically by \"ChemicalName\". New chemicals must be picked from the Master Chemical List — this prevents the same chemical being added twice by mistake."), chemicals.length === 0 && /*#__PURE__*/React.createElement(EmptyState, {
+    icon: "flask",
+    title: "No chemicals yet",
+    subtitle: "Add a chemical to start tracking stock, expiry, and consumption.",
+    action: canCreateInv ? /*#__PURE__*/React.createElement(Button, {
+      size: "sm",
+      onClick: invCreateGate.guard(() => setShowAddChemical(true))
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: "plus",
+      size: 13
+    }), "Add Chemical") : undefined
+  }), chemicals.map(chem => {
     const isCollapsed = !!collapsedChem[chem.id];
     return /*#__PURE__*/React.createElement(SectionCard, {
       key: chem.id,
@@ -283,21 +364,21 @@ function InventoryTab({
       }),
       right: /*#__PURE__*/React.createElement("div", {
         className: "flex items-center gap-1"
-      }, /*#__PURE__*/React.createElement(IconButton, {
+      }, canEditInv && /*#__PURE__*/React.createElement(IconButton, {
         name: "edit",
         color: C.teal,
         title: "Edit chemical",
-        onClick: () => setEditChemicalFor(chem)
-      }), /*#__PURE__*/React.createElement(IconButton, {
+        onClick: invEditGate.guard(() => setEditChemicalFor(chem))
+      }), canDeleteInv && /*#__PURE__*/React.createElement(IconButton, {
         name: "trash",
         color: C.warn,
         title: "Delete chemical",
-        onClick: () => setDeleteChemicalFor(chem),
+        onClick: invDeleteGate.guard(() => setDeleteChemicalFor(chem)),
         disabled: chem.batches.length > 0
-      }), /*#__PURE__*/React.createElement(Button, {
+      }), canCreateInv && /*#__PURE__*/React.createElement(Button, {
         size: "sm",
         variant: "outline",
-        onClick: () => setBatchFormFor(chem.id)
+        onClick: invCreateGate.guard(() => setBatchFormFor(chem.id))
       }, /*#__PURE__*/React.createElement(Icon, {
         name: "plus",
         size: 13
@@ -306,7 +387,7 @@ function InventoryTab({
       text: `Delete chemical "${chem.name}"? This cannot be undone.`,
       onConfirm: () => deleteChemical(chem),
       onCancel: () => setDeleteChemicalFor(null)
-    }), !isCollapsed && /*#__PURE__*/React.createElement("table", {
+    }), !isCollapsed && /*#__PURE__*/React.createElement("div", { className: "overflow-x-auto" }, React.createElement("table", {
       className: "w-full text-xs"
     }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
       style: {
@@ -397,25 +478,25 @@ function InventoryTab({
             v: `${fmtNum(b.initialAmount)} ${chem.unit}`
           }]
         })
-      }), /*#__PURE__*/React.createElement(IconButton, {
+      }), canEditInv && /*#__PURE__*/React.createElement(IconButton, {
         name: "edit",
         color: C.teal,
         title: "Edit batch",
-        onClick: () => setEditBatch({
+        onClick: invEditGate.guard(() => setEditBatch({
           chemId: chem.id,
           batch: b
-        })
-      }), /*#__PURE__*/React.createElement(IconButton, {
+        }))
+      }), canDeleteInv && /*#__PURE__*/React.createElement(IconButton, {
         name: "trash",
         color: C.warn,
         title: used ? "In use by a test record — delete that record first" : "Delete batch",
         disabled: used,
-        onClick: () => setDeleteBatch({
+        onClick: invDeleteGate.guard(() => setDeleteBatch({
           chemId: chem.id,
           batch: b
-        })
+        }))
       }))));
-    }))), deleteBatch && deleteBatch.chemId === chem.id && /*#__PURE__*/React.createElement(ConfirmBar, {
+    })))), deleteBatch && deleteBatch.chemId === chem.id && /*#__PURE__*/React.createElement(ConfirmBar, {
       text: `Delete this batch (received ${deleteBatch.batch.dateReceived})? This cannot be undone.`,
       onConfirm: () => deleteBatchNow(chem.id, deleteBatch.batch),
       onCancel: () => setDeleteBatch(null)
@@ -427,13 +508,22 @@ function InventoryTab({
     masterList: masterChemicals,
     existingNames: chemicals.map(c => c.name),
     onSave: (name, unit) => {
+      const newId = uid("chem");
       setChemicals(prev => [...prev, {
-        id: uid("chem"),
+        id: newId,
         name,
         unit,
         batches: []
       }]);
       setShowAddChemical(false);
+      DataService.appendAudit({
+        entity: "chemical",
+        entityId: newId,
+        action: "create",
+        user: session.username,
+        role: session.role,
+        note: `Added chemical "${name}"`
+      });
       notify(`Added chemical "${name}"`);
     },
     onCancel: () => setShowAddChemical(false)
@@ -451,6 +541,14 @@ function InventoryTab({
         unit
       } : c));
       setEditChemicalFor(null);
+      DataService.appendAudit({
+        entity: "chemical",
+        entityId: editChemicalFor.id,
+        action: "edit",
+        user: session.username,
+        role: session.role,
+        note: `Updated chemical "${name}"`
+      });
       notify(`Updated chemical "${name}"`);
     },
     onCancel: () => setEditChemicalFor(null)
@@ -470,6 +568,14 @@ function InventoryTab({
         }]
       } : c)));
       setBatchFormFor(null);
+      DataService.appendAudit({
+        entity: "chemical",
+        entityId: batchFormFor,
+        action: "create",
+        user: session.username,
+        role: session.role,
+        note: `Added a batch of "${chemicals.find(c => c.id === batchFormFor)?.name || "chemical"}"`
+      });
       notify("Batch added to inventory");
     },
     onCancel: () => setBatchFormFor(null)
@@ -500,6 +606,14 @@ function InventoryTab({
         };
       })));
       setEditBatch(null);
+      DataService.appendAudit({
+        entity: "chemical",
+        entityId: editBatch.chemId,
+        action: "edit",
+        user: session.username,
+        role: session.role,
+        note: `Updated a batch of "${chemicals.find(c => c.id === editBatch.chemId)?.name || "chemical"}"`
+      });
       notify("Batch updated");
     },
     onCancel: () => setEditBatch(null)
@@ -528,10 +642,10 @@ function InventoryTab({
         if (e.target.files[0]) importGlassware(e.target.files[0]);
         e.target.value = "";
       }
-    }), /*#__PURE__*/React.createElement(Button, {
+    }), canCreateInv && /*#__PURE__*/React.createElement(Button, {
       variant: "outline",
       size: "sm",
-      onClick: () => glassUploadRef.current && glassUploadRef.current.click()
+      onClick: invCreateGate.guard(() => glassUploadRef.current && glassUploadRef.current.click())
     }, /*#__PURE__*/React.createElement(Icon, {
       name: "upload",
       size: 13
@@ -542,9 +656,9 @@ function InventoryTab({
     }, /*#__PURE__*/React.createElement(Icon, {
       name: "download",
       size: 13
-    }), "Download Template"), /*#__PURE__*/React.createElement(Button, {
+    }), "Download Template"), canCreateInv && /*#__PURE__*/React.createElement(Button, {
       size: "sm",
-      onClick: () => setShowAddGlass(true)
+      onClick: invCreateGate.guard(() => setShowAddGlass(true))
     }, /*#__PURE__*/React.createElement(Icon, {
       name: "plus",
       size: 13
@@ -555,7 +669,7 @@ function InventoryTab({
       background: C.infoBg,
       color: C.info
     }
-  }, "One Excel file can list many different glassware item types at once — each row becomes its own item."), /*#__PURE__*/React.createElement("table", {
+  }, "One Excel file can list many different glassware item types at once — each row becomes its own item."), /*#__PURE__*/React.createElement("div", { className: "overflow-x-auto" }, React.createElement("table", {
     className: "w-full text-xs"
   }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
     style: {
@@ -621,43 +735,43 @@ function InventoryTab({
       className: "py-1.5"
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex gap-2 flex-wrap items-center"
-    }, /*#__PURE__*/React.createElement("button", {
+    }, canEditInv && /*#__PURE__*/React.createElement("button", {
       className: "text-xs underline",
       style: {
         color: C.teal
       },
-      onClick: () => setMoveFormFor({
+      onClick: invEditGate.guard(() => setMoveFormFor({
         id: g.id,
         mode: "toUse"
-      })
-    }, "To Analysis Room"), /*#__PURE__*/React.createElement("button", {
+      }))
+    }, "To Analysis Room"), canEditInv && /*#__PURE__*/React.createElement("button", {
       className: "text-xs underline",
       style: {
         color: C.seafoam
       },
-      onClick: () => setMoveFormFor({
+      onClick: invEditGate.guard(() => setMoveFormFor({
         id: g.id,
         mode: "toStore"
-      })
-    }, "To Store"), /*#__PURE__*/React.createElement("button", {
+      }))
+    }, "To Store"), canEditInv && /*#__PURE__*/React.createElement("button", {
       className: "text-xs underline",
       style: {
         color: C.warn
       },
-      onClick: () => setMoveFormFor({
+      onClick: invEditGate.guard(() => setMoveFormFor({
         id: g.id,
         mode: "break"
-      })
-    }, "Mark Broken"), /*#__PURE__*/React.createElement(IconButton, {
+      }))
+    }, "Mark Broken"), canEditInv && /*#__PURE__*/React.createElement(IconButton, {
       name: "edit",
       color: C.teal,
       title: "Edit glassware",
-      onClick: () => setEditGlassFor(g)
-    }), /*#__PURE__*/React.createElement(IconButton, {
+      onClick: invEditGate.guard(() => setEditGlassFor(g))
+    }), canDeleteInv && /*#__PURE__*/React.createElement(IconButton, {
       name: "trash",
       color: C.warn,
       title: "Delete glassware",
-      onClick: () => setDeleteGlassFor(g)
+      onClick: invDeleteGate.guard(() => setDeleteGlassFor(g))
     })))), deleteGlassFor?.id === g.id && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
       colSpan: 9
     }, /*#__PURE__*/React.createElement(ConfirmBar, {
@@ -665,20 +779,37 @@ function InventoryTab({
       onConfirm: () => {
         setGlassware(prev => prev.filter(x => x.id !== g.id));
         setDeleteGlassFor(null);
+        DataService.appendAudit({
+          entity: "glassware",
+          entityId: g.id,
+          action: "delete",
+          user: session.username,
+          role: session.role,
+          note: `Deleted glassware "${g.name}"`
+        });
         notify(`Deleted glassware "${g.name}"`);
       },
       onCancel: () => setDeleteGlassFor(null)
     }))));
-  }))), showAddGlass && /*#__PURE__*/React.createElement(Modal, {
+  })))), showAddGlass && /*#__PURE__*/React.createElement(Modal, {
     title: "Add Glassware",
     onClose: () => setShowAddGlass(false)
   }, /*#__PURE__*/React.createElement(AddGlasswareForm, {
     onSave: payload => {
+      const newId = uid("glass");
       setGlassware(prev => [...prev, {
-        id: uid("glass"),
+        id: newId,
         ...payload
       }]);
       setShowAddGlass(false);
+      DataService.appendAudit({
+        entity: "glassware",
+        entityId: newId,
+        action: "create",
+        user: session.username,
+        role: session.role,
+        note: `Added glassware "${payload.name}"`
+      });
       notify(`Added glassware "${payload.name}"`);
     },
     onCancel: () => setShowAddGlass(false)
@@ -693,6 +824,14 @@ function InventoryTab({
         ...payload
       } : g));
       setEditGlassFor(null);
+      DataService.appendAudit({
+        entity: "glassware",
+        entityId: editGlassFor.id,
+        action: "edit",
+        user: session.username,
+        role: session.role,
+        note: `Updated glassware "${payload.name}"`
+      });
       notify("Glassware updated");
     },
     onCancel: () => setEditGlassFor(null)
@@ -703,6 +842,7 @@ function InventoryTab({
     item: glassware.find(g => g.id === moveFormFor.id),
     mode: moveFormFor.mode,
     onSave: (qty, brokenInfo) => {
+      const glassName = glassware.find(g => g.id === moveFormFor.id)?.name || "glassware";
       setGlassware(prev => prev.map(g => {
         if (g.id !== moveFormFor.id) return g;
         if (moveFormFor.mode === "toUse") return {
@@ -727,6 +867,14 @@ function InventoryTab({
         };
       }));
       setMoveFormFor(null);
+      DataService.appendAudit({
+        entity: "glassware",
+        entityId: moveFormFor.id,
+        action: "edit",
+        user: session.username,
+        role: session.role,
+        note: moveFormFor.mode === "toUse" ? `Moved ${qty} "${glassName}" to Analysis Room` : moveFormFor.mode === "toStore" ? `Moved ${qty} "${glassName}" back to Store` : `Marked ${qty} "${glassName}" as broken`
+      });
       notify(moveFormFor.mode === "break" ? "Marked items as broken" : "Glassware quantity updated");
     },
     onCancel: () => setMoveFormFor(null)
@@ -741,10 +889,10 @@ function InventoryTab({
       if (e.target.files[0]) importEquipment(e.target.files[0]);
       e.target.value = "";
     }
-  }), /*#__PURE__*/React.createElement(Button, {
+  }), canCreateInv && /*#__PURE__*/React.createElement(Button, {
     variant: "outline",
     size: "sm",
-    onClick: () => equipUploadRef.current && equipUploadRef.current.click()
+    onClick: invCreateGate.guard(() => equipUploadRef.current && equipUploadRef.current.click())
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "upload",
     size: 14
@@ -755,9 +903,9 @@ function InventoryTab({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "download",
     size: 14
-  }), "Download Template"), /*#__PURE__*/React.createElement(Button, {
+  }), "Download Template"), canCreateInv && /*#__PURE__*/React.createElement(Button, {
     size: "sm",
-    onClick: () => setShowAddEquip(true)
+    onClick: invCreateGate.guard(() => setShowAddEquip(true))
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "plus",
     size: 14
@@ -790,20 +938,20 @@ function InventoryTab({
         tone: "ok"
       }, "Functional") : /*#__PURE__*/React.createElement(Badge, {
         tone: "warn"
-      }, "Not Functional"), /*#__PURE__*/React.createElement(IconButton, {
+      }, "Not Functional"), canEditInv && /*#__PURE__*/React.createElement(IconButton, {
         name: "edit",
         color: C.teal,
         title: "Edit equipment",
-        onClick: () => setEditEquipFor(eq)
-      }), /*#__PURE__*/React.createElement(IconButton, {
+        onClick: invEditGate.guard(() => setEditEquipFor(eq))
+      }), canDeleteInv && /*#__PURE__*/React.createElement(IconButton, {
         name: "trash",
         color: C.warn,
         title: "Delete equipment",
-        onClick: () => setDeleteEquipFor(eq)
-      }), /*#__PURE__*/React.createElement(Button, {
+        onClick: invDeleteGate.guard(() => setDeleteEquipFor(eq))
+      }), canCreateInv && /*#__PURE__*/React.createElement(Button, {
         size: "sm",
         variant: "outline",
-        onClick: () => setEventFormFor(eq.id)
+        onClick: invCreateGate.guard(() => setEventFormFor(eq.id))
       }, /*#__PURE__*/React.createElement(Icon, {
         name: "plus",
         size: 13
@@ -813,6 +961,14 @@ function InventoryTab({
       onConfirm: () => {
         setEquipment(prev => prev.filter(x => x.id !== eq.id));
         setDeleteEquipFor(null);
+        DataService.appendAudit({
+          entity: "equipment",
+          entityId: eq.id,
+          action: "delete",
+          user: session.username,
+          role: session.role,
+          note: `Deleted equipment "${eq.name}"`
+        });
         notify(`Deleted equipment "${eq.name}"`);
       },
       onCancel: () => setDeleteEquipFor(null)
@@ -829,7 +985,7 @@ function InventoryTab({
       style: {
         color: C.ink
       }
-    }, eq.receivedFrom || "—"))), /*#__PURE__*/React.createElement("table", {
+    }, eq.receivedFrom || "—"))), /*#__PURE__*/React.createElement("div", { className: "overflow-x-auto" }, React.createElement("table", {
       className: "w-full text-xs"
     }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
       style: {
@@ -878,22 +1034,22 @@ function InventoryTab({
       className: "py-1.5"
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex items-center gap-1"
-    }, /*#__PURE__*/React.createElement(IconButton, {
+    }, canEditInv && /*#__PURE__*/React.createElement(IconButton, {
       name: "edit",
       color: C.teal,
       title: "Edit event",
-      onClick: () => setEditEvent({
+      onClick: invEditGate.guard(() => setEditEvent({
         equipId: eq.id,
         evt: h
-      })
-    }), /*#__PURE__*/React.createElement(IconButton, {
+      }))
+    }), canDeleteInv && /*#__PURE__*/React.createElement(IconButton, {
       name: "trash",
       color: C.warn,
       title: "Delete event",
-      onClick: () => setDeleteEvent({
+      onClick: invDeleteGate.guard(() => setDeleteEvent({
         equipId: eq.id,
         evt: h
-      })
+      }))
     })))), deleteEvent && deleteEvent.equipId === eq.id && deleteEvent.evt.id === h.id && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
       colSpan: 6
     }, /*#__PURE__*/React.createElement(ConfirmBar, {
@@ -910,22 +1066,39 @@ function InventoryTab({
           };
         }));
         setDeleteEvent(null);
+        DataService.appendAudit({
+          entity: "equipment",
+          entityId: eq.id,
+          action: "delete",
+          user: session.username,
+          role: session.role,
+          note: `Deleted a logged event on "${eq.name}"`
+        });
         notify("Event deleted");
       },
       onCancel: () => setDeleteEvent(null)
-    })))))))));
+    }))))))))));
   }), showAddEquip && /*#__PURE__*/React.createElement(Modal, {
     title: "Add Equipment",
     onClose: () => setShowAddEquip(false)
   }, /*#__PURE__*/React.createElement(AddEquipmentForm, {
     onSave: payload => {
+      const newId = uid("equip");
       setEquipment(prev => [...prev, {
-        id: uid("equip"),
+        id: newId,
         ...payload,
         functional: true,
         history: []
       }]);
       setShowAddEquip(false);
+      DataService.appendAudit({
+        entity: "equipment",
+        entityId: newId,
+        action: "create",
+        user: session.username,
+        role: session.role,
+        note: `Added equipment "${payload.name}"`
+      });
       notify(`Added equipment "${payload.name}"`);
     },
     onCancel: () => setShowAddEquip(false)
@@ -940,6 +1113,14 @@ function InventoryTab({
         ...payload
       } : e));
       setEditEquipFor(null);
+      DataService.appendAudit({
+        entity: "equipment",
+        entityId: editEquipFor.id,
+        action: "edit",
+        user: session.username,
+        role: session.role,
+        note: `Updated equipment "${payload.name}"`
+      });
       notify("Equipment updated");
     },
     onCancel: () => setEditEquipFor(null)
@@ -948,6 +1129,7 @@ function InventoryTab({
     onClose: () => setEventFormFor(null)
   }, /*#__PURE__*/React.createElement(EquipmentEventForm, {
     onSave: evt => {
+      const eqName = equipment.find(e => e.id === eventFormFor)?.name || "equipment";
       setEquipment(prev => prev.map(eq => eq.id === eventFormFor ? {
         ...eq,
         functional: evt.functionalAfter,
@@ -957,6 +1139,14 @@ function InventoryTab({
         }]
       } : eq));
       setEventFormFor(null);
+      DataService.appendAudit({
+        entity: "equipment",
+        entityId: eventFormFor,
+        action: "edit",
+        user: session.username,
+        role: session.role,
+        note: `Logged an event on "${eqName}"${evt.functionalAfter ? "" : " — marked not functional"}`
+      });
       notify("Event logged for equipment");
     },
     onCancel: () => setEventFormFor(null)
@@ -966,6 +1156,7 @@ function InventoryTab({
   }, /*#__PURE__*/React.createElement(EquipmentEventForm, {
     initial: editEvent.evt,
     onSave: evt => {
+      const eqName = equipment.find(e => e.id === editEvent.equipId)?.name || "equipment";
       setEquipment(prev => prev.map(e => {
         if (e.id !== editEvent.equipId) return e;
         const history = e.history.map(h => h.id === editEvent.evt.id ? {
@@ -980,6 +1171,14 @@ function InventoryTab({
         };
       }));
       setEditEvent(null);
+      DataService.appendAudit({
+        entity: "equipment",
+        entityId: editEvent.equipId,
+        action: "edit",
+        user: session.username,
+        role: session.role,
+        note: `Edited a logged event on "${eqName}"`
+      });
       notify("Event updated");
     },
     onCancel: () => setEditEvent(null)
@@ -989,11 +1188,11 @@ function InventoryTab({
       background: C.infoBg,
       color: C.info
     }
-  }, "Gas cylinders (Acetylene, Argon, etc.) are tracked separately from chemicals because they're mostly topped up by ", /*#__PURE__*/React.createElement("strong", null, "refilling"), " an existing cylinder in kg, rather than bought as a fresh single-use batch. Per-sample gas usage is hard to calculate precisely, so it isn't auto-deducted — mark a cylinder \"Empty\" yourself once it runs out, then refill or add a new one. Test types can still link to a gas by name so reports show which tests used which gas."), /*#__PURE__*/React.createElement("div", {
+  }, "Gas cylinders (Acetylene, Argon, etc.) are tracked separately from chemicals because they're mostly topped up by ", /*#__PURE__*/React.createElement("strong", null, "refilling"), " an existing cylinder in kg, rather than bought as a fresh single-use batch. Per-sample gas usage is hard to calculate precisely, so it isn't auto-deducted — mark a cylinder \"Empty\" yourself once it runs out, then refill or add a new one. Test types can still link to a gas by name so reports show which tests used which gas."), canCreateInv && /*#__PURE__*/React.createElement("div", {
     className: "flex justify-end mb-3"
   }, /*#__PURE__*/React.createElement(Button, {
     size: "sm",
-    onClick: () => setShowAddGas(true)
+    onClick: invCreateGate.guard(() => setShowAddGas(true))
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "plus",
     size: 14
@@ -1021,21 +1220,21 @@ function InventoryTab({
       }),
       right: /*#__PURE__*/React.createElement("div", {
         className: "flex items-center gap-1"
-      }, /*#__PURE__*/React.createElement(IconButton, {
+      }, canEditInv && /*#__PURE__*/React.createElement(IconButton, {
         name: "edit",
         color: C.teal,
         title: "Edit gas",
-        onClick: () => setEditGasFor(g)
-      }), /*#__PURE__*/React.createElement(IconButton, {
+        onClick: invEditGate.guard(() => setEditGasFor(g))
+      }), canDeleteInv && /*#__PURE__*/React.createElement(IconButton, {
         name: "trash",
         color: C.warn,
         title: "Delete gas",
-        onClick: () => setDeleteGasFor(g),
+        onClick: invDeleteGate.guard(() => setDeleteGasFor(g)),
         disabled: g.cylinders.length > 0
-      }), /*#__PURE__*/React.createElement(Button, {
+      }), canCreateInv && /*#__PURE__*/React.createElement(Button, {
         size: "sm",
         variant: "outline",
-        onClick: () => setCylinderFormFor(g.id)
+        onClick: invCreateGate.guard(() => setCylinderFormFor(g.id))
       }, /*#__PURE__*/React.createElement(Icon, {
         name: "plus",
         size: 13
@@ -1044,7 +1243,7 @@ function InventoryTab({
       text: `Delete gas "${g.name}"? This cannot be undone.`,
       onConfirm: () => deleteGasType(g),
       onCancel: () => setDeleteGasFor(null)
-    }), !isCollapsed && /*#__PURE__*/React.createElement("table", {
+    }), !isCollapsed && /*#__PURE__*/React.createElement("div", { className: "overflow-x-auto" }, React.createElement("table", {
       className: "w-full text-xs"
     }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
       style: {
@@ -1149,20 +1348,20 @@ function InventoryTab({
             v: `${fmtNum(c.capacity)} ${g.unit}`
           }]
         })
-      }), /*#__PURE__*/React.createElement(Button, {
+      }), canEditInv && /*#__PURE__*/React.createElement(Button, {
         size: "sm",
         variant: "outline",
-        onClick: () => setRefillFormFor({
+        onClick: invEditGate.guard(() => setRefillFormFor({
           gasId: g.id,
           cylinder: c
-        })
+        }))
       }, /*#__PURE__*/React.createElement(Icon, {
         name: "upload",
         size: 12
-      }), "Refill"), c.status === "active" && /*#__PURE__*/React.createElement(Button, {
+      }), "Refill"), canEditInv && c.status === "active" && /*#__PURE__*/React.createElement(Button, {
         size: "sm",
         variant: "ghost",
-        onClick: () => {
+        onClick: invEditGate.guard(() => {
           setGasList(prev => prev.map(x => x.id === g.id ? {
             ...x,
             cylinders: x.cylinders.map(cy => cy.id === c.id ? {
@@ -1171,26 +1370,34 @@ function InventoryTab({
               status: "empty"
             } : cy)
           } : x));
+          DataService.appendAudit({
+            entity: "gas",
+            entityId: g.id,
+            action: "edit",
+            user: session.username,
+            role: session.role,
+            note: `Marked a "${g.name}" cylinder as empty`
+          });
           notify(`Marked cylinder as empty — remember to refill or replace it.`, "warn");
-        }
-      }, "Mark Empty"), /*#__PURE__*/React.createElement(IconButton, {
+        })
+      }, "Mark Empty"), canEditInv && /*#__PURE__*/React.createElement(IconButton, {
         name: "edit",
         color: C.teal,
         title: "Edit cylinder",
-        onClick: () => setEditCylinder({
+        onClick: invEditGate.guard(() => setEditCylinder({
           gasId: g.id,
           cylinder: c
-        })
-      }), /*#__PURE__*/React.createElement(IconButton, {
+        }))
+      }), canDeleteInv && /*#__PURE__*/React.createElement(IconButton, {
         name: "trash",
         color: C.warn,
         title: "Delete cylinder",
-        onClick: () => setDeleteCylinder({
+        onClick: invDeleteGate.guard(() => setDeleteCylinder({
           gasId: g.id,
           cylinder: c
-        })
+        }))
       }))));
-    }))), deleteCylinder && deleteCylinder.gasId === g.id && /*#__PURE__*/React.createElement(ConfirmBar, {
+    })))), deleteCylinder && deleteCylinder.gasId === g.id && /*#__PURE__*/React.createElement(ConfirmBar, {
       text: `Delete this cylinder (received ${deleteCylinder.cylinder.dateReceived})? This cannot be undone.`,
       onConfirm: () => deleteCylinderNow(g.id, deleteCylinder.cylinder),
       onCancel: () => setDeleteCylinder(null)
@@ -1200,13 +1407,22 @@ function InventoryTab({
     onClose: () => setShowAddGas(false)
   }, /*#__PURE__*/React.createElement(AddGasForm, {
     onSave: (name, unit) => {
+      const newId = uid("gas");
       setGasList(prev => [...prev, {
-        id: uid("gas"),
+        id: newId,
         name,
         unit,
         cylinders: []
       }]);
       setShowAddGas(false);
+      DataService.appendAudit({
+        entity: "gas",
+        entityId: newId,
+        action: "create",
+        user: session.username,
+        role: session.role,
+        note: `Added gas "${name}"`
+      });
       notify(`Added gas "${name}"`);
     },
     onCancel: () => setShowAddGas(false)
@@ -1222,6 +1438,14 @@ function InventoryTab({
         unit
       } : g));
       setEditGasFor(null);
+      DataService.appendAudit({
+        entity: "gas",
+        entityId: editGasFor.id,
+        action: "edit",
+        user: session.username,
+        role: session.role,
+        note: `Updated gas "${name}"`
+      });
       notify(`Updated gas "${name}"`);
     },
     onCancel: () => setEditGasFor(null)
@@ -1232,6 +1456,7 @@ function InventoryTab({
     unit: gasList.find(g => g.id === cylinderFormFor)?.unit || "kg",
     existingNames: (gasList.find(g => g.id === cylinderFormFor)?.cylinders || []).map(c => c.name).filter(Boolean),
     onSave: payload => {
+      const gasName = gasList.find(g => g.id === cylinderFormFor)?.name || "gas";
       setGasList(prev => prev.map(g => g.id === cylinderFormFor ? {
         ...g,
         cylinders: [...g.cylinders, {
@@ -1250,6 +1475,14 @@ function InventoryTab({
         }]
       } : g));
       setCylinderFormFor(null);
+      DataService.appendAudit({
+        entity: "gas",
+        entityId: cylinderFormFor,
+        action: "create",
+        user: session.username,
+        role: session.role,
+        note: `Added a new cylinder to "${gasName}"`
+      });
       notify("New cylinder added to inventory");
     },
     onCancel: () => setCylinderFormFor(null)
@@ -1261,6 +1494,7 @@ function InventoryTab({
     unit: gasList.find(g => g.id === editCylinder.gasId)?.unit || "kg",
     existingNames: (gasList.find(g => g.id === editCylinder.gasId)?.cylinders || []).filter(c => c.id !== editCylinder.cylinder.id).map(c => c.name).filter(Boolean),
     onSave: payload => {
+      const gasName = gasList.find(g => g.id === editCylinder.gasId)?.name || "gas";
       setGasList(prev => prev.map(g => {
         if (g.id !== editCylinder.gasId) return g;
         return {
@@ -1278,6 +1512,14 @@ function InventoryTab({
         };
       }));
       setEditCylinder(null);
+      DataService.appendAudit({
+        entity: "gas",
+        entityId: editCylinder.gasId,
+        action: "edit",
+        user: session.username,
+        role: session.role,
+        note: `Updated a cylinder of "${gasName}"`
+      });
       notify("Cylinder updated");
     },
     onCancel: () => setEditCylinder(null)
@@ -1288,6 +1530,7 @@ function InventoryTab({
     cylinder: refillFormFor.cylinder,
     unit: gasList.find(g => g.id === refillFormFor.gasId)?.unit || "kg",
     onSave: payload => {
+      const gasName = gasList.find(g => g.id === refillFormFor.gasId)?.name || "gas";
       setGasList(prev => prev.map(g => {
         if (g.id !== refillFormFor.gasId) return g;
         return {
@@ -1312,13 +1555,21 @@ function InventoryTab({
         };
       }));
       setRefillFormFor(null);
+      DataService.appendAudit({
+        entity: "gas",
+        entityId: refillFormFor.gasId,
+        action: "edit",
+        user: session.username,
+        role: session.role,
+        note: `Refilled a cylinder of "${gasName}" (+${payload.amount})`
+      });
       notify("Cylinder refilled");
     },
     onCancel: () => setRefillFormFor(null)
   })), historyFor && /*#__PURE__*/React.createElement(Modal, {
     title: `Cylinder History — received ${historyFor.cylinder.dateReceived}`,
     onClose: () => setHistoryFor(null)
-  }, /*#__PURE__*/React.createElement("table", {
+  }, /*#__PURE__*/React.createElement("div", { className: "overflow-x-auto" }, React.createElement("table", {
     className: "w-full text-xs"
   }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
     style: {
@@ -1352,7 +1603,7 @@ function InventoryTab({
     className: "py-1.5"
   }, h.cost ? `৳${fmtNum(h.cost)}` : "—"), /*#__PURE__*/React.createElement("td", {
     className: "py-1.5"
-  }, h.note || "—"))))), /*#__PURE__*/React.createElement("div", {
+  }, h.note || "—")))))), /*#__PURE__*/React.createElement("div", {
     className: "flex justify-end mt-3"
   }, /*#__PURE__*/React.createElement(Button, {
     variant: "outline",
@@ -1428,7 +1679,7 @@ function MasterChemicalListModal({
       key: n,
       className: "flex items-center justify-between text-sm px-2 py-1.5 rounded gap-2",
       style: {
-        background: "#FAFEFE",
+        background: C.subtle,
         border: `1px solid ${C.border}`
       }
     }, isEditing ? /*#__PURE__*/React.createElement("input", {

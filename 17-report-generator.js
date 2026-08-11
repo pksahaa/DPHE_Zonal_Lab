@@ -28,8 +28,10 @@ function buildReportHtml({
   const firstCode = sorted[0]?.sampleCode || "";
   const lastCode = sorted[sorted.length - 1]?.sampleCode || "";
   const sampleIdLine = sorted.length > 1 ? `${firstCode} To ${lastCode}, Total: ${String(sorted.length).padStart(2, "0")}` : `${firstCode}, Total: 01`;
-  const logoLeft = labIdentity.leftLogoDataUrl ? `<img src="${labIdentity.leftLogoDataUrl}" style="height:56px">` : "";
-  const logoRight = labIdentity.rightLogoDataUrl ? `<img src="${labIdentity.rightLogoDataUrl}" style="height:56px">` : "";
+  const logoLeftSrc = labIdentity.leftLogoDataUrl || labIdentity.leftLogoUrl || "assets/logo_left.png";
+  const logoRightSrc = labIdentity.rightLogoDataUrl || labIdentity.rightLogoUrl || "assets/logo_right.png";
+  const logoLeft = logoLeftSrc ? `<img src="${logoLeftSrc}" style="height:56px" onerror="this.style.display='none'">` : "";
+  const logoRight = logoRightSrc ? `<img src="${logoRightSrc}" style="height:56px" onerror="this.style.display='none'">` : "";
   const testHeaderCells = selectedTests.map(t => `<th colspan="2">${t.name}${t.reportLimit ? ` <br><span style="font-weight:400">${t.reportLimit}</span>` : ""}</th>`).join("");
   const testSubHeaderCells = selectedTests.map(() => `<th>Conc.</th><th>Method</th>`).join("");
   const bodyRows = sorted.map(s => {
@@ -182,6 +184,7 @@ function CustomReportGeneratorPage({
   testRecords,
   users,
   session,
+  permissionMatrix,
   goToSample,
   notify,
   forceMode
@@ -213,8 +216,8 @@ function CustomReportGeneratorPage({
     }]
   });
   const [selectionMode, setSelectionMode] = React.useState(forceMode || "individual"); // "individual" | "batch" | "subbatch"
-  const [reportReferenceId, setReportReferenceId] = React.useState("");
-  const [reportSubBatchId, setReportSubBatchId] = React.useState("");
+  const [reportReferenceIds, setReportReferenceIds] = React.useState([]);
+  const [reportSubBatchIds, setReportSubBatchIds] = React.useState([]);
   const filteredSamples = (samples || []).filter(s => !q || `${s.sampleCode} ${s.clientName} ${s.siteLocation} ${s.village}`.toLowerCase().includes(q.toLowerCase()));
   // Reporting is done by Reference (the actual source paperwork — DPHE /
   // institution / walk-in letter+ref no.), not by whichever Sub-Batch
@@ -222,7 +225,7 @@ function CustomReportGeneratorPage({
   // one sample pointing at them.
   const referenceOptions = Array.from(new Set((samples || []).map(s => s.referenceId).filter(Boolean))).map(id => findReferenceById(references, id)).filter(Boolean).sort((a, b) => (a.refNo || "").localeCompare(b.refNo || ""));
   const reportSubBatchOptions = [...(subBatches || [])].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
-  const selectedReportSubBatch = reportSubBatchId ? (subBatches || []).find(sb => sb.id === reportSubBatchId) : null;
+  const selectedReportSubBatches = (subBatches || []).filter(sb => reportSubBatchIds.includes(sb.id));
   const selectedSamples = (samples || []).filter(s => selectedSampleIds.includes(s.id));
   const availableTestIds = React.useMemo(() => {
     const ids = new Set();
@@ -247,6 +250,13 @@ function CustomReportGeneratorPage({
   }
   function toggleTest(id) {
     setSelectedTestIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+  // Deselect one sample from an already-picked batch/sub-batch set without
+  // having to uncheck the whole batch — the sample just drops out of the
+  // report; the underlying Reference/Sub-Batch checkboxes stay checked since
+  // most of that batch is still wanted.
+  function removeSelectedSample(id) {
+    setSelectedSampleIds(prev => prev.filter(x => x !== id));
   }
   function updateSignatory(side, idx, value) {
     setSignatories(prev => ({
@@ -336,8 +346,8 @@ function CustomReportGeneratorPage({
     onChange: e => {
       const mode = e.target.value;
       setSelectionMode(mode);
-      setReportReferenceId("");
-      setReportSubBatchId("");
+      setReportReferenceIds([]);
+      setReportSubBatchIds([]);
       setSelectedSampleIds([]);
     }
   }, /*#__PURE__*/React.createElement("option", { value: "individual" }, "Individual Samples"), /*#__PURE__*/React.createElement("option", { value: "batch" }, "Batch (by Reference)"), /*#__PURE__*/React.createElement("option", { value: "subbatch" }, "Analytical Batch")));
@@ -409,62 +419,140 @@ function CustomReportGeneratorPage({
     }, "↗")));
   })))));
 
-  const batchModeBlock = selectionMode !== "batch" ? null : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("select", {
-    className: "border rounded px-2 py-1.5 text-sm w-full mb-2",
-    style: { borderColor: C.border },
-    value: reportReferenceId,
-    onChange: e => {
-      const refId = e.target.value;
-      setReportReferenceId(refId);
-      const ref = findReferenceById(references, refId);
-      if (!ref) {
-        setSelectedSampleIds([]);
-        return;
+  function toggleReference(refId) {
+    setReportReferenceIds(prev => {
+      const next = prev.includes(refId) ? prev.filter(x => x !== refId) : [...prev, refId];
+      setSelectedSampleIds((samples || []).filter(s => next.includes(s.referenceId)).map(s => s.id));
+      // Memo fields (ref no., date, sample source) describe a single source
+      // document, so auto-fill only when exactly one Reference is selected —
+      // with several selected at once, leave them for the user to edit by
+      // hand rather than guessing which reference should win.
+      if (next.length === 1) {
+        const ref = findReferenceById(references, next[0]);
+        if (ref) {
+          setMemo(prev2 => ({
+            ...prev2,
+            refMemoNo: ref.isAutoGenerated ? prev2.refMemoNo : ref.refNo,
+            refMemoDate: ref.letterDate || prev2.refMemoDate,
+            sampleSource: ref.organizationName || prev2.sampleSource
+          }));
+        }
       }
-      setSelectedSampleIds((samples || []).filter(s => s.referenceId === ref.id).map(s => s.id));
-      setMemo(prev => ({
-        ...prev,
-        refMemoNo: ref.isAutoGenerated ? prev.refMemoNo : ref.refNo,
-        refMemoDate: ref.letterDate || prev.refMemoDate,
-        sampleSource: ref.organizationName || prev.sampleSource
-      }));
+      return next;
+    });
+  }
+  const batchModeBlock = selectionMode !== "batch" ? null : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2 mb-2"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "ghost",
+    size: "sm",
+    onClick: () => {
+      const allIds = referenceOptions.map(r => r.id);
+      setReportReferenceIds(allIds);
+      setSelectedSampleIds((samples || []).filter(s => allIds.includes(s.referenceId)).map(s => s.id));
     }
-  }, [/*#__PURE__*/React.createElement("option", { key: "none", value: "" }, "— Select a Reference —")].concat(referenceOptions.map(ref => /*#__PURE__*/React.createElement("option", {
+  }, "Select All References"), /*#__PURE__*/React.createElement(Button, {
+    variant: "ghost",
+    size: "sm",
+    onClick: () => {
+      setReportReferenceIds([]);
+      setSelectedSampleIds([]);
+    }
+  }, "Clear")), /*#__PURE__*/React.createElement("div", {
+    className: "max-h-56 overflow-y-auto rounded mb-2",
+    style: { border: `1px solid ${C.border}` }
+  }, referenceOptions.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "text-xs p-2",
+    style: { color: C.muted }
+  }, "No references available.") : referenceOptions.map(ref => /*#__PURE__*/React.createElement("div", {
     key: ref.id,
-    value: ref.id
-  }, `${referenceSourceMeta(ref.sourceType).label} — ${referenceDisplayLabel(ref)} (${(samples || []).filter(s => s.referenceId === ref.id).length} samples)`)))), selectedSampleIds.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 px-2 py-1.5 text-xs cursor-pointer",
+    style: {
+      background: reportReferenceIds.includes(ref.id) ? `${C.teal}14` : "transparent",
+      borderBottom: `1px solid ${C.border}`
+    },
+    onClick: () => toggleReference(ref.id)
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: reportReferenceIds.includes(ref.id),
+    onChange: () => toggleReference(ref.id),
+    onClick: e => e.stopPropagation()
+  }), /*#__PURE__*/React.createElement("span", null, `${referenceSourceMeta(ref.sourceType).label} — ${referenceDisplayLabel(ref)} (${(samples || []).filter(s => s.referenceId === ref.id).length} samples)`)))), selectedSampleIds.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "flex flex-wrap gap-1.5 mb-2"
   }, selectedSamples.map(s => /*#__PURE__*/React.createElement("span", {
     key: s.id,
-    className: "text-[11px] px-2 py-0.5 rounded-full",
+    className: "text-[11px] pl-2 pr-1 py-0.5 rounded-full flex items-center gap-1",
     style: { background: C.bg, color: C.ink }
-  }, `${s.sampleCode} · ${s.clientName}`))));
+  }, `${s.sampleCode} · ${s.clientName}`, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    title: "Remove this sample from the report",
+    onClick: () => removeSelectedSample(s.id),
+    style: { color: C.muted, lineHeight: 1 }
+  }, "×")))));
 
-  const subBatchModeBlock = selectionMode !== "subbatch" ? null : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("select", {
-    className: "border rounded px-2 py-1.5 text-sm w-full mb-2",
-    style: { borderColor: C.border },
-    value: reportSubBatchId,
-    onChange: e => {
-      const sbId = e.target.value;
-      setReportSubBatchId(sbId);
-      const sb = (subBatches || []).find(x => x.id === sbId);
-      if (!sb) {
-        setSelectedSampleIds([]);
-        return;
-      }
-      setSelectedSampleIds(sb.memberSampleIds || []);
-      setSelectedTestIds([sb.testTypeId]);
+  function applySubBatchSelection(ids) {
+    const selected = (subBatches || []).filter(sb => ids.includes(sb.id));
+    const sampleIds = Array.from(new Set(selected.flatMap(sb => sb.memberSampleIds || [])));
+    const testTypeIds = Array.from(new Set(selected.map(sb => sb.testTypeId).filter(Boolean)));
+    setSelectedSampleIds(sampleIds);
+    setSelectedTestIds(testTypeIds);
+  }
+  function toggleSubBatch(sbId) {
+    setReportSubBatchIds(prev => {
+      const next = prev.includes(sbId) ? prev.filter(x => x !== sbId) : [...prev, sbId];
+      applySubBatchSelection(next);
+      return next;
+    });
+  }
+  const subBatchModeBlock = selectionMode !== "subbatch" ? null : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2 mb-2"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "ghost",
+    size: "sm",
+    onClick: () => {
+      const allIds = reportSubBatchOptions.map(sb => sb.id);
+      setReportSubBatchIds(allIds);
+      applySubBatchSelection(allIds);
     }
-  }, [/*#__PURE__*/React.createElement("option", { key: "none", value: "" }, "— Select an Analytical Batch —")].concat(reportSubBatchOptions.map(sb => /*#__PURE__*/React.createElement("option", {
+  }, "Select All Analytical Batches"), /*#__PURE__*/React.createElement(Button, {
+    variant: "ghost",
+    size: "sm",
+    onClick: () => {
+      setReportSubBatchIds([]);
+      setSelectedSampleIds([]);
+      setSelectedTestIds([]);
+    }
+  }, "Clear")), /*#__PURE__*/React.createElement("div", {
+    className: "max-h-56 overflow-y-auto rounded mb-2",
+    style: { border: `1px solid ${C.border}` }
+  }, reportSubBatchOptions.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "text-xs p-2",
+    style: { color: C.muted }
+  }, "No analytical batches available.") : reportSubBatchOptions.map(sb => /*#__PURE__*/React.createElement("div", {
     key: sb.id,
-    value: sb.id
-  }, `${sb.label} — ${sb.testTypeName} (${(sb.memberSampleIds || []).length} samples) · ${sb.status}`)))), selectedReportSubBatch && /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 px-2 py-1.5 text-xs cursor-pointer",
+    style: {
+      background: reportSubBatchIds.includes(sb.id) ? `${C.teal}14` : "transparent",
+      borderBottom: `1px solid ${C.border}`
+    },
+    onClick: () => toggleSubBatch(sb.id)
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: reportSubBatchIds.includes(sb.id),
+    onChange: () => toggleSubBatch(sb.id),
+    onClick: e => e.stopPropagation()
+  }), /*#__PURE__*/React.createElement("span", null, `${sb.label} — ${sb.testTypeName} (${(sb.memberSampleIds || []).length} samples) · ${sb.status}`)))), selectedReportSubBatches.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "flex flex-wrap gap-1.5 mb-2"
   }, selectedSamples.map(s => /*#__PURE__*/React.createElement("span", {
     key: s.id,
-    className: "text-[11px] px-2 py-0.5 rounded-full",
+    className: "text-[11px] pl-2 pr-1 py-0.5 rounded-full flex items-center gap-1",
     style: { background: C.bg, color: C.ink }
-  }, `${s.sampleCode} · ${s.clientName}`))));
+  }, `${s.sampleCode} · ${s.clientName}`, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    title: "Remove this sample from the report",
+    onClick: () => removeSelectedSample(s.id),
+    style: { color: C.muted, lineHeight: 1 }
+  }, "×")))));
 
   const sampleSelectionSummaryLine = /*#__PURE__*/React.createElement("div", {
     className: "text-xs mt-2 font-semibold",
@@ -574,12 +662,15 @@ function CustomReportGeneratorPage({
     variant: "ghost",
     size: "sm",
     onClick: () => addSignatory("approvedBy")
-  }, "+ Add second signatory")))), selectedSampleIds.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "flex justify-end"
-  }, /*#__PURE__*/React.createElement(Button, {
-    onClick: generate
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "printer",
-    size: 14
-  }), "Generate & Print Report (", selectedSampleIds.length, " sample", selectedSampleIds.length === 1 ? "" : "s", ")")));
+  }, "+ Add second signatory")))), selectedSampleIds.length > 0 && (() => {
+    const reportsGate = permGate(permissionMatrix, session, "reports", "create", notify, "generate reports");
+    return reportsGate.visible && /*#__PURE__*/React.createElement("div", {
+      className: "flex justify-end"
+    }, /*#__PURE__*/React.createElement(Button, {
+      onClick: reportsGate.guard(generate)
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: "printer",
+      size: 14
+    }), "Generate & Print Report (", selectedSampleIds.length, " sample", selectedSampleIds.length === 1 ? "" : "s", ")"));
+  })());
 }

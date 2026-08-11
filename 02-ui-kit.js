@@ -20,12 +20,12 @@ function Badge({
       background: C.warnBg
     },
     danger: {
-      color: "#fff",
-      background: C.warn
+      color: C.danger,
+      background: C.dangerBg
     },
     muted: {
       color: C.muted,
-      background: "#EEF4F3"
+      background: C.mutedBg
     },
     info: {
       color: C.info,
@@ -59,7 +59,7 @@ function Banner({
     info: { color: C.info, background: C.infoBg, iconName: "clipboard" },
     ok: { color: C.ok, background: C.okBg, iconName: "check" },
     warn: { color: C.warn, background: C.warnBg, iconName: "warning" },
-    danger: { color: "#fff", background: C.warn, iconName: "warning" }
+    danger: { color: C.danger, background: C.dangerBg, iconName: "warning" }
   };
   const t = tones[tone] || tones.info;
   const [dismissed, setDismissed] = React.useState(() => {
@@ -85,7 +85,7 @@ function Banner({
     style: {
       background: t.background,
       color: t.color,
-      border: tone === "danger" ? "none" : `1px solid ${t.color}22`
+      border: `1px solid ${t.color}22`
     }
   }, /*#__PURE__*/React.createElement(Icon, {
     name: icon || t.iconName,
@@ -142,6 +142,73 @@ function Pagination({
     onClick: () => onPageChange(page + 1)
   }, "Next", /*#__PURE__*/React.createElement(Icon, { name: "arrowRight", size: 12 }))));
 }
+// ---- Spinner ----
+// One shared loading indicator — used inside Button (loading prop) and
+// anywhere else a fetch/save is in flight, instead of ad-hoc "Loading…"
+// text with no visual motion.
+function Spinner({
+  size = 14,
+  color
+}) {
+  return /*#__PURE__*/React.createElement("svg", {
+    width: size,
+    height: size,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    className: "animate-spin",
+    style: {
+      color: color || "currentColor"
+    }
+  }, /*#__PURE__*/React.createElement("circle", {
+    cx: 12,
+    cy: 12,
+    r: 9,
+    stroke: "currentColor",
+    strokeWidth: 3,
+    opacity: 0.25
+  }), /*#__PURE__*/React.createElement("path", {
+    d: "M21 12a9 9 0 0 0-9-9",
+    stroke: "currentColor",
+    strokeWidth: 3,
+    strokeLinecap: "round"
+  }));
+}
+
+// ---- Empty state ----
+// One shared "nothing here yet" block for lists/tables, instead of each
+// module inventing its own one-line gray text.
+function EmptyState({
+  icon = "clipboard",
+  title = "Nothing here yet",
+  subtitle,
+  action
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col items-center justify-center text-center gap-2 py-10 px-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "rounded-full p-3",
+    style: {
+      background: C.bg
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: icon,
+    size: 22,
+    color: C.muted
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "text-sm font-semibold",
+    style: {
+      color: C.ink
+    }
+  }, title), subtitle && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs max-w-sm",
+    style: {
+      color: C.muted
+    }
+  }, subtitle), action && /*#__PURE__*/React.createElement("div", {
+    className: "mt-1"
+  }, action));
+}
+
 function SectionCard({
   title,
   icon,
@@ -181,28 +248,38 @@ function TextField({
   rows,
   simple,
   onChange,
+  id,
   ...props
 }) {
   const handleChange = simple ? e => onChange(e.target.value) : onChange;
   const Tag = textarea ? "textarea" : "input";
+  const fieldId = id || props.name || `f_${React.useId ? React.useId() : Math.random().toString(36).slice(2)}`;
+  const errorId = `${fieldId}_err`;
   return /*#__PURE__*/React.createElement("label", {
     className: "flex flex-col gap-1 text-xs",
+    htmlFor: fieldId,
     style: {
       color: C.muted
     }
   }, label, /*#__PURE__*/React.createElement(Tag, {
     ...props,
+    id: fieldId,
     rows: textarea ? rows || 3 : undefined,
     onChange: handleChange,
-    className: "border rounded px-2 py-1.5 text-sm",
+    "aria-invalid": !!error,
+    "aria-describedby": error ? errorId : undefined,
+    className: "border rounded px-2 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1",
     style: {
       borderColor: error ? C.warn : C.border,
       borderWidth: error ? 1.5 : 1,
       color: C.ink,
       resize: textarea ? "vertical" : undefined,
+      "--tw-ring-color": C.teal,
       ...(props.style || {})
     }
   }), error && /*#__PURE__*/React.createElement("span", {
+    id: errorId,
+    role: "alert",
     className: "text-xs flex items-center gap-1",
     style: {
       color: C.warn
@@ -219,33 +296,43 @@ function SelectField({
   options,
   placeholder,
   error,
-  simple
+  simple,
+  id
 }) {
   const norm = (options || []).map(o => typeof o === "string" ? {
     value: o,
     label: o
   } : o);
   const handleChange = simple ? e => onChange(e.target.value) : onChange;
+  const fieldId = id || `s_${React.useId ? React.useId() : Math.random().toString(36).slice(2)}`;
+  const errorId = `${fieldId}_err`;
   return /*#__PURE__*/React.createElement("label", {
     className: "flex flex-col gap-1 text-xs",
+    htmlFor: fieldId,
     style: {
       color: C.muted
     }
   }, label, /*#__PURE__*/React.createElement("select", {
-    className: "border rounded px-2 py-1.5 text-sm",
+    id: fieldId,
+    className: "border rounded px-2 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1",
     style: {
       borderColor: error ? C.warn : C.border,
       borderWidth: error ? 1.5 : 1,
-      color: C.ink
+      color: C.ink,
+      "--tw-ring-color": C.teal
     },
     value: value,
-    onChange: handleChange
+    onChange: handleChange,
+    "aria-invalid": !!error,
+    "aria-describedby": error ? errorId : undefined
   }, /*#__PURE__*/React.createElement("option", {
     value: ""
   }, placeholder || "Select..."), norm.map(o => /*#__PURE__*/React.createElement("option", {
     key: o.value,
     value: o.value
   }, o.label))), error && /*#__PURE__*/React.createElement("span", {
+    id: errorId,
+    role: "alert",
     className: "text-xs flex items-center gap-1",
     style: {
       color: C.warn
@@ -262,34 +349,46 @@ function Button({
   type = "button",
   size = "md",
   disabled,
-  title
+  title,
+  loading
 }) {
-  const base = "inline-flex items-center gap-1.5 rounded font-medium transition-colors disabled:opacity-40";
+  const base = "inline-flex items-center gap-1.5 rounded font-medium transition-colors disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1";
   const sizes = size === "sm" ? "px-2.5 py-1 text-xs" : "px-3.5 py-2 text-sm";
   const styles = variant === "primary" ? {
     background: C.teal,
-    color: "#fff"
+    color: "#fff",
+    "--tw-ring-color": C.teal
   } : variant === "outline" ? {
     background: "transparent",
     color: C.teal,
-    border: `1px solid ${C.teal}`
+    border: `1px solid ${C.teal}`,
+    "--tw-ring-color": C.teal
   } : variant === "ghost" ? {
     background: "transparent",
     color: C.muted,
-    border: `1px solid ${C.border}`
+    border: `1px solid ${C.border}`,
+    "--tw-ring-color": C.muted
+  } : variant === "danger" ? {
+    background: C.danger,
+    color: "#fff",
+    "--tw-ring-color": C.danger
   } : {
     background: "transparent",
     color: C.warn,
-    border: `1px solid ${C.warn}`
+    border: `1px solid ${C.warn}`,
+    "--tw-ring-color": C.warn
   };
   return /*#__PURE__*/React.createElement("button", {
     type: type,
     title: title,
-    onClick: onClick,
-    disabled: disabled,
+    onClick: loading ? undefined : onClick,
+    disabled: disabled || loading,
+    "aria-busy": !!loading,
     className: `${base} ${sizes}`,
     style: styles
-  }, children);
+  }, loading && /*#__PURE__*/React.createElement(Spinner, {
+    size: size === "sm" ? 12 : 14
+  }), children);
 }
 function IconButton({
   name,
@@ -301,11 +400,13 @@ function IconButton({
   return /*#__PURE__*/React.createElement("button", {
     type: "button",
     title: title,
+    "aria-label": title || name,
     onClick: onClick,
     disabled: disabled,
-    className: "p-1 rounded disabled:opacity-30 disabled:cursor-not-allowed",
+    className: "p-1 rounded disabled:opacity-30 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1",
     style: {
-      color: color || C.muted
+      color: color || C.muted,
+      "--tw-ring-color": color || C.teal
     }
   }, /*#__PURE__*/React.createElement(Icon, {
     name: name,
@@ -318,15 +419,23 @@ function Modal({
   children,
   wide
 }) {
+  const titleId = `modal_title_${React.useId()}`;
   return /*#__PURE__*/React.createElement("div", {
     className: "fixed inset-0 flex items-center justify-center p-4 z-50",
+    role: "presentation",
     style: {
       background: "rgba(10,30,32,0.45)"
+    },
+    onClick: e => {
+      if (e.target === e.currentTarget) onClose?.();
     }
   }, /*#__PURE__*/React.createElement("div", {
     className: `rounded-lg w-full ${wide ? "max-w-2xl" : "max-w-lg"} max-h-[85vh] overflow-y-auto`,
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-labelledby": titleId,
     style: {
-      background: "#fff"
+      background: C.card
     }
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between px-4 py-3",
@@ -334,12 +443,18 @@ function Modal({
       borderBottom: `1px solid ${C.border}`
     }
   }, /*#__PURE__*/React.createElement("h3", {
+    id: titleId,
     className: "font-semibold text-sm",
     style: {
       color: C.ink
     }
   }, title), /*#__PURE__*/React.createElement("button", {
-    onClick: onClose
+    onClick: onClose,
+    "aria-label": "Close dialog",
+    className: "p-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1",
+    style: {
+      "--tw-ring-color": C.teal
+    }
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "x",
     size: 18,

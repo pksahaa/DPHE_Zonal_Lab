@@ -82,17 +82,17 @@ function sampleStatusMeta(key) {
 // states (on_hold / rejected / cancelled) are reachable from any active
 // status and, for on_hold, return to whatever status preceded it.
 const FORWARD_FLOW = {
-  registered: ["received", "cancelled"],
-  received: ["assigned", "on_hold", "cancelled"],
-  assigned: ["in_progress", "on_hold"],
-  in_progress: ["results_entered", "on_hold"],
+  registered: ["received", "on_hold", "rejected", "cancelled"],
+  received: ["assigned", "on_hold", "rejected", "cancelled"],
+  assigned: ["in_progress", "on_hold", "rejected", "cancelled"],
+  in_progress: ["results_entered", "on_hold", "rejected", "cancelled"],
   results_entered: ["under_review", "in_progress"],
   under_review: ["approved", "rejected", "in_progress"],
   approved: ["released", "under_review"],
   released: [],
   on_hold: [],
   // resumes to `sample.preHoldStatus`, offered separately in the UI
-  rejected: ["in_progress"],
+  rejected: [],
   cancelled: []
 };
 function nextAllowedStatuses(sample) {
@@ -175,6 +175,74 @@ function syncRequestedTestsToStage(sample, fromStatuses, toStatus, user, note) {
   return next;
 }
 
+// ============================================================================
+// PER-PARAMETER ON HOLD / RETURN TO ANALYST (Results Workflow) — these act on
+// ONE (sample, testTypeId) pair at a time, independent of every other
+// parameter on the sample and every other sample in whatever Analytical
+// Batch it came from, so "do this for one sample" never disturbs the rest
+// of that batch's progress.
+//
+//   On Hold      — flags the parameter (rt.onHold = true) and parks its
+//                   status at "results_entered" (Awaiting Review) if it had
+//                   moved further along (Awaiting Approval / Approved). If
+//                   it was already at Awaiting Review, it simply stays
+//                   there, now flagged. Held rows keep showing up in
+//                   Awaiting Review — visibly, with a badge — so nothing
+//                   silently vanishes; they're just excluded from whatever
+//                   bulk action moves the rest of the group forward.
+//   Resume       — clears the onHold flag with no status change, handing
+//                   the parameter back into the normal queue.
+//   Return to    — sends the parameter's status back to "in_progress" (the
+//   Analyst        same stage a freshly-assigned, not-yet-tested parameter
+//                   sits at) and clears onHold. Combined with
+//                   voidSampleResultForTest() below (which retracts this
+//                   sample's specific result from whatever test record
+//                   currently carries it), the sample becomes eligible for
+//                   a brand-new Analytical Batch again — i.e. it behaves
+//                   exactly like a newly registered sample, per parameter.
+// ============================================================================
+function isTestOnHold(sample, testTypeId) {
+  const rt = (sample.requestedTests || []).find(r => r.testTypeId === testTypeId);
+  return !!(rt && rt.onHold);
+}
+function holdRequestedTestForSample(sample, testTypeId, testTypeName, user, note) {
+  const rt = (sample.requestedTests || []).find(r => r.testTypeId === testTypeId);
+  if (!rt) return sample;
+  const flagged = {
+    ...sample,
+    requestedTests: sample.requestedTests.map(r => r.testTypeId === testTypeId ? { ...r, onHold: true } : r)
+  };
+  const stepped = rt.status === "results_entered" ? flagged : setRequestedTestStatus(flagged, testTypeId, "results_entered", user, note);
+  return addCustodyEvent(stepped, {
+    action: `On Hold: ${testTypeName}`,
+    toUser: user?.name,
+    notes: note || `${testTypeName} put on hold pending resolution.`
+  }, user);
+}
+function resumeRequestedTestForSample(sample, testTypeId, testTypeName, user, note) {
+  const rt = (sample.requestedTests || []).find(r => r.testTypeId === testTypeId);
+  if (!rt || !rt.onHold) return sample;
+  const flagged = {
+    ...sample,
+    requestedTests: sample.requestedTests.map(r => r.testTypeId === testTypeId ? { ...r, onHold: false } : r)
+  };
+  return addCustodyEvent(flagged, {
+    action: `Resumed: ${testTypeName}`,
+    toUser: user?.name,
+    notes: note || `${testTypeName} taken off hold — back in the normal queue.`
+  }, user);
+}
+function returnRequestedTestToAnalyst(sample, testTypeId, testTypeName, user, note) {
+  const rt = (sample.requestedTests || []).find(r => r.testTypeId === testTypeId);
+  if (!rt) return sample;
+  const cleared = {
+    ...sample,
+    requestedTests: sample.requestedTests.map(r => r.testTypeId === testTypeId ? { ...r, onHold: false } : r)
+  };
+  return setRequestedTestStatus(cleared, testTypeId, "in_progress", user, note || `Returned to analyst for ${testTypeName}.`);
+}
+
+
 // ---- roles / permissions (additive — existing Administrator/Technician
 // users keep working unchanged; these two roles are optional extras a lab
 // can create for approval segregation-of-duties) ----
@@ -210,10 +278,94 @@ const ROLE_PERMISSIONS = {
     canReview: true,
     canApprove: true,
     canRelease: true
+  },
+  // Explicit entry required — without it, permissionsFor("Guest") falls
+  // through to the Technician default below and Guest silently inherits
+  // full register/assign/enter/delete rights on samples. Never rely on the
+  // fallback for a role that's supposed to be locked down.
+  Guest: {
+    canRegister: false,
+    canAssign: false,
+    canEnterResults: false,
+    canReview: false,
+    canApprove: false,
+    canRelease: false
   }
 };
-function permissionsFor(role) {
-  return ROLE_PERMISSIONS[role] || ROLE_PERMISSIONS.Technician;
+const NO_SAMPLE_PERMISSIONS = {
+  canRegister: false,
+  canAssign: false,
+  canEnterResults: false,
+  canReview: false,
+  canApprove: false,
+  canRelease: false
+};
+const SAMPLE_PERMISSION_ACTIONS = ["canRegister", "canAssign", "canEnterResults", "canReview", "canApprove", "canRelease"];
+
+// permissionsFor() used to take just a role string and look straight into
+// ROLE_PERMISSIONS — role-based only, no way to grant or revoke one
+// person's register/assign/review/approve/release access without moving
+// them into a whole new role. It now takes the shared Module × Action
+// permission matrix (permissionMatrix — see 41-rbac-ui.js, where the
+// "samples" module lives alongside Test Records/Inventory/etc.) plus the
+// full session, so a per-user override — session.overrides.samples.<action>,
+// set via the same "Custom permissions for this user" editor every other
+// module uses — always wins over the role default, exactly like the rest
+// of the app's permission checks (see can() in 41-rbac-ui.js, whose
+// resolution order this deliberately mirrors). Duplicated in miniature
+// here rather than calling can() directly, since this file loads before
+// 41-rbac-ui.js and every other file in this app follows the convention
+// that later files may depend on earlier ones, never the reverse.
+// Administrator is still always fully trusted regardless of matrix state.
+// ROLE_PERMISSIONS above remains the seed data for the matrix's "samples"
+// column (see DEFAULT_PERMISSION_MATRIX in 41-rbac-ui.js) and is used here
+// as a defensive fallback if a role is somehow missing a "samples" entry
+// in the matrix (e.g. mid-migration) — matching pre-override behavior
+// exactly in that case.
+function permissionsFor(matrix, session) {
+  const role = session?.role;
+  const perms = {};
+  SAMPLE_PERMISSION_ACTIONS.forEach(action => {
+    if (role === "Administrator") {
+      perms[action] = true;
+      return;
+    }
+    const override = session?.overrides?.samples?.[action];
+    if (override === true || override === false) {
+      perms[action] = override;
+      return;
+    }
+    // Defaulting an unrecognized role to Technician's access was the bug
+    // that let Guest inherit register/delete rights before "Guest" was
+    // added above — any future unlisted or misspelled role still safely
+    // gets NO access instead of quietly inheriting Technician's.
+    const roleDefaults = matrix?.[role]?.samples || ROLE_PERMISSIONS[role] || NO_SAMPLE_PERMISSIONS;
+    perms[action] = !!roleDefaults[action];
+  });
+  return perms;
+}
+
+// ---- sampleActionGate(): the same Guest-visible-but-blocked idea as
+// permGate() in 41-rbac-ui.js, but built on permissionsFor()'s fine-grained
+// canRegister/canAssign/canEnterResults/canReview/canApprove/canRelease
+// booleans instead of the generic Module × Action matrix. Guest sees every
+// stage and every action button in Results Workflow / Sample Registration —
+// nothing hidden — but a click on a step it isn't permissioned for blocks
+// with a message instead of running. Every other role keeps the existing
+// convention: hidden entirely when not permitted.
+function sampleActionGate(perms, actionKey, session, notify, actionLabel) {
+  const allowed = !!perms?.[actionKey];
+  const isGuest = session?.role === "Guest";
+  return {
+    allowed,
+    visible: allowed || isGuest,
+    guard(handler) {
+      return (...args) => {
+        if (allowed) return handler(...args);
+        notify?.(`Guest access can't ${actionLabel || "do that"} — this login is view-only for this action.`, "warn");
+      };
+    }
+  };
 }
 
 // ---- sample code generator: WQ-<year>-###### sequential per year ----
@@ -255,7 +407,7 @@ function createSample(fields, existingSamples, user) {
     // who this sample came from (DPHE / institution / walk-in) and what
     // paperwork it arrived with. batchRef above is kept only as a legacy
     // display fallback for pre-migration data.
-    matrix: fields.matrix || "Drinking Water",
+    sampleType: fields.sampleType || "Drinking Water",
     collectionDate: fields.collectionDate || todayStr(),
     collectedBy: fields.collectedBy || "",
     receivedDate: fields.receivedDate || todayStr(),
@@ -270,7 +422,6 @@ function createSample(fields, existingSamples, user) {
     // (see rollupSampleStatus()).
     numberOfSamples: Number(fields.numberOfSamples) > 0 ? Number(fields.numberOfSamples) : 1,
     // batch size — how many physical field samples this registration covers
-    notes: fields.notes || "",
     status: "registered",
     preHoldStatus: null,
     assignedTo: "",
@@ -342,7 +493,7 @@ function transitionSample(sample, newStatus, meta, user) {
 // only the registration fields are editable, never status/results/custody
 // history itself; every edit is logged as its own custody event so the
 // correction is auditable rather than silently overwritten.
-const SAMPLE_EDITABLE_FIELDS = ["clientName", "siteLocation", "district", "upazila", "union", "village", "caretakerName", "fatherHusbandName", "latitude", "longitude", "waterPointType", "waterPointTypeOther", "sampleSourceId", "batchRef", "referenceId", "matrix", "collectionDate", "collectedBy", "receivedDate", "priority", "numberOfSamples", "requestedTests", "notes"];
+const SAMPLE_EDITABLE_FIELDS = ["clientName", "siteLocation", "district", "upazila", "union", "village", "caretakerName", "fatherHusbandName", "latitude", "longitude", "waterPointType", "waterPointTypeOther", "sampleSourceId", "batchRef", "referenceId", "sampleType", "collectionDate", "collectedBy", "receivedDate", "priority", "numberOfSamples", "requestedTests"];
 function editSample(sample, patch, user) {
   const changes = [];
   const cleanPatch = {};

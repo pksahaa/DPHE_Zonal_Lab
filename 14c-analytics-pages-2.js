@@ -178,7 +178,7 @@ function InventoryAnalyticsPage({
       labels: ["Chem Active", "Chem Expired", "Chem Depleted", "Equip Functional", "Equip Broken"],
       datasets: [{
         data: [active, expired, depleted, functional, broken],
-        backgroundColor: [C.ok, "#E63946", C.muted, C.teal, C.warn],
+        backgroundColor: [C.ok, C.danger, C.muted, C.teal, C.warn],
         borderWidth: 2,
         borderColor: "#fff"
       }]
@@ -789,7 +789,7 @@ function PredictiveInventoryPage({
       datasets: [{
         label: "Days Remaining",
         data: urgent.map(u => +u.daysLeft.toFixed(1)),
-        backgroundColor: urgent.map(u => u.daysLeft < 7 ? "#E63946" : u.daysLeft < 14 ? C.warn : C.ok),
+        backgroundColor: urgent.map(u => u.daysLeft < 7 ? C.danger : u.daysLeft < 14 ? C.warn : C.ok),
         borderRadius: 4
       }]
     },
@@ -916,7 +916,7 @@ function EquipmentAnalyticsPage({
     key: i,
     value: s.uptimePct,
     label: s.name,
-    color: s.uptimePct > 90 ? C.ok : s.uptimePct > 70 ? C.warn : "#E63946"
+    color: s.uptimePct > 90 ? C.ok : s.uptimePct > 70 ? C.warn : C.danger
   })), stats.length === 0 && /*#__PURE__*/React.createElement("div", {
     className: "text-xs py-4",
     style: {
@@ -1185,7 +1185,7 @@ function MaintenanceAnalyticsPage({
       datasets: [{
         label: "Breakdowns",
         data: breakdownEntries.map(e => e[1]),
-        backgroundColor: "#E63946",
+        backgroundColor: C.danger,
         borderRadius: 4
       }]
     },
@@ -1976,6 +1976,7 @@ function ReportsTab({
   subBatches,
   users,
   session,
+  permissionMatrix,
   notify,
   goToSample,
   onLoadDemoData
@@ -2062,6 +2063,7 @@ function ReportsTab({
     subBatches,
     users,
     session,
+    permissionMatrix,
     goToSample,
     notify
   };
@@ -2070,34 +2072,12 @@ function ReportsTab({
   }
   const activePageDef = ALL_REPORT_PAGES.find(p => p.k === activePage);
   const activeGroupDef = REPORT_GROUPS.find(grp => grp.pages.some(p => p.k === activePage));
+  // Per request: no page-level "Reports & Analytics" heading/subtitle and no
+  // "Report & Analytics / Executive Dashboard" breadcrumb — the group pills
+  // below (ReportGroupPills / ReportPagePills) are the navigation, shown
+  // right away instead of underneath descriptive text.
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "flex items-start justify-between mb-4 no-print flex-wrap gap-3"
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h2", {
-    className: "text-base font-bold",
-    style: {
-      color: C.ink
-    }
-  }, "Reports & Analytics"), /*#__PURE__*/React.createElement("div", {
-    className: "text-xs mt-0.5",
-    style: {
-      color: C.muted
-    }
-  }, "Enterprise business intelligence for laboratory operations."), activeGroupDef && /*#__PURE__*/React.createElement("div", {
-    className: "text-[11px] mt-1.5 flex items-center gap-1.5",
-    style: {
-      color: C.muted
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: activePageDef.icon,
-    size: 12,
-    color: C.teal
-  }), /*#__PURE__*/React.createElement("span", null, activeGroupDef.group), /*#__PURE__*/React.createElement("span", null, "/"), /*#__PURE__*/React.createElement("span", {
-    className: "font-semibold",
-    style: {
-      color: C.ink
-    }
-  }, activePageDef.label))), /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center gap-2"
+    className: "flex items-center justify-end mb-4 no-print flex-wrap gap-2"
   }, onLoadDemoData && /*#__PURE__*/React.createElement(Button, {
     size: "sm",
     variant: "outline",
@@ -2113,7 +2093,7 @@ function ReportsTab({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "printer",
     size: 13
-  }), "Print / Save as PDF"))), /*#__PURE__*/React.createElement(FilterPanel, {
+  }), "Print / Save as PDF")), /*#__PURE__*/React.createElement(FilterPanel, {
     filters: filters,
     setFilters: setFilters,
     facets: facets

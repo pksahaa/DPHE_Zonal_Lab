@@ -45,7 +45,7 @@ function createSubBatch(fields, existingSubBatches) {
 // single Add Test Record entry (sampleId set directly) or from inside a
 // Sub-Batch's memberResults (memberSampleIds + memberResults).
 function getSampleResultForTest(sample, testTypeId, testRecords) {
-  const direct = (testRecords || []).find(r => r.testTypeId === testTypeId && r.sampleId === sample.id);
+  const direct = (testRecords || []).find(r => r.testTypeId === testTypeId && r.sampleId === sample.id && !r.voided);
   if (direct) return {
     results: direct.results || [],
     recordId: direct.id,
@@ -54,7 +54,7 @@ function getSampleResultForTest(sample, testTypeId, testRecords) {
   };
   const run = (testRecords || []).find(r => r.testTypeId === testTypeId && Array.isArray(r.memberSampleIds) && r.memberSampleIds.includes(sample.id));
   if (run) {
-    const member = (run.memberResults || []).find(m => m.sampleId === sample.id);
+    const member = (run.memberResults || []).find(m => m.sampleId === sample.id && !m.voided);
     if (member) return {
       results: member.results || [],
       recordId: run.id,
@@ -63,6 +63,51 @@ function getSampleResultForTest(sample, testTypeId, testRecords) {
     };
   }
   return null;
+}
+
+// "Return to Analyst" (Results Workflow) needs this specific sample's result
+// to stop counting as done — WITHOUT touching any other member sample in
+// the same test record/batch. Rather than deleting anything (keep the full
+// audit trail intact), this just flags that one sample's entry as voided;
+// getSampleResultForTest above then treats it exactly like "no result yet",
+// so pendingTestTypeIdsForSample sees this parameter as pending again and
+// the sample becomes eligible for a brand-new Analytical Batch — every
+// other member of the original batch is untouched and keeps progressing.
+function voidSampleResultForTest(testRecords, sample, testTypeId) {
+  const info = getSampleResultForTest(sample, testTypeId, testRecords);
+  if (!info) return testRecords;
+  return (testRecords || []).map(r => {
+    if (r.id !== info.recordId) return r;
+    if (Array.isArray(r.memberResults)) {
+      return {
+        ...r,
+        memberResults: r.memberResults.map(m => m.sampleId === sample.id ? { ...m, voided: true } : m)
+      };
+    }
+    if (r.sampleId === sample.id) return { ...r, voided: true };
+    return r;
+  });
+}
+
+// Which Analytical Batch (or "Individual / No Batch") a (sample, testTypeId)
+// pair's current result came from — drives the Results Workflow's
+// "Analytical Batch View", the same grouping concept as Sample
+// Registration's "Group by Batch", just keyed off the test record's
+// subBatchId instead of the sample's Reference.
+function originBatchForSampleTest(sample, testTypeId, testRecords, subBatches) {
+  const info = getSampleResultForTest(sample, testTypeId, testRecords);
+  const rec = info ? (testRecords || []).find(r => r.id === info.recordId) : null;
+  if (rec && rec.subBatchId) {
+    const sb = (subBatches || []).find(b => b.id === rec.subBatchId);
+    return {
+      key: rec.subBatchId,
+      label: sb ? sb.label : rec.subBatchLabel || "Analytical Batch"
+    };
+  }
+  return {
+    key: `indiv-${testTypeId}`,
+    label: "Individual / No Batch"
+  };
 }
 
 // ============================================================================

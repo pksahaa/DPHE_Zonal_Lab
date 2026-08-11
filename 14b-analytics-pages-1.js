@@ -1155,7 +1155,7 @@ function RevenueAnalyticsPage({
       label: "Billed Samples"
     }, {
       key: "unitCost",
-      label: "Cost/Sample",
+      label: "Standard Fee",
       render: r => fmtMoney(r.unitCost)
     }, {
       key: "revenue",
@@ -1403,7 +1403,7 @@ function ChemicalAnalyticsPage({
       labels: ["Active", "Expiring ≤30d", "Expired", "Depleted"],
       datasets: [{
         data: [activeCount, expiringCount, expiredCount, depletedCount],
-        backgroundColor: [C.ok, C.warn, "#E63946", C.muted],
+        backgroundColor: [C.ok, C.warn, C.danger, C.muted],
         borderWidth: 2,
         borderColor: "#fff"
       }]

@@ -27,7 +27,16 @@ const LIGHT_PALETTE = {
   border: "#D6ECEA",
   muted: "#5B7275",
   info: "#1D5B7A",
-  infoBg: "#E7F1F7"
+  infoBg: "#E7F1F7",
+  // ---- Added during UI/UX audit: these hex values were previously
+  // hardcoded ad-hoc throughout the app (outside this palette), so they
+  // never re-themed in dark mode. Now named tokens like everything else.
+  danger: "#E63946",
+  dangerBg: "#FBE4E6",
+  headerText: "#DDF2F0",
+  headerTextMuted: "#BFE3E0",
+  mutedBg: "#EEF4F3",
+  subtle: "#FAFEFE"
 };
 const DARK_PALETTE = {
   ink: "#EAF6F5",
@@ -44,7 +53,15 @@ const DARK_PALETTE = {
   border: "#25494B",
   muted: "#9BC4C2",
   info: "#7FC4E8",
-  infoBg: "#123244"
+  infoBg: "#123244",
+  danger: "#FF6B75",
+  dangerBg: "#3A1518",
+  // header bar background (C.tealDark) stays a dark teal in both themes, so
+  // the light text sitting on it stays the same in both themes too.
+  headerText: "#DDF2F0",
+  headerTextMuted: "#BFE3E0",
+  mutedBg: "#1C3D3F",
+  subtle: "#173537"
 };
 // C is a mutable palette object — components read C.xxx at render time, so
 // re-assigning its keys (via applyTheme) and forcing a re-render is enough
@@ -56,17 +73,27 @@ function applyTheme(mode) {
   Object.assign(C, mode === "dark" ? DARK_PALETTE : LIGHT_PALETTE);
 }
 
-// ---------------- Minimal i18n ----------------
+// Bump this whenever a fix ships, and it shows in the header (bottom-right
+// of the title block) — lets anyone confirm at a glance whether the files
+// in their browser are actually the updated ones, since local file:// pages
+// are notorious for silently serving a cached copy of the old JS after you
+// overwrite the files on disk.
+const APP_BUILD = "2026-08-04.8 (Guest permission fix + per-user permission overrides)";
+
 const STRINGS = {
   en: {
     appName: "Zonal Water Quality Lab",
     appSub: "Inventory & Test Record Management",
     dashboard: "Dashboard",
+    samples: "Sample Management",
     inventory: "Inventory",
+    testConfiguration: "Test Configuration",
+    parameters: "Parameters",
     testTypes: "Test Types",
     addTest: "Add Test Record",
     testRecords: "Test Records",
     reports: "Reports",
+    archive: "Archive",
     logOut: "Log Out",
     welcome: "Welcome back",
     welcomeSub: "A quick snapshot of stock levels, equipment health, and recent testing activity."
@@ -75,11 +102,15 @@ const STRINGS = {
     appName: "জোনাল ওয়াটার কোয়ালিটি ল্যাব",
     appSub: "ইনভেন্টরি ও টেস্ট রেকর্ড ব্যবস্থাপনা",
     dashboard: "ড্যাশবোর্ড",
+    samples: "নমুনা ব্যবস্থাপনা",
     inventory: "ইনভেন্টরি",
+    testConfiguration: "টেস্ট কনফিগারেশন",
+    parameters: "প্যারামিটার",
     testTypes: "টেস্ট টাইপ",
     addTest: "টেস্ট রেকর্ড যোগ করুন",
     testRecords: "টেস্ট রেকর্ড",
     reports: "রিপোর্ট",
+    archive: "আর্কাইভ",
     logOut: "লগ আউট",
     welcome: "স্বাগতম",
     welcomeSub: "স্টক লেভেল, যন্ত্রপাতির অবস্থা এবং সাম্প্রতিক টেস্টিং কার্যক্রমের সংক্ষিপ্ত চিত্র।"
@@ -92,6 +123,18 @@ function setLang(l) {
 function t(key) {
   return STRINGS[LANG] && STRINGS[LANG][key] || STRINGS.en[key] || key;
 }
+// ---------------- Parameter categories (Test Configuration › Parameters) ----------------
+// Shared between 12a-parameters-ui.js (form dropdown) and 12-testtypes-ui.js
+// (category badge colouring when a Test Type's linked parameters are listed).
+const PARAMETER_CATEGORIES = ["Physical", "Chemical", "Heavy Metal", "Microbiological", "Radiological", "Others"];
+const PARAMETER_CATEGORY_TONE = {
+  Physical: "info",
+  Chemical: "ok",
+  "Heavy Metal": "warn",
+  Microbiological: "danger",
+  Radiological: "muted",
+  Others: "muted"
+};
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const uid = (p = "id") => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 const fmtNum = n => (Math.round((n + Number.EPSILON) * 1000) / 1000).toString();
@@ -167,6 +210,28 @@ function Icon({
     style: s
   };
   switch (name) {
+    case "menu":
+      return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("path", {
+        d: "M3 6h18M3 12h18M3 18h18"
+      }));
+    case "settings":
+      return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("circle", {
+        cx: "12",
+        cy: "12",
+        r: "3"
+      }), /*#__PURE__*/React.createElement("path", {
+        d: "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+      }));
+    case "panelLeft":
+      return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("rect", {
+        x: "3",
+        y: "4",
+        width: "18",
+        height: "16",
+        rx: "2"
+      }), /*#__PURE__*/React.createElement("path", {
+        d: "M9 4v16"
+      }));
     case "droplet":
       return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("path", {
         d: "M12 2s7 8.5 7 13a7 7 0 1 1-14 0c0-4.5 7-13 7-13z"
@@ -421,6 +486,40 @@ function Icon({
       return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("path", {
         d: "M9 3v3a2 2 0 0 1-2 2H4M21 9h-3a2 2 0 0 1-2-2V4M15 21v-3a2 2 0 0 1 2-2h3M4 15h3a2 2 0 0 1 2 2v3"
       }));
+    case "archive":
+      return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("rect", {
+        x: "3",
+        y: "4",
+        width: "18",
+        height: "4",
+        rx: "1"
+      }), /*#__PURE__*/React.createElement("path", {
+        d: "M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"
+      }), /*#__PURE__*/React.createElement("path", {
+        d: "M10 12h4"
+      }));
+    case "restore":
+      return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("path", {
+        d: "M3 12a9 9 0 1 0 3-6.7"
+      }), /*#__PURE__*/React.createElement("path", {
+        d: "M3 4v5h5"
+      }));
+    case "users":
+      return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("path", {
+        d: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"
+      }), /*#__PURE__*/React.createElement("circle", {
+        cx: "9",
+        cy: "7",
+        r: "4"
+      }), /*#__PURE__*/React.createElement("path", {
+        d: "M23 21v-2a4 4 0 0 0-3-3.87"
+      }), /*#__PURE__*/React.createElement("path", {
+        d: "M16 3.13a4 4 0 0 1 0 7.75"
+      }));
+    case "shield":
+      return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("path", {
+        d: "M12 2l8 3.5v6c0 5-3.4 8.7-8 10.5-4.6-1.8-8-5.5-8-10.5v-6L12 2z"
+      }));
     default:
       return null;
   }
@@ -477,9 +576,9 @@ const SAMPLE_IMPORT_COLUMNS = [{
   header: "Type of Water Point - Other",
   aliases: ["WaterPointTypeOther"]
 }, {
-  key: "matrix",
-  header: "Matrix",
-  aliases: []
+  key: "sampleType",
+  header: "Sample Type",
+  aliases: ["Matrix", "SampleType"]
 }, {
   key: "collectionDate",
   header: "CollectionDate",
@@ -492,14 +591,6 @@ const SAMPLE_IMPORT_COLUMNS = [{
   key: "receivedDate",
   header: "ReceivedDate",
   aliases: ["Received Date"]
-}, {
-  key: "priority",
-  header: "Priority",
-  aliases: []
-}, {
-  key: "notes",
-  header: "Notes",
-  aliases: []
 }];
 // Looks up a field's value from a parsed Excel row, trying the canonical header first,
 // then every accepted alias — so old manifests and the current template both work.
@@ -511,6 +602,35 @@ function readSampleImportField(row, colKey) {
     if (row[alias] !== undefined && row[alias] !== "") return row[alias];
   }
   return "";
+}
+
+// ---------------- Batch identifier header (4.1) ----------------
+// Combined badge/summary string shown on test record list items and batch
+// headers so a batch is identifiable at a glance without opening it:
+//   [Date] | [Test Name] | [Ref / Memo No.] | [Tracking No.]
+// Any missing piece falls back to "—" rather than collapsing the format.
+function formatBatchIdentifier(date, testName, refNo, trackingNo) {
+  const parts = [date || "—", testName || "—", refNo || "—", trackingNo || "—"];
+  return parts.join(" | ");
+}
+
+// ---------------- Storage error reporting ----------------
+// A failed localStorage save/load used to fail completely silently in both
+// 01-data-service.js and 06-legacy-storage.js (catch block just returned a
+// fallback, or did nothing) — the person editing data had no way to know
+// their change didn't actually persist. This is a tiny registry so any part
+// of the app that has a `notify()` toast can plug it in once (see 99-app.js
+// LabApp); if nothing has registered yet (very early during boot) it just
+// logs to the console instead of throwing.
+let _storageErrorNotify = null;
+function registerStorageErrorHandler(fn) {
+  _storageErrorNotify = fn;
+}
+function reportStorageError(action, key, e) {
+  console.error(`Storage ${action} failed for "${key}":`, e);
+  if (_storageErrorNotify) {
+    _storageErrorNotify(`Couldn't ${action} "${key}" — ${action === "load" ? "using defaults for now" : "your last change may not survive a page refresh"}. (${e.message || e})`, "warn");
+  }
 }
 
 // ---------------- Seed data ----------------

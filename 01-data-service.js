@@ -14,8 +14,9 @@
 // Flipping the switch is a Settings-screen toggle, not a rewrite: nothing
 // that calls DataService needs to change.
 //
-// IMPORTANT — this file currently backs ONLY the new Sample Lifecycle module
-// (20-sample-model.js / 21-sample-ui.js) and the audit log. Chemicals, Test
+// IMPORTANT — this file currently backs the new Sample Lifecycle module
+// (20-sample-model.js / 21-sample-ui.js), the audit log, and the Archive
+// system's "archived_records" collection (18-archive-ui.js). Chemicals, Test
 // Types, Test Records, Equipment, Glassware and Gas still use the original
 // V14 localStorage mechanism (06-legacy-storage.js) so nothing about your
 // existing workflows changes in this phase. Migrating them onto DataService
@@ -33,7 +34,8 @@ const DataService = (() => {
         gasUrl: "",
         token: ""
       };
-    } catch {
+    } catch (e) {
+      reportStorageError("load", "backend config", e);
       return {
         mode: "local",
         gasUrl: "",
@@ -64,7 +66,8 @@ const DataService = (() => {
     try {
       const raw = localStorage.getItem(localKey(collection));
       return raw ? JSON.parse(raw) : [];
-    } catch {
+    } catch (e) {
+      reportStorageError("load", collection, e);
       return [];
     }
   }
@@ -186,16 +189,147 @@ const DataService = (() => {
     };
     return gasCall("ping", {});
   }
+
+  // ---- Singleton Helpers (for labIdentity, permissionMatrix, masterChemicals) ----
+  async function getSingleton(collection) {
+    const arr = await list(collection);
+    return arr && arr.length ? arr[0] : null;
+  }
+  async function saveSingleton(collection, data) {
+    return save(collection, { id: "singleton", ...data });
+  }
+
+  // ---- Archiving (Test Records → archived_records) --------------------
+  // Completed test records are snapshotted and archived into archived_records.
+  async function archiveTestRecord(recordId, opts = {}) {
+    const testRecordsArr = opts.testRecords || (await list("testRecords"));
+    const record = testRecordsArr.find(r => r.id === recordId);
+    if (!record) throw new Error(`Test record "${recordId}" was not found — it may already be archived.`);
+    const samplesArr = opts.samples || (await list("samples"));
+    const sampleIds = record.memberSampleIds && record.memberSampleIds.length ? record.memberSampleIds : record.sampleId ? [record.sampleId] : [];
+    const archivedSampleSnapshots = sampleIds.map(id => (samplesArr || []).find(s => s.id === id)).filter(Boolean);
+    const archivedRecord = {
+      ...record,
+      archivedAt: new Date().toISOString(),
+      archivedSampleSnapshots
+    };
+    await save("archived_records", archivedRecord);
+    await bulkSet("testRecords", testRecordsArr.filter(r => r.id !== recordId));
+    return archivedRecord;
+  }
+  // Matches an archived record against optional search filters. All filters
+  // are AND-ed together; an unset filter is simply skipped. sampleId and
+  // clientName match against the snapshot(s) taken at archive time (falling
+  // back to the record's own legacy sampleCode field for pre-Sub-Batch
+  // records); parameter matches either the test type's name or any one of
+  // the record's individual result parameter names.
+  function matchesArchiveQuery(rec, filters) {
+    const f = filters || {};
+    if (f.dateFrom && (rec.date || "") < f.dateFrom) return false;
+    if (f.dateTo && (rec.date || "") > f.dateTo) return false;
+    const snaps = rec.archivedSampleSnapshots || [];
+    if (f.sampleId && f.sampleId.trim()) {
+      const needle = f.sampleId.trim().toLowerCase();
+      const hit = snaps.some(s => (s.sampleCode || "").toLowerCase().includes(needle)) || (rec.sampleCode || "").toLowerCase().includes(needle);
+      if (!hit) return false;
+    }
+    if (f.clientName && f.clientName.trim()) {
+      const needle = f.clientName.trim().toLowerCase();
+      const hit = snaps.some(s => (s.clientName || "").toLowerCase().includes(needle));
+      if (!hit) return false;
+    }
+    if (f.parameter && f.parameter.trim()) {
+      const needle = f.parameter.trim().toLowerCase();
+      const allResultNames = (rec.results || []).concat((rec.memberResults || []).flatMap(m => m.results || [])).map(res => res.name || "");
+      const hit = (rec.testTypeName || "").toLowerCase().includes(needle) || allResultNames.some(n => n.toLowerCase().includes(needle));
+      if (!hit) return false;
+    }
+    return true;
+  }
+  // On-demand fetch — intentionally the ONLY way archived data enters memory.
+  // Nothing in the app's initial load calls this; it only runs when the
+  // Archive screen itself asks for it, and only for what a search actually
+  // matches, so the active appState stays exactly as light as it is today.
+  async function fetchArchivedRecords(queryFilters) {
+    if (config.mode === "gas") {
+      try {
+        const params = { action: "archiveQuery", token: config.token || "", ...queryFilters };
+        const qs = new URLSearchParams(params);
+        const res = await fetch(`${config.gasUrl}?${qs.toString()}`);
+        const json = await res.json();
+        if (!json.error && json.data) return json.data;
+      } catch (e) {
+        console.warn("GAS archiveQuery failed, falling back to full list filter:", e);
+      }
+    }
+    const all = await list("archived_records");
+    return all.filter(rec => matchesArchiveQuery(rec, queryFilters));
+  }
+  async function restoreRecord(recordId, recordObj) {
+    if (config.mode === "gas") {
+      try {
+        const restored = await gasCall("restoreRecord", {
+          payload: { id: recordId, archiveSheet: recordObj?._archiveSheet }
+        });
+        if (restored) return restored;
+      } catch (e) {
+        console.warn("GAS restoreRecord endpoint call failed, attempting client-side restore fallback:", e);
+      }
+    }
+    const archived = await list("archived_records");
+    let record = archived.find(r => r.id === recordId) || recordObj;
+    if (!record) throw new Error(`Archived record "${recordId}" was not found.`);
+    const {
+      archivedAt,
+      archivedSampleSnapshots,
+      _archiveSheet,
+      ...restored
+    } = record;
+    const testRecordsArr = await list("testRecords");
+    if (!testRecordsArr.some(r => r.id === recordId)) {
+      await bulkSet("testRecords", [...testRecordsArr, restored]);
+    }
+    await remove("archived_records", recordId);
+    return restored;
+  }
+
+  async function listActive(collection) {
+    if (config.mode === "gas") {
+      try {
+        return await gasCall("listActive", { collection });
+      } catch (e) {
+        console.warn("listActive failed on GAS, falling back to full list:", e);
+      }
+    }
+    const cutoff = new Date();
+    cutoff.setFullYear(cutoff.getFullYear() - 1);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    const all = await list(collection);
+    return all.filter(r => !r.date || r.date >= cutoffStr);
+  }
+
   return {
     configure,
     getConfig,
     list,
+    listActive,
     save,
     remove,
     bulkSet,
+    getSingleton,
+    saveSingleton,
     appendAudit,
     getAudit,
-    ping
+    ping,
+    archiveTestRecord,
+    fetchArchivedRecords,
+    restoreRecord,
+    // Escape hatch for custom, non-CRUD actions implemented server-side
+    // (see gas-backend/Code.gs) — e.g. the Data Backup module's
+    // getBackupConfig/configureBackup/backupNow. Only meaningful in "gas"
+    // mode; throws the same "not configured" error gasCall already throws
+    // otherwise, so callers can just try/catch.
+    gasRawCall: (action, opts) => gasCall(action, opts)
   };
 })();
 
@@ -307,7 +441,9 @@ function getLabIdentity() {
     phone: "",
     email: "",
     leftLogoDataUrl: "",
-    rightLogoDataUrl: ""
+    rightLogoDataUrl: "",
+    leftLogoUrl: "assets/logo_left.png",
+    rightLogoUrl: "assets/logo_right.png"
   });
 }
 function saveLabIdentity(identity) {
@@ -332,6 +468,9 @@ function LabIdentityModal({
     notify?.("Lab identity saved. It will now appear on generated reports.", "ok");
     onClose();
   }
+  const effectiveLeftLogo = id_.leftLogoDataUrl || id_.leftLogoUrl || "assets/logo_left.png";
+  const effectiveRightLogo = id_.rightLogoDataUrl || id_.rightLogoUrl || "assets/logo_right.png";
+
   return /*#__PURE__*/React.createElement(Modal, {
     title: "Lab Identity (Report Letterhead)",
     onClose: onClose,
@@ -396,38 +535,62 @@ function LabIdentityModal({
       email: v
     })
   })), /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-2 gap-3 mt-3"
-  }, /*#__PURE__*/React.createElement("label", {
-    className: "flex flex-col gap-1 text-xs",
-    style: {
-      color: C.muted
-    }
-  }, "Left logo (e.g. national emblem)", /*#__PURE__*/React.createElement("input", {
-    type: "file",
-    accept: "image/*",
-    onChange: e => handleLogo("leftLogoDataUrl", e.target.files[0])
-  }), id_.leftLogoDataUrl && /*#__PURE__*/React.createElement("img", {
-    src: id_.leftLogoDataUrl,
-    style: {
-      height: 40,
-      marginTop: 4
-    }
-  })), /*#__PURE__*/React.createElement("label", {
-    className: "flex flex-col gap-1 text-xs",
-    style: {
-      color: C.muted
-    }
-  }, "Right logo (e.g. DPHE logo)", /*#__PURE__*/React.createElement("input", {
-    type: "file",
-    accept: "image/*",
-    onChange: e => handleLogo("rightLogoDataUrl", e.target.files[0])
-  }), id_.rightLogoDataUrl && /*#__PURE__*/React.createElement("img", {
-    src: id_.rightLogoDataUrl,
-    style: {
-      height: 40,
-      marginTop: 4
-    }
-  }))), /*#__PURE__*/React.createElement("div", {
+    className: "mt-4 font-semibold text-xs border-t pt-3"
+  }, "Report Letterhead Logos (GitHub Repo / Remote URLs or Custom Upload)"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-4 mt-2"
+  }, /*#__PURE__*/React.createElement("div", { className: "flex flex-col gap-2 p-2.5 rounded border" },
+    /*#__PURE__*/React.createElement("span", { className: "text-xs font-medium" }, "Left Logo (e.g. National Emblem)"),
+    /*#__PURE__*/React.createElement(TextField, {
+      simple: true,
+      label: "GitHub Repo / URL Path",
+      value: id_.leftLogoUrl || "",
+      onChange: v => setId({ ...id_, leftLogoUrl: v }),
+      placeholder: "assets/logo_left.png"
+    }),
+    /*#__PURE__*/React.createElement("label", { className: "text-[11px] text-gray-500 flex flex-col gap-1" },
+      "Or upload custom image file:",
+      /*#__PURE__*/React.createElement("input", {
+        type: "file",
+        accept: "image/*",
+        onChange: e => handleLogo("leftLogoDataUrl", e.target.files[0])
+      })
+    ),
+    id_.leftLogoDataUrl && /*#__PURE__*/React.createElement(Button, {
+      size: "xs",
+      variant: "outline",
+      onClick: () => setId(prev => ({ ...prev, leftLogoDataUrl: "" }))
+    }, "Clear Uploaded File"),
+    effectiveLeftLogo && /*#__PURE__*/React.createElement("div", { className: "mt-1 flex items-center gap-2 text-xs" },
+      /*#__PURE__*/React.createElement("span", null, "Preview:"),
+      /*#__PURE__*/React.createElement("img", { src: effectiveLeftLogo, style: { height: 36, objectFit: "contain" }, onError: e => e.target.style.display='none' })
+    )
+  ), /*#__PURE__*/React.createElement("div", { className: "flex flex-col gap-2 p-2.5 rounded border" },
+    /*#__PURE__*/React.createElement("span", { className: "text-xs font-medium" }, "Right Logo (e.g. DPHE Logo)"),
+    /*#__PURE__*/React.createElement(TextField, {
+      simple: true,
+      label: "GitHub Repo / URL Path",
+      value: id_.rightLogoUrl || "",
+      onChange: v => setId({ ...id_, rightLogoUrl: v }),
+      placeholder: "assets/logo_right.png"
+    }),
+    /*#__PURE__*/React.createElement("label", { className: "text-[11px] text-gray-500 flex flex-col gap-1" },
+      "Or upload custom image file:",
+      /*#__PURE__*/React.createElement("input", {
+        type: "file",
+        accept: "image/*",
+        onChange: e => handleLogo("rightLogoDataUrl", e.target.files[0])
+      })
+    ),
+    id_.rightLogoDataUrl && /*#__PURE__*/React.createElement(Button, {
+      size: "xs",
+      variant: "outline",
+      onClick: () => setId(prev => ({ ...prev, rightLogoDataUrl: "" }))
+    }, "Clear Uploaded File"),
+    effectiveRightLogo && /*#__PURE__*/React.createElement("div", { className: "mt-1 flex items-center gap-2 text-xs" },
+      /*#__PURE__*/React.createElement("span", null, "Preview:"),
+      /*#__PURE__*/React.createElement("img", { src: effectiveRightLogo, style: { height: 36, objectFit: "contain" }, onError: e => e.target.style.display='none' })
+    )
+  )), /*#__PURE__*/React.createElement("div", {
     className: "mt-4 flex justify-end gap-2"
   }, /*#__PURE__*/React.createElement(Button, {
     variant: "outline",

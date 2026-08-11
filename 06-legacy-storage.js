@@ -7,17 +7,22 @@
 // 01-data-service.js for the async, backend-swappable replacement.
 // ============================================================================
 // ---------------- Persistence (browser localStorage — standalone file, not a Claude artifact) ----------------
+// reportStorageError()/registerStorageErrorHandler() live in 00-core.js (it
+// loads first, and 01-data-service.js needs them too) — see there.
 function loadKey(key, fallback) {
   try {
     const raw = window.localStorage.getItem("aqualab:" + key);
     if (raw) return JSON.parse(raw);
     return fallback;
   } catch (e) {
+    reportStorageError("load", key, e);
     return fallback;
   }
 }
 function saveKey(key, value) {
   try {
     window.localStorage.setItem("aqualab:" + key, JSON.stringify(value));
-  } catch (e) {}
+  } catch (e) {
+    reportStorageError("save", key, e);
+  }
 }

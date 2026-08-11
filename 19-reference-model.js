@@ -75,6 +75,25 @@ function generateInternalRefNo(existingReferences, dateStr) {
   return `INT-${year}-${String(next).padStart(6, "0")}`;
 }
 
+// ---- Tracking No. auto-generator — for the registration form's
+// [Generate] button, so a Tracking No. can be produced automatically
+// instead of always typed by hand. Sequence is per-year, distinct prefix
+// from the internal Ref No. generator so the two can't be confused. Still
+// runs through isTrackingNoTaken() at submit time like any manually typed
+// value, so a collision (e.g. two people generating at once) is caught. ----
+function generateTrackingNo(existingReferences, dateStr) {
+  const year = (dateStr || todayStr()).slice(0, 4);
+  const prefix = `TRK-${year}-`;
+  const nums = (existingReferences || []).filter(r => (r.trackingNo || "").startsWith(prefix)).map(r => Number(r.trackingNo.split("-")[2]) || 0);
+  let next = (nums.length ? Math.max(...nums) : 0) + 1;
+  let candidate = `${prefix}${String(next).padStart(6, "0")}`;
+  while (isTrackingNoTaken(candidate, existingReferences)) {
+    next += 1;
+    candidate = `${prefix}${String(next).padStart(6, "0")}`;
+  }
+  return candidate;
+}
+
 // ---- factory ----
 function createReference(fields, existingReferences, user) {
   const now = new Date().toISOString();
@@ -98,7 +117,6 @@ function createReference(fields, existingReferences, user) {
     contactPerson: fields.contactPerson || "",
     contactPhone: fields.contactPhone || "",
     address: fields.address || "",
-    notes: fields.notes || "",
     createdAt: now,
     createdBy: user?.name || "Unknown",
     updatedAt: now

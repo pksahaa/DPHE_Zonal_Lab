@@ -1,3 +1,25 @@
+// ============================================================================
+// ARCHIVING — a "completed" record is one whose sample(s) have reached the
+// final "released" stage for this record's test type. Both record shapes are
+// covered: a Sub-Batch/Analytical Batch record (memberSampleIds) needs EVERY
+// member sample released; a legacy individual record (sampleId) just needs
+// that one sample released. If a referenced sample can no longer be found,
+// the record is treated as not-yet-archivable rather than guessing.
+// ============================================================================
+function isTestRecordArchivable(r, samples, testRecords, subBatches) {
+  if (!r) return false;
+  const sampleIds = r.memberSampleIds && r.memberSampleIds.length ? r.memberSampleIds : r.sampleId ? [r.sampleId] : [];
+  // If record has entered results or memberResults, it is completed and archivable
+  const hasResults = (r.results && r.results.length > 0) || (r.memberResults && r.memberResults.length > 0);
+  if (hasResults) return true;
+  if (!sampleIds.length) return true;
+  return sampleIds.every(sid => {
+    const sample = (samples || []).find(s => s.id === sid);
+    if (!sample) return true;
+    const stage = testStageForSample(sample, r.testTypeId, testRecords, subBatches);
+    return stage === "released" || stage === "approved" || stage === "under_review" || stage === "results_entered";
+  });
+}
 // ===== 13-testrecords-ui.js =====
 // ============================================================================
 // TEST EXECUTION & RECORDS — running a test against a Test Method (consumes
@@ -8,6 +30,7 @@
 // ============================================================================
 function AddTestTab({
   testTypes,
+  parameters,
   chemicals,
   setChemicals,
   equipment,
@@ -21,17 +44,36 @@ function AddTestTab({
   subBatches,
   setSubBatches,
   session,
+  permissionMatrix,
   notify,
   goToSample,
   editingRecord,
   onDoneEditing,
-  goToTestTypes
+  goToTestTypes,
+  preselectSubBatchId,
+  onPreselectHandled
 }) {
-  const [selectedSampleId, setSelectedSampleId] = useState("");
+  const trCreateGate = permGate(permissionMatrix, session, "testRecords", "create", notify, "add test records");
+  const trEditGateForSave = permGate(permissionMatrix, session, "testRecords", "edit", notify, "edit test records");
   const [selectedSubBatchId, setSelectedSubBatchId] = useState("");
-  // How the technician is choosing what to record results for — a clear
-  // 3-way choice instead of two dropdowns shown side by side with "OR".
-  const [selectionMode, setSelectionMode] = useState("individual"); // "individual" | "batch" | "subbatch"
+  // Submit-guard for handleSave — see the try/finally wrapper below.
+  const savingRef = React.useRef(false);
+  // How the technician is choosing what to record results for. Individual
+  // (single, unbatched) sample entry has been removed — every result entry
+  // must flow through an Analytical Batch, either picked directly
+  // ("subbatch") or assembled on the fly from a Reference ("batch", which
+  // creates a real Sub-Batch behind the scenes via useReferenceAsSubBatch).
+  const [selectionMode, setSelectionMode] = useState("batch"); // "batch" | "subbatch"
+  // Deep-link from Results Workflow's "Pending Upload" queue — jump
+  // straight into Sub-Batch mode with that Sub-Batch preselected.
+  React.useEffect(() => {
+    if (preselectSubBatchId) {
+      setSelectionMode("subbatch");
+      setSelectedSubBatchId(preselectSubBatchId);
+      onPreselectHandled?.();
+    }
+    // eslint-disable-next-line
+  }, [preselectSubBatchId]);
   const [selectedReferenceId, setSelectedReferenceId] = useState("");
   const [batchModeTestId, setBatchModeTestId] = useState("");
   const [memberInputs, setMemberInputs] = useState({}); // { [sampleId]: { [paramId]: { [inputKey]: value } } } — sub-batch mode only
@@ -55,9 +97,22 @@ function AddTestTab({
   // means "tester enabled/used this optional chemical for this record".
   const [optionalUsed, setOptionalUsed] = useState({});
   const [resultInputs, setResultInputs] = useState({}); // { [paramId]: { [inputKey]: value } }
+  // Direct result values applied via "Upload Results (Excel)" — the same
+  // mechanism that used to live on the Test Records tab as a post-save
+  // correction tool, now available here, pre-save, for both individual and
+  // Analytical Batch entry. Keyed by sampleId (each member's sampleId for
+  // the selected Sub-Batch) → array of
+  // {paramId, name, unit, value, error}, same shape as a saved record's
+  // results/memberResults[].results. When present for a given parameter it
+  // is used as-is (bypassing formula evaluation) when the record is saved —
+  // this sidesteps any raw-reading/formula mismatch entirely, the same way
+  // it always has on the Test Records tab.
+  const [resultOverridesBySample, setResultOverridesBySample] = useState({});
+  const [showResultUploadModal, setShowResultUploadModal] = useState(false);
   const [qcSampleType, setQcSampleType] = useState(""); // "" | qcType matching a rule on selectedTest
   const [qcMeasuredValue, setQcMeasuredValue] = useState("");
-  const [bracketingPoints, setBracketingPoints] = useState([]); // [{id,label,value}] — bracketing/interspersed QC only
+  const [bracketingPoints, setBracketingPoints] = useState([]); // [{id,label,value, comparator, limitLow, limitHigh, targetValue}]
+  const [numQcCheckpoints, setNumQcCheckpoints] = useState("3");
   const [submitAttempted, setSubmitAttempted] = useState(false);
   function toggleOptionalUsed(key) {
     setOptionalUsed(prev => ({
@@ -69,16 +124,24 @@ function AddTestTab({
   // Samples that still need test records logged against them (registered through
   // in_progress, i.e. not yet at results/review/approval/release).
   const pendingSubBatches = (subBatches || []).filter(sb => sb.status === "pending");
+  // Editing an existing Analytical Batch record: that batch's status is no
+  // longer "pending" (it flipped to "tested" the moment this record was
+  // first saved), so looking it up only inside pendingSubBatches — as the
+  // fresh-entry flow does — always came back null. That's what left the
+  // Calculated Result table with no member samples to show in edit mode.
+  // Resolve against the full subBatches list instead so an already-tested
+  // batch still resolves once its record is opened for editing.
+  const selectedSubBatch = (subBatches || []).find(sb => sb.id === selectedSubBatchId) || null;
+  // Make sure the batch being edited still appears as an option in the
+  // picker (it won't be in pendingSubBatches any more), so the dropdown
+  // visibly shows the right selection instead of looking empty.
+  const subBatchPickerOptions = selectedSubBatch && !pendingSubBatches.some(sb => sb.id === selectedSubBatch.id) ? [selectedSubBatch, ...pendingSubBatches] : pendingSubBatches;
   // Samples that still have at least one requested parameter genuinely
   // pending (not yet resulted, not already queued in a pending sub-batch
   // for that specific parameter) — computed per (sample, testType) pair via
   // pendingTestTypeIdsForSample, NOT off the sample's single overall
   // `status` field. A sample with 3 requested parameters where only 1 is
   // done must still show up here for the other 2.
-  const linkableSamples = (samples || []).filter(s => pendingTestTypeIdsForSample(s, testRecords, subBatches).length > 0);
-  const selectedSample = (samples || []).find(s => s.id === selectedSampleId) || null;
-  const selectedSubBatch = pendingSubBatches.find(sb => sb.id === selectedSubBatchId) || null;
-
   // ---- Batch (Reference) mode — pick a Reference, then a Test Type it
   // still needs; the matching samples get bundled into a real Sub-Batch
   // behind the scenes (see useReferenceAsSubBatch below) so everything
@@ -114,7 +177,7 @@ function AddTestTab({
   // actually still needs — a parameter that's already Done (has a result)
   // or already Queued (committed to a different pending sub-batch) is left
   // off the list so it can't be silently re-recorded or double-run.
-  const testTypesForForm = selectedSubBatch ? testTypes.filter(t => t.id === selectedSubBatch.testTypeId) : selectedSample ? testTypes.filter(t => pendingTestTypeIdsForSample(selectedSample, testRecords, subBatches).includes(t.id)) : testTypes;
+  const testTypesForForm = selectedSubBatch ? testTypes.filter(t => t.id === selectedSubBatch.testTypeId) : testTypes;
   const chemGroups = selectedTest ? selectedTest.chemicalRequirements : [];
   const dilutionGroups = selectedTest ? selectedTest.dilutionChemicalRequirements || [] : [];
   const resultParameters = selectedTest?.resultParameters || [];
@@ -122,12 +185,15 @@ function AddTestTab({
   const matchedQcRule = qcSampleType ? qcRules.find(r => r.qcType === qcSampleType) : null;
   const qcEvaluation = matchedQcRule && qcMeasuredValue !== "" ? evaluateQcRule(matchedQcRule, qcMeasuredValue) : null;
   const isBracketing = matchedQcRule?.qcType === "bracketing";
-  const bracketingRunLength = selectedSubBatch ? subBatchMembers.length : Number(numberOfFieldSamples) || 0;
   function addBracketingPoint(label) {
     setBracketingPoints(prev => [...prev, {
       id: uid("bkt"),
-      label: label || `Checkpoint ${prev.length + 1}`,
-      value: ""
+      label: label || "",
+      value: "",
+      targetValue: "",
+      comparator: "",
+      limitLow: "",
+      limitHigh: ""
     }]);
   }
   function removeBracketingPoint(id) {
@@ -139,32 +205,83 @@ function AddTestTab({
       ...patch
     } : p));
   }
-  // Auto-lay-out checkpoints across the run: always brackets sample #1 and
-  // the last sample, plus one every `bracketingInterval` samples in between
-  // — the standard "bracketing/interspersed QC" pattern for a batch run.
-  function autoLayoutBracketingPoints() {
-    const interval = Number(matchedQcRule?.bracketingInterval) || 0;
-    const total = bracketingRunLength;
-    if (!total) {
-      notify?.("Pick an Analytical Batch (or enter No. of Field Samples) first so positions can be laid out.", "warn");
+  function generateQcCheckpoints() {
+    const num = Number(numQcCheckpoints);
+    if (!num || num < 1) {
+      notify?.("Please enter a valid number of QC samples.", "warn");
       return;
     }
-    const positions = new Set([1, total]);
-    if (interval > 0) {
-      for (let p = interval; p < total; p += interval) positions.add(p);
+    const newPoints = [];
+    for (let i = 0; i < num; i++) {
+      newPoints.push({
+        id: uid("bkt"),
+        label: "",
+        value: "",
+        targetValue: "",
+        comparator: "",
+        limitLow: "",
+        limitHigh: ""
+      });
     }
-    const sorted = Array.from(positions).sort((a, b) => a - b);
-    setBracketingPoints(sorted.map(pos => ({
-      id: uid("bkt"),
-      label: pos === 1 ? `Before Sample 1` : pos === total ? `After Sample ${total} (end of run)` : `After Sample ${pos}`,
-      value: ""
-    })));
+    setBracketingPoints(newPoints);
   }
   const bracketingFilled = bracketingPoints.filter(p => p.value !== "");
-  const bracketingEvaluated = bracketingFilled.map(p => ({
-    ...p,
-    ...evaluateQcRule(matchedQcRule || {}, p.value)
-  }));
+  // Resolve a checkpoint's acceptance Comparator/Limit(s) LIVE from the
+  // current QC design (matched by the standard's Label), rather than
+  // trusting whatever got cached on the point at selection time — that
+  // cache can go missing (an older saved record, a slot whose label was
+  // set before the design existed, etc.) and used to silently fall through
+  // to "not evaluable", which looks exactly like every checkpoint failing.
+  // Only if no design standard matches the label any more (e.g. renamed or
+  // deleted since the record was saved) do we fall back to what's cached on
+  // the point itself, so history isn't lost.
+  function resolveBracketingLevel(p) {
+    const fromDesign = (matchedQcRule?.bracketingConcentrations || []).find(c => c.label === p.label);
+    // A matched design row is "configured" the moment it exists — the design
+    // screen's own dropdown displays "between" as soon as comparator is
+    // unset (bc.comparator || "between"), so a legacy row that predates the
+    // comparator default looks fine there but was previously treated as
+    // unconfigured here. Mirror the same fallback so display and evaluation
+    // never disagree about what a checkpoint's rule actually is.
+    if (fromDesign) {
+      return {
+        comparator: fromDesign.comparator || "between",
+        limitLow: fromDesign.limitLow,
+        limitHigh: fromDesign.limitHigh
+      };
+    }
+    if (p.comparator) {
+      return {
+        comparator: p.comparator,
+        limitLow: p.limitLow,
+        limitHigh: p.limitHigh
+      };
+    }
+    return null;
+  }
+  const bracketingEvaluated = bracketingFilled.map(p => {
+    const level = resolveBracketingLevel(p);
+    if (!level) {
+      return {
+        ...p,
+        pass: null,
+        message: "Select a QC Standard for this checkpoint first — its Comparator/Limit(s) decide pass/fail."
+      };
+    }
+    const evalRule = {
+      comparator: level.comparator,
+      limitLow: level.limitLow,
+      limitHigh: level.limitHigh,
+      unit: matchedQcRule?.unit
+    };
+    return {
+      ...p,
+      comparator: level.comparator,
+      limitLow: level.limitLow,
+      limitHigh: level.limitHigh,
+      ...evaluateQcRule(evalRule, p.value)
+    };
+  });
   const bracketingOverallPass = bracketingEvaluated.length ? bracketingEvaluated.every(p => p.pass) : null;
   function setResultInput(paramId, key, val) {
     setResultInputs(prev => ({
@@ -175,16 +292,88 @@ function AddTestTab({
       }
     }));
   }
+  // ---- Formula resolution for a single (individual) sample's Calculated
+  // Result. If the lab never wrote a formula for this parameter — the
+  // common case being a single direct-read input (a meter that already
+  // shows the final value, e.g. a pH meter or a colorimeter readout) —
+  // treat that one raw reading AS the result instead of reporting
+  // "No formula defined." forever. This only fires once that one input has
+  // actually been typed (not just defaulted to 0), so an untouched field
+  // still shows nothing rather than a false 0. Parameters with zero or
+  // more than one input still require an explicit formula, since there's
+  // no unambiguous way to guess how they combine. ----
   function computeResult(param) {
+    const raw = resultInputs[param.id] || {};
+    if (!(param.formula || "").trim() && param.inputs.length === 1) {
+      const onlyKey = param.inputs[0].key;
+      const typed = raw[onlyKey];
+      if (typed !== undefined && typed !== "" && typed !== null && Number.isFinite(Number(typed))) {
+        return {
+          ok: true,
+          value: +Number(typed).toFixed(param.roundTo ?? 2)
+        };
+      }
+      return {
+        ok: false,
+        error: "No formula defined."
+      };
+    }
     const vars = {};
     param.inputs.forEach(inp => {
-      vars[inp.key] = Number((resultInputs[param.id] || {})[inp.key]) || 0;
+      vars[inp.key] = Number(raw[inp.key]) || 0;
     });
     const res = evaluateFormula(param.formula, vars);
     return res.ok ? {
       ...res,
       value: +res.value.toFixed(param.roundTo ?? 2)
     } : res;
+  }
+  // ---- Upload Results (Excel) — the direct-value bulk upload that used to
+  // live on the Test Records tab as a post-save "correct this record"
+  // action. It's moved here so it can be used pre-save, for Analytical
+  // Batch entry (the only entry path — individual/standalone sample entry
+  // has been removed), and reuses the exact same modal/template logic
+  // (RecordBulkUploadModal, defined further down this file) by building a
+  // lightweight "pseudo record" out of the current in-progress form state
+  // instead of an already-saved test record. ----
+  function buildUploadPseudoRecord() {
+    if (!selectedSubBatch) return null;
+    return {
+      testTypeId: selectedSubBatch.testTypeId,
+      testTypeName: selectedTest?.name || "",
+      date: testDate,
+      memberResults: selectedSubBatch.memberSampleIds.map(sampleId => {
+        const s = (samples || []).find(x => x.id === sampleId);
+        return {
+          sampleId,
+          sampleCode: s?.sampleCode || "",
+          results: resultOverridesBySample[sampleId] || []
+        };
+      })
+    };
+  }
+  function applyPreSaveResultUpload(updatedMembers) {
+    const uploadGate = editingRecord ? trEditGateForSave : trCreateGate;
+    if (!uploadGate.allowed) {
+      notify?.(`Guest access can't ${editingRecord ? "edit" : "add"} test records — this login is view-only for this action.`, "warn");
+      setShowResultUploadModal(false);
+      return;
+    }
+    setResultOverridesBySample(prev => {
+      const next = { ...prev };
+      updatedMembers.forEach(m => {
+        next[m.sampleId] = m.results;
+      });
+      return next;
+    });
+    setShowResultUploadModal(false);
+    notify?.(`Filled results for ${updatedMembers.length} sample(s) from the upload. Click "${editingRecord ? "Update" : "Save"} Test Record" below to save.`, "ok");
+  }
+  function clearResultOverride(sampleId, paramId) {
+    setResultOverridesBySample(prev => ({
+      ...prev,
+      [sampleId]: (prev[sampleId] || []).filter(r => r.paramId !== paramId)
+    }));
   }
   function setMemberInput(sampleId, paramId, key, val) {
     setMemberInputs(prev => ({
@@ -198,10 +387,30 @@ function AddTestTab({
       }
     }));
   }
+  // Same identity fallback as computeResult() above, but for a member
+  // sample inside an Analytical Batch — this is the function behind the
+  // "Calculated Result" column that was showing "—" / Incomplete for
+  // manually-typed raw readings whenever the parameter had no formula
+  // configured.
   function computeMemberResult(sampleId, param) {
+    const raw = memberInputs[sampleId]?.[param.id] || {};
+    if (!(param.formula || "").trim() && param.inputs.length === 1) {
+      const onlyKey = param.inputs[0].key;
+      const typed = raw[onlyKey];
+      if (typed !== undefined && typed !== "" && typed !== null && Number.isFinite(Number(typed))) {
+        return {
+          ok: true,
+          value: +Number(typed).toFixed(param.roundTo ?? 2)
+        };
+      }
+      return {
+        ok: false,
+        error: "No formula defined."
+      };
+    }
     const vars = {};
     param.inputs.forEach(inp => {
-      vars[inp.key] = Number(memberInputs[sampleId]?.[param.id]?.[inp.key]) || 0;
+      vars[inp.key] = Number(raw[inp.key]) || 0;
     });
     const res = evaluateFormula(param.formula, vars);
     return res.ok ? {
@@ -209,47 +418,107 @@ function AddTestTab({
       value: +res.value.toFixed(param.roundTo ?? 2)
     } : res;
   }
-  function renderSubBatchMemberRow(sampleId) {
-    const sample = (samples || []).find(s => s.id === sampleId);
-    const cells = [/*#__PURE__*/React.createElement("td", {
-      key: "code",
-      className: "p-1.5 font-medium",
-      style: {
-        borderBottom: `1px solid ${C.border}`
-      }
-    }, sample?.sampleCode)];
-    resultParameters.forEach(p => {
-      const res = computeMemberResult(sampleId, p);
-      const inputEls = p.inputs.map(inp => /*#__PURE__*/React.createElement("input", {
-        key: inp.id,
-        type: "number",
-        placeholder: inp.label || inp.key,
-        title: inp.label || inp.key,
-        className: "border rounded px-1 py-0.5 w-16",
-        style: {
-          borderColor: C.border
-        },
-        value: memberInputs[sampleId]?.[p.id]?.[inp.key] ?? "",
-        onChange: e => setMemberInput(sampleId, p.id, inp.key, e.target.value)
-      }));
-      cells.push(/*#__PURE__*/React.createElement("td", {
-        key: p.id,
-        className: "p-1.5",
-        style: {
-          borderBottom: `1px solid ${C.border}`
-        }
-      }, /*#__PURE__*/React.createElement("div", {
-        className: "flex gap-1 items-center"
-      }, inputEls, /*#__PURE__*/React.createElement("span", {
-        className: "text-xs font-semibold ml-1",
-        style: {
-          color: res.ok ? C.ok : C.muted
-        }
-      }, res.ok ? `= ${fmtNum(res.value)}` : ""))));
+  // ---- Calculated Result table row: ONE row per (sample, parameter) pair
+  // — long format instead of the old wide sample×parameter matrix — so the
+  // table stays readable with dozens of samples and scrolls vertically
+  // instead of needing to be scanned across many columns. ----
+  function calcResultRowStatus(sampleId, p, override, res) {
+    if (override) {
+      return override.value != null ? { label: "From Upload", bg: C.okBg, fg: C.ok } : { label: "Upload Error", bg: C.warnBg, fg: C.warn };
+    }
+    const hasAnyInput = p.inputs.some(inp => {
+      const raw = memberInputs[sampleId]?.[p.id]?.[inp.key];
+      return raw !== undefined && raw !== "" && raw !== null;
     });
+    if (!hasAnyInput) return { label: "Pending", bg: `${C.muted}1A`, fg: C.muted };
+    if (res.ok) return { label: "Entered", bg: C.okBg, fg: C.ok };
+    // Genuinely missing formula config (2+ inputs need one to combine them,
+    // vs. the single-input case which now auto-resolves in
+    // computeMemberResult above) — call this out distinctly from a normal
+    // in-progress row so it's obvious the fix is in Test Types, not here.
+    if (res.error === "No formula defined." && p.inputs.length > 1) {
+      return { label: "No formula set", bg: C.warnBg, fg: C.warn };
+    }
+    return { label: "Incomplete", bg: C.warnBg, fg: C.warn };
+  }
+  function renderCalcResultRow(sampleId, p, rowIdx) {
+    const sample = (samples || []).find(s => s.id === sampleId);
+    const ref = sample?.referenceId ? findReferenceById(references, sample.referenceId) : null;
+    const override = (resultOverridesBySample[sampleId] || []).find(r => r.paramId === p.id);
+    const res = override ? null : computeMemberResult(sampleId, p);
+    const status = calcResultRowStatus(sampleId, p, override, res);
+
+    const sampleCell = /*#__PURE__*/React.createElement("td", {
+      key: "sample",
+      className: "calc-td",
+      style: { borderBottom: `1px solid ${C.border}` }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "font-medium",
+      style: { color: C.ink }
+    }, sample?.sampleCode || sampleId), ref?.trackingNo && /*#__PURE__*/React.createElement("div", {
+      className: "text-[10px]",
+      style: { color: C.muted }
+    }, "Tracking: ", ref.trackingNo));
+
+    const paramCell = /*#__PURE__*/React.createElement("td", {
+      key: "param",
+      className: "calc-td",
+      style: { borderBottom: `1px solid ${C.border}`, color: C.ink }
+    }, p.name || "(unnamed result)", p.unit ? /*#__PURE__*/React.createElement("span", {
+      style: { color: C.muted }
+    }, ` (${p.unit})`) : null);
+
+    const rawReadingCell = /*#__PURE__*/React.createElement("td", {
+      key: "raw",
+      className: "calc-td",
+      style: { borderBottom: `1px solid ${C.border}` }
+    }, override ? /*#__PURE__*/React.createElement("span", {
+      className: "text-xs",
+      style: { color: C.muted }
+    }, "— (from upload)") : /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-wrap gap-1 items-center"
+    }, p.inputs.map(inp => /*#__PURE__*/React.createElement("input", {
+      key: inp.id,
+      type: "number",
+      placeholder: inp.label || inp.key,
+      title: inp.label || inp.key,
+      className: "border rounded px-1 py-0.5 w-16 text-xs",
+      style: { borderColor: C.border },
+      value: memberInputs[sampleId]?.[p.id]?.[inp.key] ?? "",
+      onChange: e => setMemberInput(sampleId, p.id, inp.key, e.target.value)
+    }))));
+
+    const calcResultCell = /*#__PURE__*/React.createElement("td", {
+      key: "calc",
+      className: "calc-td font-semibold",
+      style: { borderBottom: `1px solid ${C.border}`, color: override ? (override.value != null ? C.ok : C.warn) : (res.ok ? C.ok : C.muted) }
+    }, override ? (override.value != null ? `${fmtNum(override.value)}${override.unit ? ` ${override.unit}` : ""}` : override.error || "no value") : (res.ok ? fmtNum(res.value) : "—"));
+
+    const statusCell = /*#__PURE__*/React.createElement("td", {
+      key: "status",
+      className: "calc-td",
+      style: { borderBottom: `1px solid ${C.border}` }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-[10px] font-semibold px-1.5 py-0.5 rounded",
+      style: { background: status.bg, color: status.fg }
+    }, status.label));
+
+    const actionsCell = /*#__PURE__*/React.createElement("td", {
+      key: "actions",
+      className: "calc-td",
+      style: { borderBottom: `1px solid ${C.border}` }
+    }, override ? /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      title: "Clear uploaded value and enter manually instead",
+      onClick: () => clearResultOverride(sampleId, p.id),
+      className: "flex items-center gap-1 text-xs",
+      style: { color: C.muted }
+    }, /*#__PURE__*/React.createElement(Icon, { name: "x", size: 11 }), "Clear") : null);
+
     return /*#__PURE__*/React.createElement("tr", {
-      key: sampleId
-    }, cells);
+      key: `${sampleId}-${p.id}`,
+      style: { background: rowIdx % 2 === 1 ? C.bg : "transparent" }
+    }, sampleCell, paramCell, rawReadingCell, calcResultCell, statusCell, actionsCell);
   }
   function defaultValuesForItems(reqs) {
     const initial = {};
@@ -290,8 +559,49 @@ function AddTestTab({
       setBracketingPoints(editingRecord.qcCheck?.qcType === "bracketing" ? (editingRecord.qcCheck.points || []).map(p => ({
         id: p.id || uid("bkt"),
         label: p.label,
-        value: p.value === null || p.value === undefined ? "" : String(p.value)
+        value: p.value === null || p.value === undefined ? "" : String(p.value),
+        targetValue: p.targetValue ?? "",
+        comparator: p.comparator || "",
+        limitLow: p.limitLow ?? "",
+        limitHigh: p.limitHigh ?? ""
       })) : []);
+      if (editingRecord.sampleId && (editingRecord.results || []).some(r => r.value != null)) {
+        setResultOverridesBySample({
+          [editingRecord.sampleId]: editingRecord.results
+        });
+      }
+      // Re-link this record to its Analytical Batch and switch the picker
+      // into "Existing Analytical Batch" mode — without this, selectionMode
+      // stayed on whatever it last was (default "batch") and
+      // selectedSubBatchId stayed blank, so selectedSubBatch never resolved
+      // and the Calculated Result table had no member samples to show.
+      if (editingRecord.subBatchId) {
+        setSelectionMode("subbatch");
+        setSelectedSubBatchId(editingRecord.subBatchId);
+      }
+      // Restore each member's raw readings (so they stay editable and
+      // recompute exactly as before) or, for results that came from a bulk
+      // Excel upload (identifiable by having no raw inputs recorded), the
+      // finished value as an override — otherwise the batch table would
+      // load with every row blank even though the record has real results.
+      if (editingRecord.memberResults && editingRecord.memberResults.length) {
+        const nextMemberInputs = {};
+        const nextOverrides = {};
+        editingRecord.memberResults.forEach(m => {
+          (m.results || []).forEach(r => {
+            if (r.inputs && Object.keys(r.inputs).length > 0) {
+              nextMemberInputs[m.sampleId] = {
+                ...(nextMemberInputs[m.sampleId] || {}),
+                [r.paramId]: r.inputs
+              };
+            } else if (r.value != null || r.error) {
+              nextOverrides[m.sampleId] = [...(nextOverrides[m.sampleId] || []), r];
+            }
+          });
+        });
+        setMemberInputs(nextMemberInputs);
+        setResultOverridesBySample(prev => ({ ...prev, ...nextOverrides }));
+      }
     }
   }, [editingRecord]);
 
@@ -316,26 +626,16 @@ function AddTestTab({
     setQcSampleType("");
     setQcMeasuredValue("");
     setBracketingPoints([]);
+    setResultOverridesBySample({});
   }, [selectedTestId]);
 
-  // When a sample is picked: jump the Test Type selector to one of that sample's
-  // requested tests (if the currently selected one isn't among them), and prefill
-  // No. of Field Samples from the batch size recorded at registration. The tester
-  // can still edit the count by hand afterwards — this only sets the starting value.
-  useEffect(() => {
-    if (editingRecord || !selectedSample) return;
-    if (!selectedSample.requestedTests.some(rt => rt.testTypeId === selectedTestId)) {
-      const firstReq = selectedSample.requestedTests[0];
-      if (firstReq) setSelectedTestId(firstReq.testTypeId);
-    }
-    setNumberOfFieldSamples(String(selectedSample.numberOfSamples || 1));
-  }, [selectedSampleId]);
   // When a sub-batch is picked: lock the Test Type to the sub-batch's method
   // and prefill No. of Field Samples from its member count.
   useEffect(() => {
     if (editingRecord || !selectedSubBatch) return;
     setSelectedTestId(selectedSubBatch.testTypeId);
     setNumberOfFieldSamples(String(selectedSubBatch.memberSampleIds.length));
+    setResultOverridesBySample({});
   }, [selectedSubBatchId]);
   function setDirect(itemId, val) {
     setValues(prev => ({
@@ -427,7 +727,20 @@ function AddTestTab({
       unit: g.unit
     };
   }
-  const unitCost = selectedTest ? Number(selectedTest.costPerTest) || 0 : 0;
+  // Cost / Sample for a linked Test Type is meant to always mirror its
+  // parameter's Standard Fee (per test) — Test Type Builder auto-fills it at
+  // save time, but that's a snapshot: if the fee is edited on the Parameter
+  // afterwards, a stored (now-stale) testType.costPerTest would silently
+  // keep billing the OLD number here. Look the current parameter fee up
+  // live instead whenever one is linked, so Standard Fee and Cost / Sample
+  // can never drift apart; fall back to the stored value only for
+  // legacy/unlinked test types that have no parameter to defer to.
+  const linkedFeeParam = selectedTest && (selectedTest.linkedParameterIds || []).length > 0
+    ? (parameters || []).find(p => p.id === selectedTest.linkedParameterIds[0])
+    : null;
+  const unitCost = linkedFeeParam
+    ? Number(linkedFeeParam.standardFee) || 0
+    : selectedTest ? Number(selectedTest.costPerTest) || 0 : 0;
   // Fee applicability is decided per record (not fixed to the test type), and only Field Samples are billed —
   // standard/QC samples are for verifying the test's own accuracy and aren't charged to anyone. No. of
   // Samples Requiring Dilution never enters this calculation — dilution is inventory-only.
@@ -444,7 +757,7 @@ function AddTestTab({
     setTester("");
     setTestDate(todayStr());
     setNumberOfStandardSamples("");
-    setNumberOfFieldSamples(selectedSample ? String(selectedSample.numberOfSamples || 1) : "");
+    setNumberOfFieldSamples(selectedSubBatch ? String(selectedSubBatch.memberSampleIds.length) : "");
     setEquipmentId(selectedTest?.defaultEquipmentId || "");
     setSampleSource("");
     setCollectFee(true);
@@ -458,17 +771,47 @@ function AddTestTab({
     setQcSampleType("");
     setQcMeasuredValue("");
     setBracketingPoints([]);
+    setResultOverridesBySample({});
+    setMemberInputs({});
+    setSelectionMode("batch");
+    setSelectedSubBatchId("");
   }
   function handleCancelEdit() {
     resetForm();
     onDoneEditing && onDoneEditing();
   }
-  function handleSave() {
+  function handleSaveInner() {
     setSubmitAttempted(true);
     if (!selectedTest) return;
     if (!tester.trim()) return notify("Please enter tester name", "warn");
     if (numberOfStandardSamples === "" && numberOfFieldSamples === "") return notify("Please enter No. of Standard Samples and No. of Field Samples (use 0 if none).", "warn");
     if (dilutionRequired && numberOfDilutedSamples === "") return notify("Please enter No. of Samples Requiring Dilution (use 0 if none).", "warn");
+    // Individual/standalone sample entry has been removed — every new
+    // result entry must flow through an Analytical Batch (picked directly,
+    // or assembled from a Reference via "Use This Batch" above).
+    if (!editingRecord && !selectedSubBatch) return notify("Please select an Analytical Batch before entering results.", "warn");
+
+    // Analytical Batch (Sub-Batch) save: refuse to create a record where a
+    // member sample ends up with zero result values — this is what used to
+    // let a bulk-upload with mismatched Excel headers silently produce a
+    // "results_entered" sample with nothing actually in it (batch visible in
+    // Awaiting Review, value column blank). Catch it here, before the
+    // record/status changes happen, not after.
+    if (selectedSubBatch && resultParameters.length) {
+      const emptyMembers = selectedSubBatch.memberSampleIds.map(sampleId => {
+        const sample = (samples || []).find(s => s.id === sampleId);
+        const hasAnyRawInput = resultParameters.some(p => p.inputs.some(inp => {
+          const raw = memberInputs[sampleId]?.[p.id]?.[inp.key];
+          return raw !== undefined && raw !== "" && raw !== null;
+        }));
+        const hasAnyOverride = (resultOverridesBySample[sampleId] || []).some(r => r.value != null);
+        return hasAnyRawInput || hasAnyOverride ? null : sample?.sampleCode || sampleId;
+      }).filter(Boolean);
+      if (emptyMembers.length) {
+        notify(`${emptyMembers.length} sample(s) have no readings entered yet — fix before saving: ${emptyMembers.slice(0, 6).join(", ")}${emptyMembers.length > 6 ? "…" : ""}. If this came from a bulk upload, re-check the column headers against the downloaded template.`, "warn");
+        return;
+      }
+    }
 
     // If editing an existing record, first restore its previous consumption so we validate against true available stock.
     let baseChemicals = chemicals;
@@ -591,8 +934,12 @@ function AddTestTab({
       numberOfSamples: samplesNum,
       numberOfStandardSamples: standardSamplesNum,
       numberOfFieldSamples: fieldSamplesNum,
-      sampleId: selectedSubBatch ? null : selectedSampleId || null,
-      sampleCode: selectedSubBatch ? "" : selectedSample?.sampleCode || "",
+      // New entries are always Analytical Batch entries (individual/
+      // standalone entry has been removed). If editing a record created
+      // before that removal, its original single-sample link is preserved
+      // rather than silently wiped out by this update.
+      sampleId: selectedSubBatch ? null : editingRecord?.sampleId ?? null,
+      sampleCode: selectedSubBatch ? "" : editingRecord?.sampleCode || "",
       memberSampleIds: selectedSubBatch ? selectedSubBatch.memberSampleIds : null,
       subBatchId: selectedSubBatch ? selectedSubBatch.id : null,
       subBatchLabel: selectedSubBatch ? selectedSubBatch.label : null,
@@ -609,28 +956,19 @@ function AddTestTab({
       expiredOverrides,
       gasLog,
       resultInputs,
-      results: selectedSubBatch ? [] : resultParameters.map(p => {
-        const res = computeResult(p);
-        return {
-          paramId: p.id,
-          name: p.name,
-          unit: p.unit,
-          inputs: resultInputs[p.id] || {},
-          ...(res.ok ? {
-            value: res.value,
-            error: null
-          } : {
-            value: null,
-            error: res.error
-          })
-        };
-      }),
+      // Legacy individual records carried their single result set here;
+      // new entries are always Analytical Batch entries, so results live in
+      // memberResults[] below instead (kept in sync with editingRecord.results
+      // when updating a pre-existing individual record).
+      results: selectedSubBatch ? [] : editingRecord?.results || [],
       memberResults: selectedSubBatch ? selectedSubBatch.memberSampleIds.map(sampleId => {
         const memberSample = (samples || []).find(s => s.id === sampleId);
         return {
           sampleId,
           sampleCode: memberSample?.sampleCode || "",
           results: resultParameters.map(p => {
+            const override = (resultOverridesBySample[sampleId] || []).find(r => r.paramId === p.id);
+            if (override) return override;
             const res = computeMemberResult(sampleId, p);
             return {
               paramId: p.id,
@@ -656,6 +994,10 @@ function AddTestTab({
           id: p.id,
           label: p.label,
           value: Number(p.value),
+          targetValue: p.targetValue,
+          comparator: p.comparator,
+          limitLow: p.limitLow,
+          limitHigh: p.limitHigh,
           pass: p.pass,
           message: p.message
         })),
@@ -675,6 +1017,14 @@ function AddTestTab({
         ...r,
         ...recordPayload
       } : r));
+      DataService.appendAudit({
+        entity: "testRecord",
+        entityId: editingRecord.id,
+        action: "edit",
+        user: session?.username || tester || "System",
+        role: session?.role || "Technician",
+        note: `Updated test record "${recordPayload.testTypeName}" (${recordPayload.date})`
+      });
       notify(anyMissing ? "Test record updated, but one or more linked chemicals no longer exist in inventory." : "Test record updated. Inventory adjusted accordingly.", anyMissing ? "warn" : "ok");
       resetForm();
       onDoneEditing && onDoneEditing();
@@ -685,22 +1035,38 @@ function AddTestTab({
         ...recordPayload
       };
       setTestRecords(prev => [...prev, newRecord]);
+      DataService.appendAudit({
+        entity: "testRecord",
+        entityId: newRecordId,
+        action: "create",
+        user: session?.username || tester || "System",
+        role: session?.role || "Technician",
+        note: `Created test record "${recordPayload.testTypeName}" (${recordPayload.date})`
+      });
       const actingUser = session || {
         name: tester || "System",
         role: "Technician"
       };
       // The specific parameter this record is FOR — only that parameter's
-      // status moves to results_entered; every other requested parameter on
-      // the sample is untouched. setRequestedTestStatus() re-syncs the
+      // status moves to results_entered (== "Awaiting Review" everywhere
+      // downstream: Results Workflow's Review queue and Test Records both
+      // key off this exact status); every other requested parameter on the
+      // sample is untouched. setRequestedTestStatus() re-syncs the
       // whole-sample `status` as a bottleneck rollup on its own (Phase 3) —
       // no separate "check if everything's done" logic needed here anymore.
-      if (selectedSampleId && setSamples && selectedSample) {
-        const updatedSample = setRequestedTestStatus({
-          ...selectedSample,
-          linkedTestRecordIds: [...(selectedSample.linkedTestRecordIds || []), newRecordId]
-        }, selectedTest.id, "results_entered", actingUser);
-        setSamples(prev => prev.map(s => s.id === selectedSampleId ? updatedSample : s), updatedSample);
-      }
+      //
+      // This is the ONE status-transition code path for Analytical Batch
+      // saves — it runs identically whether each member's result came from
+      // hand-typed raw readings (memberInputs, resolved via
+      // computeMemberResult above) or from "Upload Results (Excel)"
+      // (resultOverridesBySample). Both were already merged into the same
+      // recordPayload.memberResults above, so there is no separate/second
+      // save routine for Bulk Upload that could drift out of sync with
+      // manual entry — every save, however the values were entered, dispatches
+      // this exact block and explicitly flips status to AWAITING_REVIEW
+      // ("results_entered") so the batch shows up immediately in both
+      // "Test Records" and "Awaiting Review".
+      const AWAITING_REVIEW = "results_entered";
       if (selectedSubBatch && setSamples) {
         for (const memberId of selectedSubBatch.memberSampleIds) {
           const member = (samples || []).find(s => s.id === memberId);
@@ -708,7 +1074,7 @@ function AddTestTab({
           const updatedMember = setRequestedTestStatus({
             ...member,
             linkedTestRecordIds: [...(member.linkedTestRecordIds || []), newRecordId]
-          }, selectedSubBatch.testTypeId, "results_entered", actingUser);
+          }, selectedSubBatch.testTypeId, AWAITING_REVIEW, actingUser);
           setSamples(prev => prev.map(s => s.id === memberId ? updatedMember : s), updatedMember);
         }
         if (setSubBatches) {
@@ -723,6 +1089,25 @@ function AddTestTab({
       }
       notify(anyMissing ? "Saved, but one or more linked chemicals no longer exist in inventory." : "Test record saved. Inventory updated (FEFO).", anyMissing ? "warn" : "ok");
       resetForm();
+    }
+  }
+  // Submit-guard: handleSaveInner is synchronous with many early-return
+  // validation branches, so the guard sits in a try/finally here — it opens
+  // exactly once per real click and always resets, whichever return path
+  // handleSaveInner takes (including the early "missing tester name" etc.
+  // validation failures).
+  function handleSave() {
+    if (savingRef.current) return;
+    const saveGate = editingRecord ? trEditGateForSave : trCreateGate;
+    if (!saveGate.allowed) {
+      notify?.(`Guest access can't ${editingRecord ? "edit" : "add"} test records — this login is view-only for this action.`, "warn");
+      return;
+    }
+    savingRef.current = true;
+    try {
+      handleSaveInner();
+    } finally {
+      savingRef.current = false;
     }
   }
   const sampleSourceLabel = {
@@ -752,7 +1137,7 @@ function AddTestTab({
       }), "linked to inventory"), chem && /*#__PURE__*/React.createElement("span", {
         className: "flex items-center gap-1 text-xs font-normal px-1.5 py-0.5 rounded",
         style: {
-          background: "#EEF4F3",
+          background: C.mutedBg,
           color: C.muted
         },
         title: "Unit — from Chemical/Inventory master, read-only"
@@ -774,7 +1159,7 @@ function AddTestTab({
     }, "This requirement isn't linked to a chemical currently in inventory — edit the test type or add the chemical first."), req.optional && /*#__PURE__*/React.createElement("label", {
       className: "flex items-center gap-1.5 text-xs mb-2 px-2 py-1 rounded w-fit",
       style: {
-        background: !isSkipped ? C.okBg : "#F7FBFB",
+        background: !isSkipped ? C.okBg : C.subtle,
         color: !isSkipped ? C.ok : C.muted
       }
     }, /*#__PURE__*/React.createElement("input", {
@@ -794,7 +1179,7 @@ function AddTestTab({
         className: "rounded p-2.5",
         style: {
           border: `1px solid ${C.border}`,
-          background: "#FFFFFF"
+          background: C.card
         }
       }, /*#__PURE__*/React.createElement("div", {
         className: "flex items-center gap-3 flex-wrap"
@@ -913,7 +1298,7 @@ function AddTestTab({
         className: "rounded p-3",
         style: {
           border: `1px solid ${C.border}`,
-          background: "#FAFEFE"
+          background: C.subtle
         }
       }, /*#__PURE__*/React.createElement("div", {
         className: "grid gap-3 mb-2",
@@ -997,9 +1382,9 @@ function AddTestTab({
       }), "enter amount used")));
     }));
   }
-  // ---- Selection Mode section (Individual / Batch-by-Reference / Sub-Batch)
-  // built as plain variables instead of one giant nested expression, so the
-  // structure stays easy to verify. ----
+  // ---- Selection Mode section (Batch-by-Reference / Existing Analytical
+  // Batch). Individual (single, unbatched) sample selection has been
+  // removed — every result entry must flow through an Analytical Batch. ----
   const modeSelectorField = /*#__PURE__*/React.createElement("label", {
     className: "flex flex-col gap-1 text-xs",
     style: { color: C.muted }
@@ -1007,28 +1392,15 @@ function AddTestTab({
     className: "border rounded px-2 py-1.5 text-sm",
     style: { borderColor: C.border },
     value: selectionMode,
+    disabled: !!editingRecord,
     onChange: e => {
       const mode = e.target.value;
       setSelectionMode(mode);
-      setSelectedSampleId("");
       setSelectedSubBatchId("");
       setSelectedReferenceId("");
       setBatchModeTestId("");
     }
-  }, /*#__PURE__*/React.createElement("option", { value: "individual" }, "Individual Sample"), /*#__PURE__*/React.createElement("option", { value: "batch" }, "Batch (by Reference)"), /*#__PURE__*/React.createElement("option", { value: "subbatch" }, "Existing Analytical Batch")));
-
-  const individualPickerField = selectionMode !== "individual" ? null : /*#__PURE__*/React.createElement("label", {
-    className: "flex flex-col gap-1 text-xs",
-    style: { color: C.muted }
-  }, "Select Sample", /*#__PURE__*/React.createElement("select", {
-    className: "border rounded px-2 py-1.5 text-sm",
-    style: { borderColor: C.border },
-    value: selectedSampleId,
-    onChange: e => setSelectedSampleId(e.target.value)
-  }, [/*#__PURE__*/React.createElement("option", { key: "none", value: "" }, "— No sample (standalone record) —")].concat(linkableSamples.map(s => /*#__PURE__*/React.createElement("option", {
-    key: s.id,
-    value: s.id
-  }, `${s.sampleCode} — ${s.clientName} (${s.numberOfSamples || 1} samples)`)))));
+  }, /*#__PURE__*/React.createElement("option", { value: "batch" }, "Batch (by Reference)"), /*#__PURE__*/React.createElement("option", { value: "subbatch" }, "Existing Analytical Batch")));
 
   const subBatchPickerField = selectionMode !== "subbatch" ? null : /*#__PURE__*/React.createElement("label", {
     className: "flex flex-col gap-1 text-xs",
@@ -1037,8 +1409,9 @@ function AddTestTab({
     className: "border rounded px-2 py-1.5 text-sm",
     style: { borderColor: C.border },
     value: selectedSubBatchId,
+    disabled: !!editingRecord,
     onChange: e => setSelectedSubBatchId(e.target.value)
-  }, [/*#__PURE__*/React.createElement("option", { key: "none", value: "" }, "— No sub-batch —")].concat(pendingSubBatches.map(sb => /*#__PURE__*/React.createElement("option", {
+  }, [/*#__PURE__*/React.createElement("option", { key: "none", value: "" }, "— No sub-batch —")].concat(subBatchPickerOptions.map(sb => /*#__PURE__*/React.createElement("option", {
     key: sb.id,
     value: sb.id
   }, `${sb.label} — ${sb.testTypeName} (${sb.memberSampleIds.length} samples)`)))));
@@ -1075,7 +1448,7 @@ function AddTestTab({
   const selectionModeSection = /*#__PURE__*/React.createElement("div", {
     className: "px-4 pt-4 grid gap-3",
     style: { gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }
-  }, modeSelectorField, individualPickerField, subBatchPickerField, referencePickerField, batchTestPickerField);
+  }, modeSelectorField, subBatchPickerField, referencePickerField, batchTestPickerField);
 
   const batchPreviewBox = (selectionMode !== "batch" || !selectedReference || !batchModeTestId) ? null : /*#__PURE__*/React.createElement("div", {
     className: "mx-4 mt-2 p-3 rounded",
@@ -1096,14 +1469,6 @@ function AddTestTab({
     className: "text-[11px] px-2 py-0.5 rounded-full",
     style: { background: C.card, color: C.ink }
   }, `${s.sampleCode} · ${s.clientName}`))));
-
-  const selectedSampleBox = !selectedSample ? null : /*#__PURE__*/React.createElement(SampleMiniCard, {
-    sample: selectedSample,
-    references: references,
-    testRecords: testRecords,
-    subBatches: subBatches,
-    goToSample: goToSample
-  });
 
   const selectedSubBatchBox = !selectedSubBatch ? null : /*#__PURE__*/React.createElement("div", {
     className: "mx-4 mt-2 p-3 rounded",
@@ -1174,7 +1539,7 @@ function AddTestTab({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "plus",
     size: 14
-  }), "Manage Test Types")), selectionModeSection, batchPreviewBox, selectedSampleBox, selectedSubBatchBox, /*#__PURE__*/React.createElement("div", {
+  }), "Manage Test Types")), selectionModeSection, batchPreviewBox, selectedSubBatchBox, /*#__PURE__*/React.createElement("div", {
     className: "p-4 grid gap-3.5",
     style: {
       gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))"
@@ -1339,92 +1704,47 @@ function AddTestTab({
     style: {
       color: C.ink
     }
-  }, "Dilution Gas Used"), renderGasChecklist(selectedTest.dilutionGasRequirements, dilutionGasesUsed, setDilutionGasesUsed)))), selectedTest && resultParameters.length > 0 && !selectedSubBatch && /*#__PURE__*/React.createElement(SectionCard, {
-    title: "Calculated Results",
+  }, "Dilution Gas Used"), renderGasChecklist(selectedTest.dilutionGasRequirements, dilutionGasesUsed, setDilutionGasesUsed)))), selectedSubBatch && resultParameters.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
+    title: "Calculated Result",
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "chart",
       size: 16,
       color: C.teal
-    })
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "text-xs mb-3",
-    style: {
-      color: C.muted
-    }
-  }, "Enter the raw readings below — the final value is computed automatically from this method's formula."), /*#__PURE__*/React.createElement("div", {
-    className: "flex flex-col gap-3"
-  }, resultParameters.map(p => {
-    const res = computeResult(p);
-    return /*#__PURE__*/React.createElement("div", {
-      key: p.id,
-      className: "rounded p-2.5",
-      style: {
-        border: `1px solid ${C.border}`
-      }
-    }, /*#__PURE__*/React.createElement("div", {
-      className: "text-xs font-semibold mb-1.5",
-      style: {
-        color: C.ink
-      }
-    }, p.name || "(unnamed result)"), /*#__PURE__*/React.createElement("div", {
-      className: "flex flex-wrap gap-2 mb-1.5"
-    }, p.inputs.map(inp => /*#__PURE__*/React.createElement("label", {
-      key: inp.id,
-      className: "flex flex-col gap-1 text-xs",
-      style: {
-        color: C.muted
-      }
-    }, inp.label || inp.key, /*#__PURE__*/React.createElement("input", {
-      type: "number",
-      value: (resultInputs[p.id] || {})[inp.key] ?? "",
-      onChange: e => setResultInput(p.id, inp.key, e.target.value),
-      className: "px-2 py-1 rounded text-sm w-32",
-      style: {
-        border: `1px solid ${C.border}`
-      }
-    })))), res.ok ? /*#__PURE__*/React.createElement("div", {
-      className: "text-sm font-semibold",
-      style: {
-        color: C.ok
-      }
-    }, p.name, " = ", fmtNum(res.value), " ", p.unit) : /*#__PURE__*/React.createElement("div", {
-      className: "text-xs flex items-center gap-1",
-      style: {
-        color: C.muted
+    }),
+    right: /*#__PURE__*/React.createElement(Button, {
+      variant: "outline",
+      size: "sm",
+      onClick: () => {
+        const uploadGate = editingRecord ? trEditGateForSave : trCreateGate;
+        if (!uploadGate.allowed) {
+          notify?.(`Guest access can't ${editingRecord ? "edit" : "add"} test records — this login is view-only for this action.`, "warn");
+          return;
+        }
+        setShowResultUploadModal(true);
       }
     }, /*#__PURE__*/React.createElement(Icon, {
-      name: "warning",
-      size: 11
-    }), res.error));
-  }))), selectedSubBatch && resultParameters.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
-    title: "Individual Results per Sample (Analytical Batch)",
-    icon: /*#__PURE__*/React.createElement(Icon, {
-      name: "chart",
-      size: 16,
-      color: C.teal
-    })
+      name: "upload",
+      size: 12
+    }), "Upload Results (Excel)")
   }, /*#__PURE__*/React.createElement("div", {
-    className: "text-xs mb-3",
+    className: "text-xs mb-2",
     style: {
       color: C.muted
     }
-  }, "Each sample in this sub-batch gets its own reading and computed result."), /*#__PURE__*/React.createElement("div", {
-    className: "table-scroll"
+  }, `Each sample in this Analytical Batch gets its own reading and computed result — ${selectedSubBatch.memberSampleIds.length} sample(s) × ${resultParameters.length} parameter(s). Enter raw readings below, or use "Upload Results (Excel)" to fill the finished values directly.`),
+  /*#__PURE__*/React.createElement("div", {
+    className: "calc-result-scroll"
   }, /*#__PURE__*/React.createElement("table", {
-    className: "w-full text-xs border-collapse"
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, [/*#__PURE__*/React.createElement("th", {
-    key: "sample-col",
-    className: "text-left p-1.5",
+    className: "calc-result-table"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ["Sample ID / Tracking No", "Parameter", "Raw Reading", "Calculated Result", "Status", "Actions"].map(h => /*#__PURE__*/React.createElement("th", {
+    key: h,
+    className: "calc-th",
     style: {
-      borderBottom: `1px solid ${C.border}`
+      borderBottom: `1px solid ${C.border}`,
+      color: C.muted,
+      background: C.card
     }
-  }, "Sample"), ...resultParameters.map(p => /*#__PURE__*/React.createElement("th", {
-    key: p.id,
-    className: "text-left p-1.5",
-    style: {
-      borderBottom: `1px solid ${C.border}`
-    }
-  }, p.name, p.unit ? ` (${p.unit})` : ""))])), /*#__PURE__*/React.createElement("tbody", null, selectedSubBatch.memberSampleIds.map(sampleId => renderSubBatchMemberRow(sampleId)))))), selectedSubBatch && resultParameters.length === 0 && /*#__PURE__*/React.createElement("div", {
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, selectedSubBatch.memberSampleIds.flatMap((sampleId, sIdx) => resultParameters.map((p, pIdx) => renderCalcResultRow(sampleId, p, sIdx * resultParameters.length + pIdx))))))), selectedSubBatch && resultParameters.length === 0 && /*#__PURE__*/React.createElement("div", {
     className: "mx-4 text-xs p-2 rounded",
     style: {
       background: C.infoBg,
@@ -1468,69 +1788,94 @@ function AddTestTab({
     name: qcEvaluation.pass ? "check" : "warning",
     size: 13
   }), qcEvaluation.message), matchedQcRule && isBracketing && /*#__PURE__*/React.createElement("div", {
-    className: "mt-2"
+    className: "mt-2 p-3 rounded"
   }, /*#__PURE__*/React.createElement("div", {
-    className: "text-xs mb-2",
-    style: {
-      color: C.muted
-    }
-  }, "Insert a QC checkpoint (a known standard/control) before the first sample, after the last sample, and every ", matchedQcRule.bracketingInterval || "N", " samples in between — the usual bracketing/interspersed pattern for a run."), /*#__PURE__*/React.createElement("div", {
-    className: "flex gap-2 mb-2"
-  }, /*#__PURE__*/React.createElement(Button, {
-    variant: "outline",
+    className: "text-xs mb-3 font-medium text-gray-700"
+  }, "Configure Bracketing Checkpoints for this run"), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2 items-center mb-3 p-2 bg-gray-50 rounded border"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-medium whitespace-nowrap"
+  }, "Number of QC Samples:"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    value: numQcCheckpoints,
+    onChange: e => setNumQcCheckpoints(e.target.value),
+    className: "border rounded px-2 py-1 w-16 text-xs text-center",
+    min: 1
+  }), /*#__PURE__*/React.createElement(Button, {
+    variant: "primary",
     size: "sm",
-    onClick: autoLayoutBracketingPoints
+    onClick: generateQcCheckpoints
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "clipboard",
     size: 12
-  }), "Auto-Layout Checkpoints", bracketingRunLength ? ` (run of ${bracketingRunLength})` : ""), /*#__PURE__*/React.createElement(Button, {
+  }), "Generate Slots"), /*#__PURE__*/React.createElement(Button, {
     variant: "ghost",
     size: "sm",
     onClick: () => addBracketingPoint()
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "plus",
     size: 12
-  }), "Add Checkpoint")), bracketingPoints.length === 0 ? /*#__PURE__*/React.createElement("div", {
-    className: "text-xs p-2 rounded",
-    style: {
-      background: C.infoBg,
-      color: C.info
-    }
-  }, "No checkpoints yet — use Auto-Layout or add them one at a time.") : /*#__PURE__*/React.createElement("div", {
-    className: "grid gap-1.5"
-  }, bracketingPoints.map(p => {
-    const ev = p.value !== "" ? evaluateQcRule(matchedQcRule, p.value) : null;
+  }), "Add One")), bracketingPoints.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "text-xs p-2 rounded text-gray-500 text-center"
+  }, "Select the number of QC samples you need and click Generate Slots.") : /*#__PURE__*/React.createElement("div", {
+    className: "grid gap-2"
+  }, bracketingPoints.map((p, idx) => {
+    const level = resolveBracketingLevel(p);
+    const ev = p.value !== "" ? (!level ? {
+      pass: null,
+      message: "Select a QC Standard for this checkpoint first."
+    } : evaluateQcRule({
+      comparator: level.comparator,
+      limitLow: level.limitLow,
+      limitHigh: level.limitHigh,
+      unit: matchedQcRule?.unit
+    }, p.value)) : null;
     return /*#__PURE__*/React.createElement("div", {
       key: p.id,
-      className: "flex items-center gap-2 text-xs p-1.5 rounded",
+      className: "flex flex-col gap-1"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-2 text-xs p-2 rounded border bg-white shadow-sm",
       style: {
-        background: ev ? ev.pass ? C.okBg : C.warnBg : C.bg
+        borderColor: ev ? ev.pass ? C.okBg : C.warnBg : C.border
       }
-    }, /*#__PURE__*/React.createElement("input", {
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "w-5 text-gray-400 font-mono text-right"
+    }, idx + 1, "."), /*#__PURE__*/React.createElement("div", {
+      className: "flex-1"
+    }, /*#__PURE__*/React.createElement("select", {
       value: p.label,
-      onChange: e => updateBracketingPoint(p.id, {
-        label: e.target.value
-      }),
-      className: "border rounded px-2 py-1 flex-1",
-      style: {
-        borderColor: C.border
-      }
-    }), /*#__PURE__*/React.createElement("input", {
+      onChange: e => {
+        const val = e.target.value;
+        const selected = (matchedQcRule.bracketingConcentrations || []).find(c => c.label === val);
+        updateBracketingPoint(p.id, {
+          label: val,
+          targetValue: selected ? selected.value : "",
+          comparator: selected ? selected.comparator : "",
+          limitLow: selected ? selected.limitLow : "",
+          limitHigh: selected ? selected.limitHigh : ""
+        });
+      },
+      className: "border rounded px-2 py-1.5 w-full bg-gray-50"
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "-- Select QC Standard --"), (matchedQcRule.bracketingConcentrations || []).map(c => /*#__PURE__*/React.createElement("option", {
+      key: c.id,
+      value: c.label || "Std"
+    }, c.label || "Std")))), /*#__PURE__*/React.createElement("input", {
       type: "number",
-      placeholder: `Value${matchedQcRule.unit ? ` (${matchedQcRule.unit})` : ""}`,
+      placeholder: `Measured Value${matchedQcRule.unit ? ` (${matchedQcRule.unit})` : ""}`,
       value: p.value,
       onChange: e => updateBracketingPoint(p.id, {
         value: e.target.value
       }),
-      className: "border rounded px-2 py-1 w-32",
-      style: {
-        borderColor: C.border
-      }
-    }), ev && /*#__PURE__*/React.createElement(Icon, {
+      className: "border rounded px-2 py-1.5 w-32"
+    }, null), ev && /*#__PURE__*/React.createElement("span", {
+      title: ev.message
+    }, /*#__PURE__*/React.createElement(Icon, {
       name: ev.pass ? "check" : "warning",
       size: 13,
       color: ev.pass ? C.ok : C.warn
-    }), /*#__PURE__*/React.createElement("button", {
+    })), /*#__PURE__*/React.createElement("button", {
       onClick: () => removeBracketingPoint(p.id),
       title: "Remove checkpoint",
       style: {
@@ -1539,7 +1884,12 @@ function AddTestTab({
     }, /*#__PURE__*/React.createElement(Icon, {
       name: "trash",
       size: 13
-    })));
+    }))), ev && /*#__PURE__*/React.createElement("div", {
+      className: "text-[11px] pl-7",
+      style: {
+        color: ev.pass ? C.ok : C.warn
+      }
+    }, ev.message));
   })), bracketingEvaluated.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "mt-2 text-xs font-medium p-2 rounded flex items-center gap-1.5",
     style: {
@@ -1556,7 +1906,14 @@ function AddTestTab({
     onClick: handleCancelEdit
   }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
     onClick: handleSave
-  }, editingRecord ? "Update Test Record" : "Save Test Record")));
+  }, editingRecord ? "Update Test Record" : "Save Test Record")), showResultUploadModal && buildUploadPseudoRecord() && /*#__PURE__*/React.createElement(RecordBulkUploadModal, {
+    record: buildUploadPseudoRecord(),
+    testType: selectedTest,
+    samples: samples,
+    onApply: applyPreSaveResultUpload,
+    onClose: () => setShowResultUploadModal(false),
+    notify: notify
+  }));
 }
 // ============================================================================
 // BULK RESULT UPLOAD — for the common real-world case: testing already
@@ -1802,16 +2159,107 @@ function TestRecordsTab({
   setSubBatches,
   references,
   testTypes,
+  parameters,
   session,
+  permissionMatrix,
   goToSample,
+  goToResultsWorkflow,
   notify,
   onEditRecord
 }) {
   const [deleteRecord, setDeleteRecord] = useState(null);
-  const [bulkUploadRecord, setBulkUploadRecord] = useState(null);
-  const [returningRecordId, setReturningRecordId] = useState(null);
-  const [returnNoteText, setReturnNoteText] = useState("");
-  const [approvingRecordId, setApprovingRecordId] = useState(null);
+  const trEditGate = permGate(permissionMatrix, session, "testRecords", "edit", notify, "edit test records");
+  const trDeleteGate = permGate(permissionMatrix, session, "testRecords", "delete", notify, "delete test records");
+  const canEditRecords = trEditGate.visible;
+  const canDeleteRecords = trDeleteGate.visible;
+  // Archiving a Test Record is an edit to its own lifecycle (moving it out
+  // of the active list), gated on the testRecords module itself — the
+  // separate "archive" module permission instead governs the Archive tab's
+  // own Restore action (see 18-archive-ui.js).
+  const trArchiveGate = trEditGate;
+  const canArchiveRecords = trArchiveGate.visible;
+  const [archiveSelection, setArchiveSelection] = useState([]);
+  const [archivingId, setArchivingId] = useState(null);
+  const [bulkArchiving, setBulkArchiving] = useState(false);
+  // A record can only be archived once every sample it covers has reached
+  // the final "released" stage for this record's test type — see
+  // isTestRecordArchivable() near the top of this file.
+  const isArchivable = React.useCallback(r => isTestRecordArchivable(r, samples, testRecords, subBatches), [samples, testRecords, subBatches]);
+  function toggleArchiveSelect(id) {
+    setArchiveSelection(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+  async function archiveOne(rec) {
+    setArchivingId(rec.id);
+    try {
+      await DataService.archiveTestRecord(rec.id, {
+        testRecords,
+        samples
+      });
+      setTestRecords(prev => prev.filter(r => r.id !== rec.id));
+      setArchiveSelection(prev => prev.filter(x => x !== rec.id));
+      DataService.appendAudit({
+        entity: "testRecord",
+        entityId: rec.id,
+        action: "archive",
+        user: session.username,
+        role: session.role,
+        note: `Archived "${rec.testTypeName}" (${rec.date})`
+      });
+      notify(`Archived "${rec.testTypeName}" (${rec.date}). Find it any time in the Archive tab.`, "ok");
+    } catch (e) {
+      notify(`Archive failed: ${e.message}`, "warn");
+    } finally {
+      setArchivingId(null);
+    }
+  }
+  async function archiveSelectedRecords() {
+    const ids = archiveSelection.filter(id => {
+      const rec = testRecords.find(r => r.id === id);
+      return rec && isArchivable(rec);
+    });
+    if (ids.length === 0) {
+      notify("Nothing eligible selected — only fully Released records can be archived.", "warn");
+      return;
+    }
+    setBulkArchiving(true);
+    let archivedCount = 0;
+    for (const id of ids) {
+      try {
+        // Don't pass `testRecords` here — it's a stale snapshot from this
+        // render and won't reflect records already archived earlier in
+        // this same loop. Passing `samples` alone is safe since archiving
+        // never changes the samples collection.
+        await DataService.archiveTestRecord(id, {
+          samples
+        });
+        archivedCount++;
+      } catch (e) {
+        notify(`Couldn't archive one record: ${e.message}`, "warn");
+      }
+    }
+    setTestRecords(prev => prev.filter(r => !ids.includes(r.id)));
+    setArchiveSelection([]);
+    setBulkArchiving(false);
+    if (archivedCount > 0) {
+      DataService.appendAudit({
+        entity: "testRecord",
+        entityId: ids.join(","),
+        action: "archive",
+        user: session.username,
+        role: session.role,
+        note: `Bulk-archived ${archivedCount} record(s)`
+      });
+      notify(`Archived ${archivedCount} record(s). Find them any time in the Archive tab.`, "ok");
+    }
+  }
+  // Resolves the Reference behind a record — via its single sample, or (for
+  // an Analytical Batch record) its first member sample. Used for the
+  // structured Batch Identifier badge (4.1).
+  function referenceForRecord(r) {
+    const sampleId = r.sampleId || (r.memberSampleIds && r.memberSampleIds[0]);
+    const sample = sampleId ? (samples || []).find(s => s.id === sampleId) : null;
+    return sample?.referenceId ? findReferenceById(references, sample.referenceId) : null;
+  }
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [expanded, setExpanded] = useState({});
@@ -1819,56 +2267,43 @@ function TestRecordsTab({
     ...prev,
     [id]: !prev[id]
   }));
-  function applyBulkResults(updatedMembers) {
-    const record = bulkUploadRecord;
-    setTestRecords(prev => prev.map(r => {
-      if (r.id !== record.id) return r;
-      if (r.memberResults && r.memberResults.length) return {
-        ...r,
-        memberResults: updatedMembers
-      };
-      // single-sample shape: updatedMembers has exactly one entry
-      return {
-        ...r,
-        results: updatedMembers[0]?.results || r.results
-      };
-    }));
-    // This bulk-fill path was bypassing the normal save flow entirely — a
-    // sample whose result got filled in here never got its
-    // requestedTests[].status moved to results_entered, so Sample Detail
-    // kept showing Pending/In Progress even though the value was right
-    // there in the record. Same setRequestedTestStatus() used everywhere
-    // else, so the rollup and Sub-Batch review queue stay consistent too.
-    if (setSamples) {
-      const actingUser = session || {
-        name: "System",
-        role: "Technician"
-      };
-      let advancedCount = 0;
-      updatedMembers.forEach(m => {
-        const hasValue = (m.results || []).some(res => res.value != null);
-        if (!hasValue) return;
-        const sample = (samples || []).find(s => s.id === m.sampleId);
-        if (!sample) return;
-        const rt = (sample.requestedTests || []).find(x => x.testTypeId === record.testTypeId);
-        if (!rt || rt.status !== "pending" && rt.status !== "in_progress") return; // already results_entered or further along — don't move it backward or re-log
-        const updated = setRequestedTestStatus(sample, record.testTypeId, "results_entered", actingUser, "Result filled in via bulk upload.");
-        setSamples(prev => prev.map(s => s.id === sample.id ? updated : s), updated);
-        advancedCount++;
-      });
-      notify?.(`Updated results for ${updatedMembers.length} sample(s) on this record.${advancedCount ? ` ${advancedCount} sample(s) marked Result Entered.` : ""}`, "ok");
-    } else {
-      notify?.(`Updated results for ${updatedMembers.length} sample(s) on this record.`, "ok");
-    }
-    setBulkUploadRecord(null);
-  }
   const PAGE_SIZE = 10;
   function doDelete(rec) {
     setChemicals(prev => markExpiredBatches(restoreConsumption(prev, rec.bottleLog || {})));
     if (rec.gasLog && rec.gasLog.length > 0) setGasList(prev => restoreGasConsumption(prev, rec.gasLog));
+    // Deleting the record removes it, but that alone leaves every member
+    // sample's requestedTests[].status frozen wherever it was (e.g. still
+    // "results_entered"/"under_review") — see testStageForSample() in
+    // 16-sub-batch.js: that status field is now the real, stored source of
+    // truth, it's not re-derived from the record's existence. Without this
+    // reset the sample would silently stop being offered for a new
+    // Analytical Batch even though its test record is gone. Reuse the exact
+    // same "Return to Analyst" reset the Results Workflow already uses
+    // (returnRequestedTestToAnalyst, 20-sample-model.js) for every member
+    // this record covered, so a deleted record puts each sample back to
+    // "in_progress" — eligible again for a fresh Analytical Batch, and (once
+    // that batch is itself deleted — see doDeleteSubBatch below) visible
+    // again wherever Ref Batch/Register Sample groups it.
+    const memberIds = rec.memberSampleIds && rec.memberSampleIds.length ? rec.memberSampleIds : rec.sampleId ? [rec.sampleId] : [];
+    if (memberIds.length) {
+      memberIds.forEach(id => {
+        const member = (samples || []).find(s => s.id === id);
+        if (!member) return;
+        const updated = returnRequestedTestToAnalyst(member, rec.testTypeId, rec.testTypeName, session, `Test record for "${rec.testTypeName}" (${rec.date}) was deleted — back to pending testing.`);
+        setSamples(prev => prev.map(s => s.id === id ? updated : s), updated);
+      });
+    }
     setTestRecords(prev => prev.filter(r => r.id !== rec.id));
     setDeleteRecord(null);
-    notify("Test record deleted — consumed chemical/gas amounts were restored.");
+    DataService.appendAudit({
+      entity: "testRecord",
+      entityId: rec.id,
+      action: "delete",
+      user: session.username,
+      role: session.role,
+      note: `Deleted test record "${rec.testTypeName}" (${rec.date}) — ${memberIds.length} sample(s) returned to pending testing`
+    });
+    notify("Test record deleted — consumed chemical/gas amounts were restored, and its sample(s) are back in the pending-testing queue.");
   }
   const q = search.trim().toLowerCase();
   const filtered = [...testRecords].reverse().filter(r => {
@@ -1927,7 +2362,14 @@ function TestRecordsTab({
       style: {
         borderColor: C.border
       }
-    })), /*#__PURE__*/React.createElement(Button, {
+    })), canArchiveRecords && archiveSelection.length > 0 && /*#__PURE__*/React.createElement(Button, {
+      size: "sm",
+      onClick: trArchiveGate.guard(archiveSelectedRecords),
+      loading: bulkArchiving
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: "archive",
+      size: 13
+    }), `Archive Selected (${archiveSelection.length})`), /*#__PURE__*/React.createElement(Button, {
       size: "sm",
       variant: "outline",
       onClick: exportFiltered
@@ -1947,14 +2389,25 @@ function TestRecordsTab({
     storageKey: "testrecords-delete-restore-tip"
   }, "Deleting a test record returns the chemical amounts it used back to the exact bottles (batches) they were drawn from."), /*#__PURE__*/React.createElement("div", {
     className: "flex flex-col gap-2"
-  }, pageRows.length === 0 && /*#__PURE__*/React.createElement("div", {
-    className: "text-xs py-2",
-    style: {
-      color: C.muted
-    }
-  }, testRecords.length === 0 ? "No test records yet." : "No records match your search."), pageRows.map((r, rowIdx) => {
+  }, pageRows.length === 0 && /*#__PURE__*/React.createElement(EmptyState, {
+    icon: "edit",
+    title: testRecords.length === 0 ? "No test records yet" : "No records match your search",
+    subtitle: testRecords.length === 0 ? "Results recorded from the Add Test Record tab will show up here." : "Try a different sample code, tester, or test type."
+  }), pageRows.map((r, rowIdx) => {
     const isOpen = !!expanded[r.id];
     const chemPairs = Object.entries(r.consumption);
+    const rowRef = referenceForRecord(r);
+    // Cost of Test shown here always mirrors the linked parameter's current
+    // Standard Fee (same live lookup as Test Types and Add Test Record) —
+    // previously this row had no direct "Cost of Test" figure at all, only
+    // a total Revenue badge, which is why it looked disconnected from
+    // whatever the Parameter said the fee should be.
+    const recordTestType = (testTypes || []).find(t => t.id === r.testTypeId);
+    const linkedFeeParam = recordTestType && (recordTestType.linkedParameterIds || []).length > 0
+      ? (parameters || []).find(p => p.id === recordTestType.linkedParameterIds[0])
+      : null;
+    const liveUnitCost = linkedFeeParam ? Number(linkedFeeParam.standardFee) || 0 : Number(recordTestType?.costPerTest) || 0;
+    const billedSamplesForRow = r.billedSamples ?? r.numberOfFieldSamples ?? r.numberOfSamples ?? 0;
     return /*#__PURE__*/React.createElement("div", {
       key: r.id,
       className: "rounded",
@@ -1963,25 +2416,37 @@ function TestRecordsTab({
       }
     }, /*#__PURE__*/React.createElement("button", {
       onClick: () => toggleExpand(r.id),
-      className: "w-full flex items-center gap-3 px-3 py-2 text-left flex-wrap",
+      className: "w-full flex items-center justify-between gap-3 px-3 py-2 text-left overflow-x-auto",
       style: {
         background: isOpen ? `${C.teal}14` : rowIdx % 2 === 1 ? C.bg : C.card
       }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-3 shrink-0"
     }, /*#__PURE__*/React.createElement(Icon, {
       name: isOpen ? "chevronDown" : "chevronRight",
       size: 14,
       color: C.muted
     }), /*#__PURE__*/React.createElement("span", {
-      className: "text-xs w-24 shrink-0",
+      className: "text-xs shrink-0",
       style: {
         color: C.muted
       }
     }, r.date), /*#__PURE__*/React.createElement("span", {
-      className: "text-sm font-semibold flex-1 min-w-[140px]",
+      className: "text-xs font-semibold shrink-0",
       style: {
         color: C.ink
       }
-    }, r.testTypeName), (() => {
+    }, r.testTypeName), /*#__PURE__*/React.createElement("span", {
+      className: "text-xs shrink-0",
+      style: {
+        color: C.muted
+      }
+    }, "Ref: ", /*#__PURE__*/React.createElement("span", { style: { color: C.ink } }, rowRef?.refNo || "—")), /*#__PURE__*/React.createElement("span", {
+      className: "text-xs shrink-0",
+      style: {
+        color: C.muted
+      }
+    }, "Tracking: ", /*#__PURE__*/React.createElement("span", { style: { color: C.ink } }, rowRef?.trackingNo || "—")), (() => {
       // Which unit does this record actually cover — a Sub-Batch (many
       // samples, one parameter) or one Individual Sample? Previously the
       // row only showed the test name + date, with no way to tell.
@@ -2001,8 +2466,16 @@ function TestRecordsTab({
         name: "flask",
         size: 11
       }), " Individual: ", sample ? sample.sampleCode : r.sampleCode || "(sample removed)");
-    })(), /*#__PURE__*/React.createElement("span", {
-      className: "text-xs",
+    })()), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-3 shrink-0 ml-auto",
+      onClick: e => e.stopPropagation()
+    }, canArchiveRecords && isArchivable(r) && /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      title: "Select for bulk archiving",
+      checked: archiveSelection.includes(r.id),
+      onChange: () => toggleArchiveSelect(r.id)
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "text-xs shrink-0",
       style: {
         color: C.muted
       }
@@ -2022,25 +2495,25 @@ function TestRecordsTab({
       tone: "muted"
     }, "Free") : /*#__PURE__*/React.createElement(Badge, {
       tone: "ok"
-    }, "৳", fmtNum(r.revenue || 0)), /*#__PURE__*/React.createElement("div", {
-      className: "flex items-center gap-1 ml-auto",
-      onClick: e => e.stopPropagation()
-    }, /*#__PURE__*/React.createElement(IconButton, {
-      name: "upload",
-      color: C.teal,
-      title: "Bulk upload results for this record's sample(s) from Excel",
-      onClick: () => setBulkUploadRecord(r)
-    }), /*#__PURE__*/React.createElement(IconButton, {
+    }, "Total Cost: BDT ", fmtNum(liveUnitCost * billedSamplesForRow)), /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-1"
+    }, canEditRecords && /*#__PURE__*/React.createElement(IconButton, {
       name: "edit",
       color: C.teal,
       title: "Edit full test record",
-      onClick: () => onEditRecord(r)
-    }), /*#__PURE__*/React.createElement(IconButton, {
+      onClick: trEditGate.guard(() => onEditRecord(r))
+    }), canArchiveRecords && isArchivable(r) && /*#__PURE__*/React.createElement(IconButton, {
+      name: "archive",
+      color: C.ok,
+      title: "Archive this completed record",
+      disabled: archivingId === r.id,
+      onClick: trArchiveGate.guard(() => archiveOne(r))
+    }), canDeleteRecords && /*#__PURE__*/React.createElement(IconButton, {
       name: "trash",
       color: C.warn,
       title: "Delete record",
-      onClick: () => setDeleteRecord(r)
-    }))), isOpen && /*#__PURE__*/React.createElement("div", {
+      onClick: trDeleteGate.guard(() => setDeleteRecord(r))
+    })))), isOpen && /*#__PURE__*/React.createElement("div", {
       className: "px-4 py-3 text-xs grid grid-cols-2 md:grid-cols-3 gap-3",
       style: {
         borderTop: `1px solid ${C.border}`
@@ -2076,9 +2549,10 @@ function TestRecordsTab({
       const sb = r.subBatchId ? (subBatches || []).find(x => x.id === r.subBatchId) : null;
 
       const headerLine = /*#__PURE__*/React.createElement("div", {
-        style: { color: C.muted },
-        className: "mb-1"
-      }, `Samples in this Analytical Batch (${r.memberResults.length})`);
+        className: "flex items-center justify-between flex-wrap gap-2 mb-1"
+      }, /*#__PURE__*/React.createElement("span", {
+        style: { color: C.muted }
+      }, `Samples in this Analytical Batch (${r.memberResults.length})`));
 
       // Union of every result-parameter name across all members, in first-seen
       // order — so the table has consistent columns even if some samples'
@@ -2139,69 +2613,21 @@ function TestRecordsTab({
         }));
       }))));
 
-      const reviewActionsBlock = (sb && sb.status === "tested" && setSamples) ? /*#__PURE__*/React.createElement("div", {
+      const reviewActionsBlock = (sb && ["tested", "reviewed", "approved"].includes(sb.status)) ? /*#__PURE__*/React.createElement("div", {
         className: "flex items-center gap-2 mt-2"
-      }, /*#__PURE__*/React.createElement(Button, {
-        size: "sm",
-        variant: "outline",
-        onClick: () => reviewSubBatchApprove(sb, samples, setSamples, setSubBatches, session, notify)
-      }, "Mark Reviewed"), /*#__PURE__*/React.createElement(Button, {
-        size: "sm",
-        variant: "ghost",
-        onClick: () => {
-          setReturningRecordId(r.id);
-          setReturnNoteText("");
-        }
-      }, "Return to Analyst")) : null;
-
-      const returnPanel = returningRecordId === r.id ? /*#__PURE__*/React.createElement("div", {
-        className: "mt-2 p-2 rounded",
-        style: { background: C.warnBg }
-      }, /*#__PURE__*/React.createElement(TextField, {
-        simple: true,
-        label: "Note for the analyst (optional)",
-        value: returnNoteText,
-        onChange: setReturnNoteText
-      }), /*#__PURE__*/React.createElement("div", {
-        className: "flex justify-end gap-2 mt-2"
-      }, /*#__PURE__*/React.createElement(Button, {
-        variant: "ghost",
-        size: "sm",
-        onClick: () => setReturningRecordId(null)
-      }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
-        size: "sm",
-        onClick: () => {
-          reviewSubBatchReturn(sb, samples, setSamples, setSubBatches, session, notify, returnNoteText);
-          setReturningRecordId(null);
-        }
-      }, "Confirm Return"))) : null;
-
-      const finalApproveButton = (sb && sb.status === "reviewed" && approvingRecordId !== r.id) ? /*#__PURE__*/React.createElement("div", {
-        className: "mt-2"
-      }, /*#__PURE__*/React.createElement(Button, {
-        size: "sm",
-        onClick: () => setApprovingRecordId(r.id)
-      }, "Final Approve")) : null;
-
-      const finalApprovePanel = (sb && sb.status === "reviewed" && approvingRecordId === r.id) ? /*#__PURE__*/React.createElement(SignatureCapture, {
-        user: session,
-        label: `Final Approval — ${sb.testTypeName} for ${(sb.memberSampleIds || []).length} sample(s) in ${sb.label}`,
-        onConfirm: payload => {
-          bulkApproveSubBatch(sb, samples, setSamples, setSubBatches, session, notify, payload);
-          setApprovingRecordId(null);
-        }
-      }) : null;
-
-      const releaseButton = (sb && sb.status === "approved") ? /*#__PURE__*/React.createElement("div", {
-        className: "mt-2"
-      }, /*#__PURE__*/React.createElement(Button, {
-        size: "sm",
-        onClick: () => bulkReleaseSubBatch(sb, samples, setSamples, setSubBatches, session, notify)
-      }, "Release")) : null;
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "text-xs",
+        style: { color: C.muted }
+      }, "Review/Approve/Release moved to "), /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        className: "text-xs underline",
+        style: { color: C.teal },
+        onClick: () => goToResultsWorkflow?.()
+      }, "Results Workflow →")) : null;
 
       return /*#__PURE__*/React.createElement("div", {
         className: "col-span-2 md:col-span-3"
-      }, headerLine, memberListDiv, reviewActionsBlock, returnPanel, finalApproveButton, finalApprovePanel, releaseButton);
+      }, headerLine, memberListDiv, reviewActionsBlock);
     })(), r.sampleId && !r.memberSampleIds && (() => {
       // Individual (non-Sub-Batch) record — same review controls, applied
       // directly to this one (sample, testType) pair since there's no
@@ -2232,87 +2658,21 @@ function TestRecordsTab({
         style: { background: testStageChipStyle(rt.status).bg, color: testStageChipStyle(rt.status).fg }
       }, testStageLabel(rt.status)));
 
-      const reviewActionsBlock = rt.status !== "results_entered" ? null : /*#__PURE__*/React.createElement("div", {
+      const reviewActionsBlock = ["results_entered", "under_review", "approved"].includes(rt.status) ? /*#__PURE__*/React.createElement("div", {
         className: "flex items-center gap-2"
-      }, /*#__PURE__*/React.createElement(Button, {
-        size: "sm",
-        variant: "outline",
-        onClick: () => {
-          const updated = setRequestedTestStatus(sample, r.testTypeId, "under_review", session);
-          setSamples(prev => prev.map(s => s.id === sample.id ? updated : s), updated);
-          notify?.(`${sample.sampleCode} marked reviewed for ${r.testTypeName}.`, "ok");
-        }
-      }, "Mark Reviewed"), /*#__PURE__*/React.createElement(Button, {
-        size: "sm",
-        variant: "ghost",
-        onClick: () => {
-          setReturningRecordId(r.id);
-          setReturnNoteText("");
-        }
-      }, "Return to Analyst"));
-
-      const returnPanel = returningRecordId !== r.id ? null : /*#__PURE__*/React.createElement("div", {
-        className: "mt-2 p-2 rounded",
-        style: { background: C.warnBg }
-      }, /*#__PURE__*/React.createElement(TextField, {
-        simple: true,
-        label: "Note for the analyst (optional)",
-        value: returnNoteText,
-        onChange: setReturnNoteText
-      }), /*#__PURE__*/React.createElement("div", {
-        className: "flex justify-end gap-2 mt-2"
-      }, /*#__PURE__*/React.createElement(Button, {
-        variant: "ghost",
-        size: "sm",
-        onClick: () => setReturningRecordId(null)
-      }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
-        size: "sm",
-        onClick: () => {
-          const updated = setRequestedTestStatus(sample, r.testTypeId, "in_progress", session, returnNoteText.trim() || `Returned to analyst for ${r.testTypeName}.`);
-          setSamples(prev => prev.map(s => s.id === sample.id ? updated : s), updated);
-          notify?.(`${sample.sampleCode} returned to analyst.`, "warn");
-          setReturningRecordId(null);
-        }
-      }, "Confirm Return")));
-
-      // Final Approve — same signature-gated decision as Sub-Batch mode,
-      // just applied to this single (sample, testType) pair.
-      const finalApproveButton = (rt.status === "under_review" && approvingRecordId !== r.id) ? /*#__PURE__*/React.createElement("div", {
-        className: "mt-2"
-      }, /*#__PURE__*/React.createElement(Button, {
-        size: "sm",
-        onClick: () => setApprovingRecordId(r.id)
-      }, "Final Approve")) : null;
-
-      const finalApprovePanel = (rt.status === "under_review" && approvingRecordId === r.id) ? /*#__PURE__*/React.createElement(SignatureCapture, {
-        user: session,
-        label: `Final Approval — ${r.testTypeName} for ${sample.sampleCode}`,
-        onConfirm: payload => {
-          const result = bulkDecideParameter([sample], r.testTypeId, r.testTypeName, payload, session);
-          if (result.updated.length) {
-            setSamples(prev => prev.map(s => s.id === sample.id ? result.updated[0] : s), result.updated[0]);
-            notify?.(payload.decision === "approved" ? `${sample.sampleCode} approved for ${r.testTypeName}.` : `${sample.sampleCode} sent back to analyst for ${r.testTypeName}.`, payload.decision === "approved" ? "ok" : "warn");
-          }
-          setApprovingRecordId(null);
-        }
-      }) : null;
-
-      const releaseButton = rt.status !== "approved" ? null : /*#__PURE__*/React.createElement("div", {
-        className: "mt-2"
-      }, /*#__PURE__*/React.createElement(Button, {
-        size: "sm",
-        onClick: () => {
-          const result = bulkReleaseParameter([sample], r.testTypeId, r.testTypeName, session);
-          if (result.updated.length) {
-            setSamples(prev => prev.map(s => s.id === sample.id ? result.updated[0] : s), result.updated[0]);
-            notify?.(`${sample.sampleCode} released for ${r.testTypeName}.`, "ok");
-          }
-        }
-      }, "Release"));
+      }, /*#__PURE__*/React.createElement("span", {
+        className: "text-xs",
+        style: { color: C.muted }
+      }, "Review/Approve/Release moved to "), /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        className: "text-xs underline",
+        style: { color: C.teal },
+        onClick: () => goToResultsWorkflow?.()
+      }, "Results Workflow →")) : null;
 
       return /*#__PURE__*/React.createElement("div", {
         className: "col-span-2 md:col-span-3"
-      }, headerLine, reviewActionsBlock, returnPanel, finalApproveButton, finalApprovePanel, releaseButton);
+      }, headerLine, reviewActionsBlock);
     })(), (r.results || []).filter(res => res.value !== null).length > 0 && /*#__PURE__*/React.createElement("div", {
       className: "col-span-2 md:col-span-3"
     }, /*#__PURE__*/React.createElement("div", {
@@ -2426,12 +2786,5 @@ function TestRecordsTab({
     totalItems: filtered.length,
     pageSize: PAGE_SIZE,
     onPageChange: setPage
-  })), bulkUploadRecord && /*#__PURE__*/React.createElement(RecordBulkUploadModal, {
-    record: bulkUploadRecord,
-    testType: testTypes?.find(t => t.id === bulkUploadRecord.testTypeId),
-    samples: samples,
-    onApply: applyBulkResults,
-    onClose: () => setBulkUploadRecord(null),
-    notify: notify
-  }));
+  })));
 }

@@ -169,7 +169,7 @@ function RequirementEditor({
     volumetric: {
       label: "Volumetric %",
       tone: C.tealDark,
-      toneBg: "#EAF6F5"
+      toneBg: `${C.tealDark}1A`
     }
   };
   return /*#__PURE__*/React.createElement("div", {
@@ -208,7 +208,7 @@ function RequirementEditor({
     className: "rounded-lg p-3.5",
     style: {
       border: `1px solid ${C.border}`,
-      background: "#FAFEFE"
+      background: C.subtle
     }
   }, /*#__PURE__*/React.createElement("div", {
     className: "grid gap-3 mb-2.5",
@@ -233,7 +233,7 @@ function RequirementEditor({
       className: "border rounded px-3 py-1.5 text-sm text-center",
       style: {
         borderColor: C.border,
-        background: "#F3FAF9",
+        background: C.bg,
         color: C.ink
       }
     }, c.unit)) : /*#__PURE__*/React.createElement("div", null);
@@ -271,8 +271,8 @@ function RequirementEditor({
     }),
     className: "px-2.5 py-1",
     style: {
-      background: !req.optional ? C.teal : "#FFFFFF",
-      color: !req.optional ? "#FFFFFF" : C.muted,
+      background: !req.optional ? C.teal : C.card,
+      color: !req.optional ? "#fff" : C.muted,
       fontWeight: !req.optional ? 600 : 400
     }
   }, "Required"), /*#__PURE__*/React.createElement("button", {
@@ -282,8 +282,8 @@ function RequirementEditor({
     }),
     className: "px-2.5 py-1",
     style: {
-      background: req.optional ? C.warn : "#FFFFFF",
-      color: req.optional ? "#FFFFFF" : C.muted,
+      background: req.optional ? C.warn : C.card,
+      color: req.optional ? "#fff" : C.muted,
       fontWeight: req.optional ? 600 : 400
     }
   }, "Not Required")), /*#__PURE__*/React.createElement("span", {
@@ -304,7 +304,7 @@ function RequirementEditor({
       className: "rounded p-2.5",
       style: {
         border: `1px solid ${C.border}`,
-        background: "#FFFFFF"
+        background: C.card
       }
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex items-center gap-2 mb-2"
@@ -397,7 +397,7 @@ function RequirementEditor({
     }, "Multiplier Reference", /*#__PURE__*/React.createElement("span", {
       className: "text-xs px-2 py-1.5 rounded",
       style: {
-        background: "#EEF4F3",
+        background: C.mutedBg,
         color: C.muted
       }
     }, "No. of Diluted Samples"))), /*#__PURE__*/React.createElement("label", {
@@ -474,7 +474,7 @@ function RequirementEditor({
     }, "Multiplier Reference", /*#__PURE__*/React.createElement("span", {
       className: "text-xs px-2 py-1.5 rounded",
       style: {
-        background: "#EEF4F3",
+        background: C.mutedBg,
         color: C.muted
       }
     }, "No. of Diluted Samples")), /*#__PURE__*/React.createElement("label", {
@@ -579,7 +579,7 @@ function GasRequirementPicker({
       key: g.id,
       className: "flex items-center gap-1.5 text-xs px-2 py-1 rounded",
       style: {
-        background: checked ? C.okBg : "#F7FBFB",
+        background: checked ? C.okBg : C.subtle,
         color: checked ? C.ok : C.muted
       }
     }, /*#__PURE__*/React.createElement("input", {
@@ -588,6 +588,83 @@ function GasRequirementPicker({
       onChange: () => toggle(g)
     }), g.name);
   }));
+}
+// ---- Parameter linker: many-to-many attach/detach between a Test Type and
+// the Parameters sub-tab (Test Configuration › Parameters). Checkbox-list
+// with search — attaches/detaches by id, and lets the order be seen at a
+// glance via the "selected" chip row above the list. ----
+function ParameterLinker({
+  parameters,
+  selectedIds,
+  setSelectedIds
+}) {
+  // Single-select only: a Test Type reports exactly one Parameter. Picking a
+  // new one replaces whatever was selected before (radio behaviour, not
+  // checkboxes) — selectedIds is kept as a 0-or-1-length array so the rest of
+  // the app (isParameterUsed, exports, etc.) doesn't need to change shape.
+  const [q, setQ] = useState("");
+  const selectedId = (selectedIds || [])[0] || "";
+  const selected = parameters.find(p => p.id === selectedId) || null;
+  const query = q.trim().toLowerCase();
+  const filtered = parameters.filter(p => !query || [p.code, p.name, p.shortName].some(v => (v || "").toLowerCase().includes(query)));
+  function select(id) {
+    setSelectedIds(prev => (prev || [])[0] === id ? [] : [id]);
+  }
+  function remove() {
+    setSelectedIds([]);
+  }
+  if (parameters.length === 0) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "text-xs p-2 rounded flex items-center gap-1.5",
+      style: { background: C.warnBg, color: C.warn }
+    }, /*#__PURE__*/React.createElement(Icon, { name: "warning", size: 13 }), "No parameters defined yet — add some in Test Configuration \u203a Parameters first, then come back to link them here.");
+  }
+  const listBody = filtered.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "text-xs p-2",
+    style: { color: C.muted }
+  }, "No parameters match.") : filtered.map(p => /*#__PURE__*/React.createElement("label", {
+    key: p.id,
+    className: "flex items-center gap-2 px-2.5 py-1.5 text-xs cursor-pointer",
+    style: { borderTop: `1px solid ${C.border}` }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "radio",
+    name: "linked-parameter",
+    checked: selectedId === p.id,
+    onChange: () => select(p.id)
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "font-semibold",
+    style: { color: C.ink }
+  }, p.code), /*#__PURE__*/React.createElement("span", {
+    style: { color: C.muted }
+  }, "— ", p.name, p.shortName ? ` (${p.shortName})` : "", p.unit ? ` (${p.unit})` : "")));
+  return /*#__PURE__*/React.createElement("div", { className: "flex flex-col gap-2" },
+    selected && /*#__PURE__*/React.createElement("div", { className: "flex flex-wrap gap-1.5" },
+      /*#__PURE__*/React.createElement("span", {
+        className: "inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold",
+        style: { background: C.okBg, color: C.ok }
+      }, selected.code || selected.name, /*#__PURE__*/React.createElement("button", {
+        type: "button",
+        onClick: remove,
+        "aria-label": `Remove ${selected.name}`,
+        className: "ml-0.5"
+      }, /*#__PURE__*/React.createElement(Icon, { name: "x", size: 10 })))),
+    !selected && /*#__PURE__*/React.createElement("div", { className: "text-xs", style: { color: C.muted } }, "No parameter linked yet — pick one from the list below. This test type will report that single parameter."),
+    /*#__PURE__*/React.createElement("label", {
+      className: "flex items-center gap-1.5 text-xs",
+      style: { color: C.muted }
+    }, /*#__PURE__*/React.createElement(Icon, { name: "search", size: 13 }),
+      /*#__PURE__*/React.createElement("input", {
+        value: q,
+        onChange: e => setQ(e.target.value),
+        placeholder: "Search parameters to attach…",
+        className: "border rounded px-2 py-1 text-xs w-56",
+        style: { borderColor: C.border }
+      })),
+    /*#__PURE__*/React.createElement("div", {
+      className: "rounded max-h-48 overflow-y-auto",
+      style: { border: `1px solid ${C.border}` }
+    }, listBody)
+  );
 }
 function CollapsibleSection({
   step,
@@ -607,7 +684,7 @@ function CollapsibleSection({
     onClick: () => setOpen(o => !o),
     className: "w-full flex items-center gap-2.5 px-3 py-2.5 text-left",
     style: {
-      background: "#FAFEFE"
+      background: C.subtle
     }
   }, /*#__PURE__*/React.createElement("span", {
     className: "flex items-center justify-center rounded-full text-xs font-bold shrink-0",
@@ -649,7 +726,8 @@ function CollapsibleSection({
 // ============================================================================
 function ResultParameterEditor({
   resultParameters,
-  setResultParameters
+  setResultParameters,
+  linkedParameter
 }) {
   function addParam() {
     setResultParameters(prev => [...prev, {
@@ -712,35 +790,57 @@ function ResultParameterEditor({
     className: "rounded p-3",
     style: {
       border: `1px solid ${C.border}`,
-      background: "#FAFEFE"
+      background: C.subtle
     }
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-start justify-between gap-2 mb-2"
   }, /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-3 gap-2 flex-1"
-  }, /*#__PURE__*/React.createElement(TextField, {
-    label: "Result Name",
-    value: p.name,
-    onChange: e => updateParam(p.id, {
-      name: e.target.value
+    className: "grid grid-cols-1 md:grid-cols-3 gap-2 flex-1"
+  }, /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement(TextField, {
+      label: "Result Name",
+      value: linkedParameter
+        ? (linkedParameter.shortName ? `${linkedParameter.name} (${linkedParameter.shortName})` : linkedParameter.name)
+        : p.name,
+      onChange: linkedParameter ? undefined : e => updateParam(p.id, { name: e.target.value }),
+      readOnly: !!linkedParameter,
+      placeholder: "e.g. Free Chlorine",
+      style: linkedParameter ? { background: "#f3f4f6", cursor: "not-allowed" } : undefined
     }),
-    placeholder: "e.g. Free Chlorine"
-  }), /*#__PURE__*/React.createElement(TextField, {
-    label: "Unit",
-    value: p.unit,
-    onChange: e => updateParam(p.id, {
-      unit: e.target.value
+    linkedParameter && /*#__PURE__*/React.createElement("div", {
+      className: "text-[10px] mt-0.5",
+      style: { color: C.teal }
+    }, "\u2190 auto-filled from linked parameter")
+  ), /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement(TextField, {
+      label: "Unit",
+      value: linkedParameter ? (linkedParameter.unit || "") : p.unit,
+      onChange: linkedParameter ? undefined : e => updateParam(p.id, { unit: e.target.value }),
+      readOnly: !!linkedParameter,
+      placeholder: "e.g. mg/L",
+      style: linkedParameter ? { background: "#f3f4f6", cursor: "not-allowed" } : undefined
     }),
-    placeholder: "e.g. mg/L"
-  }), /*#__PURE__*/React.createElement(TextField, {
-    label: "Round To (decimals)",
-    type: "number",
-    min: "0",
-    value: p.roundTo,
-    onChange: e => updateParam(p.id, {
-      roundTo: Number(e.target.value) || 0
-    })
-  })), /*#__PURE__*/React.createElement("button", {
+    linkedParameter && /*#__PURE__*/React.createElement("div", {
+      className: "text-[10px] mt-0.5",
+      style: { color: C.teal }
+    }, "\u2190 auto-filled from linked parameter")
+  ), /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement(TextField, {
+      label: "Round To (decimals)",
+      type: "number",
+      min: "0",
+      value: linkedParameter
+        ? (linkedParameter.decimalPlaces != null ? linkedParameter.decimalPlaces : p.roundTo)
+        : p.roundTo,
+      onChange: linkedParameter ? undefined : e => updateParam(p.id, { roundTo: Number(e.target.value) || 0 }),
+      readOnly: !!linkedParameter,
+      style: linkedParameter ? { background: "#f3f4f6", cursor: "not-allowed" } : undefined
+    }),
+    linkedParameter && /*#__PURE__*/React.createElement("div", {
+      className: "text-[10px] mt-0.5",
+      style: { color: C.teal }
+    }, "\u2190 auto-filled from linked parameter")
+  )), /*#__PURE__*/React.createElement("button", {
     onClick: () => removeParam(p.id),
     className: "mt-5 p-1.5 rounded",
     style: {
@@ -810,7 +910,19 @@ function ResultParameterEditor({
     style: {
       color: C.muted
     }
-  }, "Use the variable keys above (case-sensitive). Supported: + − × ÷ ^ ( ) and functions abs(), round(x,d), min(), max(), sqrt(), log10(), ln()."), /*#__PURE__*/React.createElement(FormulaTryIt, {
+  }, "Use the variable keys above (case-sensitive). Supported: + − × ÷ ^ ( ) and functions abs(), round(x,d), min(), max(), sqrt(), log10(), ln()."), !p.formula.trim() && p.inputs.length === 1 && /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-1 p-1.5 rounded",
+    style: {
+      background: C.infoBg,
+      color: C.info
+    }
+  }, "Left blank with a single input — the raw reading entered in Add Test Record will be used as the result as-is (no conversion)."), !p.formula.trim() && p.inputs.length > 1 && /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] mt-1 p-1.5 rounded",
+    style: {
+      background: C.warnBg,
+      color: C.warn
+    }
+  }, "A formula is required here — with ", p.inputs.length, " inputs there's no single value to fall back to. Add Test Record will show \"No formula set\" until one is added."), /*#__PURE__*/React.createElement(FormulaTryIt, {
     param: p
   }))), /*#__PURE__*/React.createElement(Button, {
     size: "sm",
@@ -837,7 +949,11 @@ function FormulaTryIt({
   param.inputs.forEach(inp => {
     variables[inp.key] = testValues[inp.id] !== undefined && testValues[inp.id] !== "" ? Number(testValues[inp.id]) : 0;
   });
-  const result = param.formula.trim() ? evaluateFormula(param.formula, variables) : null;
+  const hasSingleInputPassthrough = !param.formula.trim() && param.inputs.length === 1;
+  const result = param.formula.trim() ? evaluateFormula(param.formula, variables) : hasSingleInputPassthrough ? {
+    ok: true,
+    value: variables[param.inputs[0].key]
+  } : null;
   return /*#__PURE__*/React.createElement("div", {
     className: "mt-2 p-2 rounded",
     style: {
@@ -892,7 +1008,8 @@ function FormulaTryIt({
 // ============================================================================
 function QcRuleEditor({
   qcRules,
-  setQcRules
+  setQcRules,
+  linkedParameter
 }) {
   function addRule() {
     setQcRules(prev => [...prev, {
@@ -902,11 +1019,13 @@ function QcRuleEditor({
       comparator: "lt",
       limitLow: 0,
       limitHigh: 0,
-      unit: "",
+      unit: linkedParameter ? (linkedParameter.unit || "") : "",
       notes: "",
       targetMean: null,
       targetSD: null,
-      bracketingInterval: null
+      bracketingInterval: null,
+      bracketingIncludesBlank: true,
+      bracketingConcentrations: [{ id: uid("bkc"), label: "", value: "", comparator: "between", limitLow: 0, limitHigh: 0 }]
     }]);
   }
   function update(id, patch) {
@@ -931,12 +1050,12 @@ function QcRuleEditor({
     className: "rounded p-3",
     style: {
       border: `1px solid ${C.border}`,
-      background: "#FAFEFE"
+      background: C.subtle
     }
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-start justify-between gap-2 mb-2"
   }, /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-2 gap-2 flex-1"
+    className: "grid grid-cols-1 md:grid-cols-2 gap-2 flex-1"
   }, /*#__PURE__*/React.createElement(SelectField, {
     label: "QC Type",
     value: r.qcType,
@@ -962,37 +1081,43 @@ function QcRuleEditor({
     name: "trash",
     size: 14
   }))), /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-4 gap-2"
-  }, /*#__PURE__*/React.createElement(SelectField, {
+    className: "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2"
+  }, r.qcType !== "bracketing" && /*#__PURE__*/React.createElement(SelectField, {
     label: "Comparator",
     value: r.comparator,
     onChange: e => update(r.id, {
       comparator: e.target.value
     }),
     options: QC_COMPARATORS
-  }), /*#__PURE__*/React.createElement(TextField, {
+  }), r.qcType !== "bracketing" && /*#__PURE__*/React.createElement(TextField, {
     label: r.comparator === "between" ? "Lower Limit" : "Limit",
     type: "number",
     value: r.limitLow,
     onChange: e => update(r.id, {
       limitLow: Number(e.target.value) || 0
     })
-  }), r.comparator === "between" && /*#__PURE__*/React.createElement(TextField, {
+  }), r.qcType !== "bracketing" && r.comparator === "between" && /*#__PURE__*/React.createElement(TextField, {
     label: "Upper Limit",
     type: "number",
     value: r.limitHigh,
     onChange: e => update(r.id, {
       limitHigh: Number(e.target.value) || 0
     })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    label: "Unit",
-    value: r.unit,
-    onChange: e => update(r.id, {
-      unit: e.target.value
+  }), /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement(TextField, {
+      label: "Unit",
+      value: linkedParameter ? (linkedParameter.unit || "") : r.unit,
+      onChange: linkedParameter ? undefined : e => update(r.id, { unit: e.target.value }),
+      readOnly: !!linkedParameter,
+      placeholder: "e.g. %, mg/L",
+      style: linkedParameter ? { background: "#f3f4f6", cursor: "not-allowed" } : undefined
     }),
-    placeholder: "e.g. %, mg/L"
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-2 gap-2 mt-2"
+    linkedParameter && /*#__PURE__*/React.createElement("div", {
+      className: "text-[10px] mt-0.5",
+      style: { color: C.teal }
+    }, "\u2190 auto-filled from linked parameter")
+  )), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 md:grid-cols-2 gap-2 mt-2"
   }, /*#__PURE__*/React.createElement(TextField, {
     label: "Target Mean (optional, for QC control chart)",
     type: "number",
@@ -1009,15 +1134,131 @@ function QcRuleEditor({
       targetSD: e.target.value === "" ? null : Number(e.target.value)
     }),
     placeholder: "leave blank to auto-calculate"
-  })), r.qcType === "bracketing" && /*#__PURE__*/React.createElement(TextField, {
-    label: "Bracketing Interval (insert a QC checkpoint every N field samples)",
-    type: "number",
-    value: r.bracketingInterval ?? "",
-    onChange: e => update(r.id, {
-      bracketingInterval: e.target.value === "" ? null : Number(e.target.value)
+  })), r.qcType === "bracketing" && /*#__PURE__*/React.createElement("div", {
+    className: "mt-2 rounded p-2.5",
+    style: { border: `1px solid ${C.border}`, background: C.bg }
+  },
+    /*#__PURE__*/React.createElement("div", {
+      className: "text-xs font-semibold mb-2",
+      style: { color: C.ink }
+    }, "Bracketing QC Design"),
+    /*#__PURE__*/React.createElement(TextField, {
+      label: "Bracketing Interval (insert a QC checkpoint every N field samples)",
+      type: "number",
+      value: r.bracketingInterval ?? "",
+      onChange: e => update(r.id, {
+        bracketingInterval: e.target.value === "" ? null : Number(e.target.value)
+      }),
+      placeholder: "e.g. 10 — also brackets the very first and last sample"
     }),
-    placeholder: "e.g. 10 — also brackets the very first and last sample"
-  }), /*#__PURE__*/React.createElement("div", {
+    /*#__PURE__*/React.createElement("label", {
+      className: "flex items-center gap-2 text-xs mt-2",
+      style: { color: C.ink }
+    },
+      /*#__PURE__*/React.createElement("input", {
+        type: "checkbox",
+        checked: r.bracketingIncludesBlank !== false,
+        onChange: e => update(r.id, { bracketingIncludesBlank: e.target.checked })
+      }),
+      "Include a Blank sample at the start of each bracketing sequence"
+    ),
+    /*#__PURE__*/React.createElement("div", { className: "mt-2" },
+      /*#__PURE__*/React.createElement("div", {
+        className: "text-xs font-medium mb-1",
+        style: { color: C.muted }
+      }, "Known Concentration Standards (placed at each bracketing interval)"),
+      /*#__PURE__*/React.createElement("div", {
+        className: "text-[11px] mb-2 p-1.5 rounded",
+        style: { background: C.infoBg, color: C.info }
+      }, "\"Target Value\" is just a reference label for the tester (the nominal strength of that standard). Pass/fail at Add Test Record is decided ONLY by that standard's own Comparator and Limit(s) below — set both for every standard, or its checkpoint can never be evaluated."),
+      (r.bracketingConcentrations || []).map((bc, idx) =>
+        /*#__PURE__*/React.createElement("div", {
+          key: bc.id,
+          className: "p-2 rounded mb-2",
+          style: { background: "#fff", border: `1px solid ${C.border}` }
+        },
+          /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-1 md:grid-cols-2 gap-2 mb-2" },
+            /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-2" },
+              /*#__PURE__*/React.createElement("span", { className: "text-[11px] font-mono", style: { color: C.muted } }, idx + 1 + "."),
+              /*#__PURE__*/React.createElement("div", { className: "flex-1" },
+                /*#__PURE__*/React.createElement(TextField, {
+                  label: "Label",
+                  value: bc.label,
+                  onChange: e => update(r.id, {
+                    bracketingConcentrations: (r.bracketingConcentrations || []).map(x =>
+                      x.id === bc.id ? { ...x, label: e.target.value } : x
+                    )
+                  }),
+                  placeholder: "e.g. Low Std"
+                })
+              )
+            ),
+            /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-2" },
+              /*#__PURE__*/React.createElement("div", { className: "flex-1" },
+                /*#__PURE__*/React.createElement(TextField, {
+                  label: `Target Value${linkedParameter?.unit ? ` (${linkedParameter.unit})` : ""}`,
+                  type: "number",
+                  value: bc.value,
+                  onChange: e => update(r.id, {
+                    bracketingConcentrations: (r.bracketingConcentrations || []).map(x =>
+                      x.id === bc.id ? { ...x, value: e.target.value } : x
+                    )
+                  })
+                })
+              ),
+              (r.bracketingConcentrations || []).length > 1 &&
+                /*#__PURE__*/React.createElement("button", {
+                  onClick: () => update(r.id, {
+                    bracketingConcentrations: (r.bracketingConcentrations || []).filter(x => x.id !== bc.id)
+                  }),
+                  className: "mt-5 p-1.5",
+                  style: { color: C.warn }
+                }, /*#__PURE__*/React.createElement(Icon, { name: "trash", size: 14 }))
+            )
+          ),
+          /*#__PURE__*/React.createElement("div", { className: "grid grid-cols-1 md:grid-cols-3 gap-2" },
+            /*#__PURE__*/React.createElement(SelectField, {
+              label: "Comparator",
+              value: bc.comparator || "between",
+              onChange: e => update(r.id, {
+                bracketingConcentrations: (r.bracketingConcentrations || []).map(x =>
+                  x.id === bc.id ? { ...x, comparator: e.target.value } : x
+                )
+              }),
+              options: QC_COMPARATORS
+            }),
+            /*#__PURE__*/React.createElement(TextField, {
+              label: (bc.comparator || "between") === "between" ? "Lower Limit" : "Limit",
+              type: "number",
+              value: bc.limitLow ?? "",
+              onChange: e => update(r.id, {
+                bracketingConcentrations: (r.bracketingConcentrations || []).map(x =>
+                  x.id === bc.id ? { ...x, limitLow: Number(e.target.value) || 0 } : x
+                )
+              })
+            }),
+            (bc.comparator || "between") === "between" && /*#__PURE__*/React.createElement(TextField, {
+              label: "Upper Limit",
+              type: "number",
+              value: bc.limitHigh ?? "",
+              onChange: e => update(r.id, {
+                bracketingConcentrations: (r.bracketingConcentrations || []).map(x =>
+                  x.id === bc.id ? { ...x, limitHigh: Number(e.target.value) || 0 } : x
+                )
+              })
+            })
+          )
+        )
+      ),
+      /*#__PURE__*/React.createElement(Button, {
+        size: "sm",
+        variant: "outline",
+        onClick: () => update(r.id, {
+          bracketingConcentrations: [...(r.bracketingConcentrations || []), { id: uid("bkc"), label: "", value: "", comparator: "between", limitLow: 0, limitHigh: 0 }]
+        })
+      }, /*#__PURE__*/React.createElement(Icon, { name: "plus", size: 12 }), "Add Concentration Standard")
+    )
+  ), /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] mt-1",
     style: {
       color: C.muted
@@ -1051,13 +1292,18 @@ function TestTypeBuilder({
   notify,
   equipment,
   gasList,
+  parameters,
   onSave,
   onCancel,
   initial
 }) {
   const [testName, setTestName] = useState(initial?.testName || "");
   const [method, setMethod] = useState(initial?.method || "");
+  const [linkedParameterIds, setLinkedParameterIds] = useState(initial?.linkedParameterIds || []);
   const [costPerTest, setCostPerTest] = useState(initial ? String(initial.costPerTest ?? 0) : "");
+  // Submit-guard: onSave() is synchronous, but a fast double-click can still
+  // fire it twice before React disables the button — this ref stops it cold.
+  const savingRef = React.useRef(false);
   const [defaultEquipmentId, setDefaultEquipmentId] = useState(initial?.defaultEquipmentId || "");
   const [chemicalRequirements, setChemicalRequirements] = useState(initial?.chemicalRequirements || []);
   const [gasRequirements, setGasRequirements] = useState(initial?.gasRequirements || []);
@@ -1068,6 +1314,31 @@ function TestTypeBuilder({
   const [qcRules, setQcRules] = useState(initial?.qcRules || []);
   const [qcFrequency, setQcFrequency] = useState(initial?.qcFrequency ? String(initial.qcFrequency) : "");
   const [submitAttempted, setSubmitAttempted] = useState(false);
+  // A Test Type now reports exactly one Parameter (see ParameterLinker). Once
+  // that Parameter is picked, Name / Method / Cost are no longer typed by
+  // hand — they're derived straight from the Parameter master record and
+  // kept in lock-step with it:
+  //   Name   = "<Parameter Name> (<Parameter Short Name>)", e.g. "Iron (Fe)"
+  //   Method = the Parameter's Method Ref
+  //   Cost   = the Parameter's Standard Fee
+  // These three fields are disabled (locked) below whenever a parameter is
+  // linked, so the only way to change them is to edit the Parameter itself
+  // in Test Configuration › Parameters.
+  const linkedParameter = linkedParameterIds.length > 0
+    ? (parameters || []).find(x => x.id === linkedParameterIds[0]) || null
+    : null;
+  const fieldsLocked = !!linkedParameter;
+  React.useEffect(() => {
+    if (!linkedParameter) return;
+    const autoName = linkedParameter.shortName
+      ? `${linkedParameter.name} (${linkedParameter.shortName})`
+      : linkedParameter.name;
+    setTestName(autoName || "");
+    setMethod(linkedParameter.methodRef || "");
+    const fee = Number(linkedParameter.standardFee);
+    setCostPerTest(Number.isFinite(fee) ? String(fee) : "0");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkedParameter]);
   const chemOptions = {
     raw: chemicals,
     options: chemicals.map(c => ({
@@ -1079,21 +1350,39 @@ function TestTypeBuilder({
     value: e.id,
     label: e.name
   }));
-  const combinedName = [testName.trim(), method.trim()].filter(Boolean).join("-");
+  const combinedName = fieldsLocked
+    ? testName.trim()
+    : [testName.trim(), method.trim()].filter(Boolean).join("-");
 
   // Inline validation — same red-border + message-below-field pattern used in Add Test Record.
   const errors = {};
   if (submitAttempted) {
     if (!testName.trim()) errors.testName = "Test Name is required.";
-    if (costPerTest === "") errors.costPerTest = "Cost of Test is required.";
+    if (costPerTest === "") errors.costPerTest = "Standard Fee (per test) is required.";
     if (chemicalRequirements.some(r => !r.chemicalId)) errors.chemicalRequirements = "Every Chemical Requirement row needs a linked chemical selected (or remove the empty row).";
     if (dilutionEnabled && dilutionChemicalRequirements.some(r => !r.chemicalId)) errors.dilutionChemicalRequirements = "Every Dilution Chemical Requirement row needs a linked chemical selected (or remove the empty row).";
   }
   const hasErrors = Object.keys(errors).length > 0;
   function handleSubmit() {
+    if (savingRef.current) return;
     setSubmitAttempted(true);
     const invalid = !testName.trim() || costPerTest === "" || chemicalRequirements.some(r => !r.chemicalId) || dilutionEnabled && dilutionChemicalRequirements.some(r => !r.chemicalId);
     if (invalid) return;
+    savingRef.current = true;
+    // Normalize QC rules before persisting: the design screen's Comparator
+    // dropdown falls back to displaying "between" whenever a bracketing
+    // concentration's comparator was never actually written (bc.comparator
+    // || "between"), which used to let a row look correctly configured on
+    // screen while saving with an empty comparator underneath. Bake that
+    // same default into the saved data here so what's stored always matches
+    // what's shown, and downstream evaluation never has to guess.
+    const normalizedQcRules = qcRules.map(r => ({
+      ...r,
+      bracketingConcentrations: (r.bracketingConcentrations || []).map(bc => ({
+        ...bc,
+        comparator: bc.comparator || "between"
+      }))
+    }));
     onSave({
       id: initial?.id || uid("test"),
       testName: testName.trim(),
@@ -1101,15 +1390,17 @@ function TestTypeBuilder({
       name: combinedName || testName.trim(),
       costPerTest: Number(costPerTest) || 0,
       defaultEquipmentId,
+      linkedParameterIds,
       chemicalRequirements,
       gasRequirements,
       dilutionEnabled,
       dilutionChemicalRequirements: dilutionEnabled ? dilutionChemicalRequirements : [],
       dilutionGasRequirements: dilutionEnabled ? dilutionGasRequirements : [],
       resultParameters,
-      qcRules,
+      qcRules: normalizedQcRules,
       qcFrequency: qcFrequency === "" ? null : Number(qcFrequency)
     });
+    savingRef.current = false;
   }
   return /*#__PURE__*/React.createElement("div", {
     className: "flex flex-col gap-3"
@@ -1125,35 +1416,66 @@ function TestTypeBuilder({
   }), "Please fix the highlighted field(s) below before saving."), /*#__PURE__*/React.createElement(CollapsibleSection, {
     step: 1,
     title: "Basic Info",
-    subtitle: "Name, method, cost & default equipment"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-2 gap-3"
+    subtitle: "Select the single parameter this test type covers — name, method & cost auto-fill and lock, then set default equipment"
+  }, /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("div", {
+      className: "text-xs font-semibold mb-1.5",
+      style: { color: C.ink }
+    }, "Parameter this Test Type reports"),
+    /*#__PURE__*/React.createElement(ParameterLinker, {
+      parameters: parameters || [],
+      selectedIds: linkedParameterIds,
+      setSelectedIds: setLinkedParameterIds
+    })
+  ), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 md:grid-cols-2 gap-3"
   }, /*#__PURE__*/React.createElement(TextField, {
-    label: "Name of Test",
+    label: fieldsLocked ? "Name of Test (locked — from Parameter)" : "Name of Test",
     value: testName,
     onChange: e => setTestName(e.target.value),
     placeholder: "e.g. Arsenic (As)",
-    error: errors.testName
+    error: errors.testName,
+    disabled: fieldsLocked,
+    style: fieldsLocked ? { background: C.bg, color: C.muted, cursor: "not-allowed" } : undefined
   }), /*#__PURE__*/React.createElement(TextField, {
-    label: "Method",
+    label: fieldsLocked ? "Method (locked — from Parameter)" : "Method",
     value: method,
     onChange: e => setMethod(e.target.value),
-    placeholder: "e.g. HVG"
-  })), combinedName && /*#__PURE__*/React.createElement("div", {
+    placeholder: "e.g. HVG",
+    disabled: fieldsLocked,
+    style: fieldsLocked ? { background: C.bg, color: C.muted, cursor: "not-allowed" } : undefined
+  })), fieldsLocked && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs p-2 rounded flex items-center gap-1.5",
+    style: {
+      background: C.infoBg,
+      color: C.info
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "lock",
+    size: 13
+  }), "Name, Method and Cost are locked — they're taken automatically from the linked parameter \"", linkedParameter.name, linkedParameter.shortName ? ` (${linkedParameter.shortName})` : "", "\". To change them, edit the parameter in Test Configuration \u203a Parameters."), combinedName && /*#__PURE__*/React.createElement("div", {
     className: "text-xs p-2 rounded",
     style: {
       background: C.okBg,
       color: C.ok
     }
   }, "This test type will be saved as: ", /*#__PURE__*/React.createElement("strong", null, combinedName)), /*#__PURE__*/React.createElement(TextField, {
-    label: "Cost of Test (৳ per billed sample)",
+    label: fieldsLocked ? "Standard Fee (per test) — locked, from Parameter" : "Standard Fee (per test)",
     type: "number",
     min: "0",
     value: costPerTest,
     onChange: e => setCostPerTest(e.target.value),
     placeholder: "e.g. 100 — use 0 for free tests",
-    error: errors.costPerTest
-  }), /*#__PURE__*/React.createElement("div", {
+    error: errors.costPerTest,
+    disabled: fieldsLocked,
+    style: fieldsLocked ? { background: C.bg, color: C.muted, cursor: "not-allowed" } : undefined
+  }), fieldsLocked && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs p-2 rounded",
+    style: {
+      background: C.okBg,
+      color: C.ok
+    }
+  }, "Auto-filled from the Standard Fee set on the linked parameter — unlink the parameter above if this test type needs a different name, method, or fee."), /*#__PURE__*/React.createElement("div", {
     className: "text-xs p-2 rounded",
     style: {
       background: C.infoBg,
@@ -1269,7 +1591,8 @@ function TestTypeBuilder({
     defaultOpen: resultParameters.length > 0
   }, /*#__PURE__*/React.createElement(ResultParameterEditor, {
     resultParameters: resultParameters,
-    setResultParameters: setResultParameters
+    setResultParameters: setResultParameters,
+    linkedParameter: linkedParameter
   })), /*#__PURE__*/React.createElement(CollapsibleSection, {
     step: 6,
     title: "QC Acceptance Rules",
@@ -1277,7 +1600,8 @@ function TestTypeBuilder({
     defaultOpen: qcRules.length > 0
   }, /*#__PURE__*/React.createElement(QcRuleEditor, {
     qcRules: qcRules,
-    setQcRules: setQcRules
+    setQcRules: setQcRules,
+    linkedParameter: linkedParameter
   }), /*#__PURE__*/React.createElement("div", {
     className: "mt-3 pt-3",
     style: {
@@ -1302,7 +1626,18 @@ function TestTypeBuilder({
 // ============================================================================
 // TEST TYPES TAB — create/manage test type designs (moved out of Add Test Record)
 // ============================================================================
-function TestTypesTab({
+// ============================================================================
+// TEST CONFIGURATION TAB — top-level shell for the renamed "Test Type"
+// module. Two sub-tabs: Parameters (lightweight analytical-parameter master
+// list) and Test Types (the existing Test Method Engine, now also able to
+// link Parameters). Mirrors the pill sub-nav pattern already used by
+// InventoryTab (Equipment/Glassware/Chemicals/Gas).
+// ============================================================================
+function TestConfigurationTab({
+  testConfigTab,
+  setTestConfigTab,
+  parameters,
+  setParameters,
   testTypes,
   setTestTypes,
   chemicals,
@@ -1314,8 +1649,80 @@ function TestTypesTab({
   masterChemicals,
   setMasterChemicals,
   testRecords,
+  session,
+  permissionMatrix,
   notify
 }) {
+  return /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("div", { className: "flex gap-2 mb-5" },
+      [{ k: "parameters", label: "Parameters", icon: "list" }, { k: "testTypes", label: "Test Types", icon: "beaker" }].map(s =>
+        /*#__PURE__*/React.createElement("button", {
+          key: s.k,
+          onClick: () => setTestConfigTab(s.k),
+          className: "flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium",
+          style: {
+            background: testConfigTab === s.k ? C.teal : "#fff",
+            color: testConfigTab === s.k ? "#fff" : C.muted,
+            border: `1px solid ${testConfigTab === s.k ? C.teal : C.border}`
+          }
+        }, /*#__PURE__*/React.createElement(Icon, { name: s.icon, size: 14 }), s.label))
+    ),
+    testConfigTab === "parameters" && /*#__PURE__*/React.createElement(ParametersTab, {
+      parameters: parameters,
+      setParameters: setParameters,
+      testTypes: testTypes,
+      session: session,
+      permissionMatrix: permissionMatrix,
+      notify: notify
+    }),
+    testConfigTab === "testTypes" && /*#__PURE__*/React.createElement(TestTypesTab, {
+      testTypes: testTypes,
+      setTestTypes: setTestTypes,
+      chemicals: chemicals,
+      setChemicals: setChemicals,
+      equipment: equipment,
+      setEquipment: setEquipment,
+      gasList: gasList,
+      setGasList: setGasList,
+      masterChemicals: masterChemicals,
+      setMasterChemicals: setMasterChemicals,
+      parameters: parameters,
+      setParameters: setParameters,
+      testRecords: testRecords,
+      session: session,
+      permissionMatrix: permissionMatrix,
+      notify: notify
+    })
+  );
+}
+
+function TestTypesTab({
+  testTypes,
+  setTestTypes,
+  chemicals,
+  setChemicals,
+  equipment,
+  setEquipment,
+  gasList,
+  setGasList,
+  masterChemicals,
+  setMasterChemicals,
+  parameters,
+  setParameters,
+  testRecords,
+  session,
+  permissionMatrix,
+  notify
+}) {
+  const ttCreateGate = permGate(permissionMatrix, session, "testTypes", "create", notify, "add test types");
+  const ttEditGate = permGate(permissionMatrix, session, "testTypes", "edit", notify, "edit test types");
+  const ttDeleteGate = permGate(permissionMatrix, session, "testTypes", "delete", notify, "delete test types");
+  const canCreateTestTypes = ttCreateGate.visible;
+  const canEditTestTypes = ttEditGate.visible;
+  const canDeleteTestTypes = ttDeleteGate.visible;
+  function parameterSummary(t) {
+    return (t.linkedParameterIds || []).map(id => (parameters || []).find(p => p.id === id)).filter(Boolean);
+  }
   const [showBuilder, setShowBuilder] = useState(false);
   const [editingType, setEditingType] = useState(null);
   const [deleteFor, setDeleteFor] = useState(null);
@@ -1349,10 +1756,26 @@ function TestTypesTab({
   function handleSave(testType) {
     if (editingType) {
       setTestTypes(prev => prev.map(t => t.id === testType.id ? testType : t));
+      DataService.appendAudit({
+        entity: "testType",
+        entityId: testType.id,
+        action: "edit",
+        user: session.username,
+        role: session.role,
+        note: `Updated test type "${testType.name}"`
+      });
       notify(`Test type "${testType.name}" updated`);
       setEditingType(null);
     } else {
       setTestTypes(prev => [...prev, testType]);
+      DataService.appendAudit({
+        entity: "testType",
+        entityId: testType.id,
+        action: "create",
+        user: session.username,
+        role: session.role,
+        note: `Created test type "${testType.name}"`
+      });
       notify(`Test type "${testType.name}" created`);
       setShowBuilder(false);
     }
@@ -1365,6 +1788,14 @@ function TestTypesTab({
     }
     setTestTypes(prev => prev.filter(x => x.id !== t.id));
     setDeleteFor(null);
+    DataService.appendAudit({
+      entity: "testType",
+      entityId: t.id,
+      action: "delete",
+      user: session.username,
+      role: session.role,
+      note: `Deleted test type "${t.name}"`
+    });
     notify(`Deleted test type "${t.name}"`);
   }
 
@@ -1388,6 +1819,12 @@ function TestTypesTab({
       };
     });
     const equip = equipment.find(e => e.id === t.defaultEquipmentId);
+    // Linked parameter travels with the export by value (code/name/etc, not
+    // by id — ids won't match on the receiving lab). If that lab doesn't have
+    // this parameter registered yet, importing will auto-create it (same
+    // "reuse by name, create what's missing" pattern already used for
+    // chemicals/gases/machines below).
+    const linkedParam = (t.linkedParameterIds || []).map(id => (parameters || []).find(p => p.id === id)).filter(Boolean)[0] || null;
     const payload = {
       schema: "aqualab-testtype-export-v1",
       exportedAt: new Date().toISOString(),
@@ -1399,6 +1836,24 @@ function TestTypesTab({
         feeApplicable: t.feeApplicable,
         dilutionEnabled: t.dilutionEnabled
       },
+      linkedParameter: linkedParam ? {
+        code: linkedParam.code,
+        name: linkedParam.name,
+        shortName: linkedParam.shortName,
+        unit: linkedParam.unit,
+        methodRef: linkedParam.methodRef,
+        category: linkedParam.category,
+        decimalPlaces: linkedParam.decimalPlaces,
+        lod: linkedParam.lod,
+        loq: linkedParam.loq,
+        tatHours: linkedParam.tatHours,
+        standardFee: linkedParam.standardFee,
+        minDetection: linkedParam.minDetection,
+        maxDetection: linkedParam.maxDetection,
+        refLimitMin: linkedParam.refLimitMin,
+        refLimitMax: linkedParam.refLimitMax,
+        refStandard: linkedParam.refStandard
+      } : null,
       defaultEquipmentName: equip ? equip.name : "",
       chemicalRequirements: (t.chemicalRequirements || []).map(r => ({
         chemicalName: chemNames[r.chemicalId]?.name || r.chemical,
@@ -1443,13 +1898,54 @@ function TestTypesTab({
       createdGas = 0,
       reusedGas = 0,
       createdMachine = 0,
-      reusedMachine = 0;
+      reusedMachine = 0,
+      createdParam = 0,
+      reusedParam = 0;
     const conflicts = [];
     const nextChemicals = [...chemicals];
     const nextMaster = [...masterChemicals];
     const nextGasList = [...gasList];
     const nextEquipment = [...equipment];
+    const nextParameters = [...(parameters || [])];
     const usedNamesThisBatch = [];
+    // Resolve a linked parameter by Code (preferred) or Name — reuse the
+    // existing registered parameter if this lab already has it, otherwise
+    // auto-create it (mirrors resolveChemical/resolveGas/resolveMachine
+    // below), so an imported test type is never left unlinked just because
+    // the destination lab hadn't registered that parameter yet.
+    function resolveParameter(p) {
+      if (!p || (!p.code && !p.name)) return null;
+      let existing = nextParameters.find(x =>
+        (p.code && x.code && x.code.toLowerCase() === p.code.toLowerCase()) ||
+        (p.name && x.name && x.name.toLowerCase() === p.name.toLowerCase())
+      );
+      if (existing) {
+        reusedParam++;
+        return existing;
+      }
+      existing = {
+        id: uid("param"),
+        code: p.code || p.name,
+        name: p.name || p.code,
+        shortName: p.shortName || "",
+        unit: p.unit || "",
+        methodRef: p.methodRef || "",
+        category: p.category || "Others",
+        decimalPlaces: Number.isFinite(Number(p.decimalPlaces)) ? Number(p.decimalPlaces) : 2,
+        lod: p.lod ?? "",
+        loq: p.loq ?? "",
+        tatHours: p.tatHours ?? "",
+        standardFee: p.standardFee ?? "",
+        minDetection: p.minDetection ?? "",
+        maxDetection: p.maxDetection ?? "",
+        refLimitMin: p.refLimitMin ?? "",
+        refLimitMax: p.refLimitMax ?? "",
+        refStandard: p.refStandard || ""
+      };
+      nextParameters.push(existing);
+      createdParam++;
+      return existing;
+    }
     function resolveChemical(name, unit) {
       if (!name) return null;
       let c = nextChemicals.find(x => x.name.toLowerCase() === name.toLowerCase());
@@ -1528,6 +2024,7 @@ function TestTypesTab({
       const gasRequirements = (d.gasRequirements || []).map(mapGasReq);
       const dilutionGasRequirements = (d.dilutionGasRequirements || []).map(mapGasReq);
       const machine = resolveMachine(d.defaultEquipmentName);
+      const linkedParam = d.linkedParameter ? resolveParameter(d.linkedParameter) : null;
       let finalName = d.name || [d.testName, d.method].filter(Boolean).join("-");
       const nameTaken = n => testTypes.some(t => t.name.toLowerCase() === n.toLowerCase()) || usedNamesThisBatch.some(n2 => n2.toLowerCase() === n.toLowerCase());
       if (nameTaken(finalName)) {
@@ -1549,6 +2046,7 @@ function TestTypesTab({
         costPerTest: Number(d.costPerTest) || 0,
         feeApplicable: d.feeApplicable !== false,
         defaultEquipmentId: machine?.id || "",
+        linkedParameterIds: linkedParam ? [linkedParam.id] : [],
         chemicalRequirements,
         gasRequirements,
         dilutionEnabled: !!d.dilutionEnabled,
@@ -1560,6 +2058,7 @@ function TestTypesTab({
     setMasterChemicals(nextMaster);
     setGasList(nextGasList);
     setEquipment(nextEquipment);
+    if (typeof setParameters === "function") setParameters(nextParameters);
     setTestTypes(prev => [...prev, ...newTestTypes]);
     return {
       names: newTestTypes.map(t => t.name),
@@ -1569,6 +2068,8 @@ function TestTypesTab({
       reusedGas,
       createdMachine,
       reusedMachine,
+      createdParam,
+      reusedParam,
       conflicts
     };
   }
@@ -1605,6 +2106,7 @@ function TestTypesTab({
         costPerTest: payload.testType.costPerTest,
         feeApplicable: payload.testType.feeApplicable,
         dilutionEnabled: payload.testType.dilutionEnabled,
+        linkedParameter: payload.linkedParameter || null,
         defaultEquipmentName: payload.defaultEquipmentName,
         chemicalRequirements: payload.chemicalRequirements || [],
         dilutionChemicalRequirements: payload.dilutionChemicalRequirements || [],
@@ -1614,42 +2116,7 @@ function TestTypesTab({
       errors: []
     };
   }
-  function parseCSVText(text) {
-    const lines = text.split(/\r\n|\n|\r/).filter(l => l.trim() !== "");
-    if (lines.length === 0) return [];
-    function splitLine(line) {
-      const out = [];
-      let cur = "";
-      let inQuotes = false;
-      for (let i = 0; i < line.length; i++) {
-        const ch = line[i];
-        if (inQuotes) {
-          if (ch === '"') {
-            if (line[i + 1] === '"') {
-              cur += '"';
-              i++;
-            } else inQuotes = false;
-          } else cur += ch;
-        } else {
-          if (ch === '"') inQuotes = true;else if (ch === ",") {
-            out.push(cur);
-            cur = "";
-          } else cur += ch;
-        }
-      }
-      out.push(cur);
-      return out.map(s => s.trim());
-    }
-    const headers = splitLine(lines[0]);
-    return lines.slice(1).map(line => {
-      const cells = splitLine(line);
-      const obj = {};
-      headers.forEach((h, i) => {
-        obj[h] = cells[i] ?? "";
-      });
-      return obj;
-    });
-  }
+  // parseCSVText is a shared global helper now — see 10-inventory-logic.js.
 
   // Flat row template: TestName, Method, CostPerTest, FeeApplicable(Y/N), DilutionEnabled(Y/N),
   // MachineName, RequirementType (Chemical / DilutionChemical / Gas / DilutionGas), ChemicalOrGasName,
@@ -1683,6 +2150,8 @@ function TestTypesTab({
       const method = getVal(row, "method");
       const key = testName.toLowerCase() + "|" + method.toLowerCase();
       if (!groups.has(key)) {
+        const paramCode = getVal(row, "parametercode");
+        const paramName = getVal(row, "parametername");
         groups.set(key, {
           testName,
           method,
@@ -1690,6 +2159,15 @@ function TestTypesTab({
           feeApplicable: !getVal(row, "feeapplicable") || truthy(getVal(row, "feeapplicable")),
           dilutionEnabled: truthy(getVal(row, "dilutionenabled")),
           defaultEquipmentName: getVal(row, "machinename"),
+          linkedParameter: (paramCode || paramName) ? {
+            code: paramCode || paramName,
+            name: paramName || paramCode,
+            shortName: getVal(row, "parametershortname"),
+            unit: getVal(row, "parameterunit"),
+            methodRef: getVal(row, "parametermethodref") || method,
+            category: getVal(row, "parametercategory"),
+            standardFee: getVal(row, "parameterfee") === "" ? Number(getVal(row, "costpertest")) || 0 : Number(getVal(row, "parameterfee")) || 0
+          } : null,
           chemicalRequirements: [],
           dilutionChemicalRequirements: [],
           gasRequirements: [],
@@ -1736,9 +2214,9 @@ function TestTypesTab({
     };
   }
   function downloadImportTemplate() {
-    const header = "TestName,Method,CostPerTest,FeeApplicable,DilutionEnabled,MachineName,RequirementType,ChemicalOrGasName,Unit,Optional";
-    const sample1 = "Arsenic (As),HVG,100,Y,N,HVG Analyzer,Chemical,Fe Standard,ml,N";
-    const sample2 = "Arsenic (As),HVG,100,Y,N,HVG Analyzer,Gas,Acetylene,kg,N";
+    const header = "TestName,Method,CostPerTest,FeeApplicable,DilutionEnabled,MachineName,ParameterCode,ParameterName,ParameterShortName,ParameterUnit,ParameterMethodRef,ParameterCategory,ParameterFee,RequirementType,ChemicalOrGasName,Unit,Optional";
+    const sample1 = "Arsenic (As),HVG,100,Y,N,HVG Analyzer,As,Arsenic,As,mg/L,HVG,Heavy Metal,100,Chemical,Fe Standard,ml,N";
+    const sample2 = "Arsenic (As),HVG,100,Y,N,HVG Analyzer,As,Arsenic,As,mg/L,HVG,Heavy Metal,100,Gas,Acetylene,kg,N";
     const blob = new Blob([[header, sample1, sample2].join("\n")], {
       type: "text/csv"
     });
@@ -1878,13 +2356,13 @@ function TestTypesTab({
   const ttPageClamped = Math.min(ttPage, ttTotalPages);
   const ttPageRows = ttFiltered.slice((ttPageClamped - 1) * TT_PAGE_SIZE, ttPageClamped * TT_PAGE_SIZE);
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-between mb-4 flex-wrap gap-2"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "text-sm",
+    className: "text-sm mb-2",
     style: {
       color: C.muted
     }
   }, "Design test types here — equipment, chemical/gas requirements, dummy defaults, and cost. \"Add Test Record\" simply loads whatever is designed here."), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end mb-4"
+  }, /*#__PURE__*/React.createElement("div", {
     className: "flex gap-2 flex-wrap items-center"
   }, /*#__PURE__*/React.createElement("label", {
     className: "flex items-center gap-1.5 text-xs",
@@ -1905,31 +2383,37 @@ function TestTypesTab({
     style: {
       borderColor: C.border
     }
-  })), /*#__PURE__*/React.createElement(Button, {
+  })), canCreateTestTypes && /*#__PURE__*/React.createElement(Button, {
     variant: "outline",
     size: "sm",
-    onClick: () => {
+    onClick: ttCreateGate.guard(() => {
       resetImportModal();
       setImportOpen(true);
-    }
+    })
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "upload",
     size: 14
-  }), "Import Test Type"), /*#__PURE__*/React.createElement(Button, {
+  }), "Import Test Type"), canCreateTestTypes && /*#__PURE__*/React.createElement(Button, {
     size: "sm",
-    onClick: () => setShowBuilder(true)
+    onClick: ttCreateGate.guard(() => setShowBuilder(true))
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "plus",
     size: 14
   }), "New Test Type"))), /*#__PURE__*/React.createElement(Banner, {
     tone: "info",
     storageKey: "testtypes-import-export-tip"
-  }, "Export a test type to share its full setup (chemicals, gases, machine, requirements) with another lab as a .json file. Importing recreates the test type(s) here from .xlsx, .csv, or .json — reusing any chemical/gas/machine that already exists by name and creating what's missing."), ttFiltered.length === 0 && /*#__PURE__*/React.createElement("div", {
-    className: "text-sm",
-    style: {
-      color: C.muted
-    }
-  }, testTypes.length === 0 ? "No test types yet — create one to get started." : "No test types match your search."), ttFiltered.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "Export a test type to share its full setup (linked parameter, chemicals, gases, machine, requirements) with another lab as a .json file. Importing recreates the test type(s) here from .xlsx, .csv, or .json — reusing any parameter/chemical/gas/machine that already exists by code or name, and auto-registering (like Inventory) whatever is missing."), ttFiltered.length === 0 && /*#__PURE__*/React.createElement(EmptyState, {
+    icon: "beaker",
+    title: testTypes.length === 0 ? "No test types yet" : "No test types match your search",
+    subtitle: testTypes.length === 0 ? "Design one — equipment, chemical/gas requirements, and cost per sample." : "Try a different name, method, or equipment.",
+    action: testTypes.length === 0 && canCreateTestTypes ? /*#__PURE__*/React.createElement(Button, {
+      size: "sm",
+      onClick: ttCreateGate.guard(() => setShowBuilder(true))
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: "plus",
+      size: 13
+    }), "New Test Type") : undefined
+  }), ttFiltered.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "rounded-lg overflow-hidden mb-1",
     style: {
       border: `1px solid ${C.border}`
@@ -1942,7 +2426,7 @@ function TestTypesTab({
     style: {
       background: C.bg
     }
-  }, ["Test Type", "Method", "Cost / Sample", "Default Equipment", "Requirements", ""].map(h => /*#__PURE__*/React.createElement("th", {
+  }, ["Test Type", "Method", "Standard Fee", "Default Equipment", "Linked Parameters", "Requirements", ""].map(h => /*#__PURE__*/React.createElement("th", {
     key: h,
     className: "text-left px-3 py-2.5 text-xs font-semibold sticky top-0",
     style: {
@@ -1954,6 +2438,8 @@ function TestTypesTab({
   }, h)))), /*#__PURE__*/React.createElement("tbody", null, ttPageRows.map((t, idx) => {
     const isOpen = !!ttExpanded[t.id];
     const reqCount = (t.chemicalRequirements || []).length + (t.gasRequirements || []).length;
+    const linkedFeeParam = (t.linkedParameterIds || []).length > 0 ? (parameters || []).find(p => p.id === t.linkedParameterIds[0]) : null;
+    const liveCost = linkedFeeParam ? Number(linkedFeeParam.standardFee) || 0 : Number(t.costPerTest) || 0;
     const mainRow = /*#__PURE__*/React.createElement("tr", {
       key: t.id,
       className: "cursor-pointer",
@@ -1988,12 +2474,26 @@ function TestTypesTab({
       className: "px-3 py-2.5"
     }, /*#__PURE__*/React.createElement(Badge, {
       tone: "info"
-    }, "৳", fmtNum(t.costPerTest || 0), "/sample")), /*#__PURE__*/React.createElement("td", {
+    }, "৳", fmtNum(liveCost), "/sample")), /*#__PURE__*/React.createElement("td", {
       className: "px-3 py-2.5",
       style: {
         color: C.muted
       }
     }, t.defaultEquipmentId ? equipmentName(t.defaultEquipmentId) : "—"), /*#__PURE__*/React.createElement("td", {
+      className: "px-3 py-2.5"
+    }, (() => {
+      const linked = parameterSummary(t);
+      return linked.length === 0 ? /*#__PURE__*/React.createElement("span", {
+        style: { color: C.muted }
+      }, "—") : /*#__PURE__*/React.createElement("div", {
+        className: "flex items-center gap-1 flex-wrap"
+      }, linked.slice(0, 3).map(p => /*#__PURE__*/React.createElement(Badge, {
+        key: p.id,
+        tone: PARAMETER_CATEGORY_TONE[p.category] || "muted"
+      }, p.code || p.name)), linked.length > 3 && /*#__PURE__*/React.createElement(Badge, {
+        tone: "muted"
+      }, "+", linked.length - 3, " more"));
+    })()), /*#__PURE__*/React.createElement("td", {
       className: "px-3 py-2.5"
     }, reqCount === 0 ? /*#__PURE__*/React.createElement(Badge, {
       tone: "muted"
@@ -2015,21 +2515,21 @@ function TestTypesTab({
       color: C.info,
       title: "Export test type",
       onClick: () => exportTestType(t)
-    }), /*#__PURE__*/React.createElement(IconButton, {
+    }), canEditTestTypes && /*#__PURE__*/React.createElement(IconButton, {
       name: "edit",
       color: C.teal,
       title: "Edit test type",
-      onClick: () => setEditingType(t)
-    }), /*#__PURE__*/React.createElement(IconButton, {
+      onClick: ttEditGate.guard(() => setEditingType(t))
+    }), canDeleteTestTypes && /*#__PURE__*/React.createElement(IconButton, {
       name: "trash",
       color: C.warn,
       title: "Delete test type",
-      onClick: () => setDeleteFor(t)
+      onClick: ttDeleteGate.guard(() => setDeleteFor(t))
     }))));
     const detailRow = !isOpen ? null : /*#__PURE__*/React.createElement("tr", {
       key: t.id + "-detail"
     }, /*#__PURE__*/React.createElement("td", {
-      colSpan: 6,
+      colSpan: 7,
       className: "px-4 py-3",
       style: {
         background: `${C.teal}0F`,
@@ -2048,7 +2548,11 @@ function TestTypesTab({
       style: {
         color: C.ink
       }
-    }, t.testName || t.name))), /*#__PURE__*/React.createElement("div", {
+    }, t.testName || t.name)), /*#__PURE__*/React.createElement("span", null, "Linked Parameters: ", /*#__PURE__*/React.createElement("strong", {
+      style: {
+        color: C.ink
+      }
+    }, parameterSummary(t).length === 0 ? "none" : parameterSummary(t).map(p => p.name).join(", ")))), /*#__PURE__*/React.createElement("div", {
       className: "text-xs",
       style: {
         color: C.muted
@@ -2095,6 +2599,7 @@ function TestTypesTab({
     notify: notify,
     equipment: equipment,
     gasList: gasList,
+    parameters: parameters,
     onSave: handleSave,
     onCancel: () => setShowBuilder(false)
   })), editingType && /*#__PURE__*/React.createElement(Modal, {
@@ -2109,6 +2614,7 @@ function TestTypesTab({
     notify: notify,
     equipment: equipment,
     gasList: gasList,
+    parameters: parameters,
     initial: editingType,
     onSave: handleSave,
     onCancel: () => setEditingType(null)
@@ -2129,7 +2635,7 @@ function TestTypesTab({
     style: {
       borderColor: C.border,
       color: C.muted,
-      background: "#FAFEFE"
+      background: C.subtle
     },
     onDragOver: e => e.preventDefault(),
     onDrop: e => {
@@ -2219,7 +2725,7 @@ function TestTypesTab({
     style: {
       color: C.muted
     }
-  }, (d.chemicalRequirements || []).length, " chemical(s) · ", (d.gasRequirements || []).length, " gas(es)", d.dilutionEnabled ? " · dilution configured" : "")))), importParsed.errors.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, (d.chemicalRequirements || []).length, " chemical(s) · ", (d.gasRequirements || []).length, " gas(es)", d.dilutionEnabled ? " · dilution configured" : "", d.linkedParameter ? ` · parameter: ${d.linkedParameter.code || d.linkedParameter.name}` : "")))), importParsed.errors.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "p-2 rounded",
     style: {
       background: C.warnBg
@@ -2285,6 +2791,16 @@ function TestTypesTab({
     name: "check",
     size: 13
   }), "Success — imported: ", importSummary.names.join(", ")), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "beaker",
+    size: 14,
+    color: C.teal
+  }), "Parameters: ", /*#__PURE__*/React.createElement(Badge, {
+    tone: "ok"
+  }, importSummary.createdParam || 0, " new"), /*#__PURE__*/React.createElement(Badge, {
+    tone: "info"
+  }, importSummary.reusedParam || 0, " reused")), /*#__PURE__*/React.createElement("div", {
     className: "flex items-center gap-2"
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "flask",

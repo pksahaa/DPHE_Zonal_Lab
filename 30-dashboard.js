@@ -251,7 +251,7 @@ function SampleKpiStrip({
       size: 12
     }))
   }, /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-4 gap-3"
+    className: "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3"
   }, /*#__PURE__*/React.createElement(StatCard, {
     label: "Active Samples",
     value: stats.activeCount,

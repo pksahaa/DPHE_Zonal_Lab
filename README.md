@@ -30,11 +30,37 @@ style.css                           # global styles
 16-sub-batch.js                     # Sub-Batch model + getSampleResultForTest lookup
 17-report-generator.js              # Custom Report Generator (official DPHE report format)
 20-sample-model.js                  # sample lifecycle/status logic
-21-sample-ui.js                     # SamplesTab (Samples + Sub-Batches sub-tabs), forms, QC banner, bulk manifest upload
+21-sample-ui.js                     # SamplesTab (Samples Registration + Create Analytical Batch sub-tabs), forms, QC banner, bulk manifest upload
+22-results-workflow-ui.js           # Samples tab's 3rd sub-tab: Upload/Review/Approve/Release, consolidated + role-gated (see note below)
 30-dashboard.js                     # DashboardTab, SampleKpiStrip
 40-auth-ui.js                       # LoginPage
 99-app.js                           # AppRoot, LabApp, ReactDOM.render
 ```
+
+## 2026-07-30 — Results Workflow consolidation
+
+"Upload results / Review / Approve / Release" used to be scattered across
+three places: Sample Detail's per-parameter buttons + whole-sample signature
+panel, Create Analytical Batch's per-row buttons, and its "Batch Actions"
+toolbar (Batch Approve/Release by Reference). All three are now **read-only
+status + a deep-link** — the actions themselves live in one place: Samples →
+**Results Workflow** (`22-results-workflow-ui.js`), reached via
+`goToResultsWorkflow()` in `99-app.js`.
+
+- Groups by `testTypeId` across **all** samples needing a step, regardless of
+  whether they were tested via a Sub-Batch, Batch(Reference) mode, or an
+  individual entry — one queue per step, not per grouping mechanism.
+- Role-gated using the existing `permissionsFor()` (`20-sample-model.js`):
+  a stage is hidden entirely (not just disabled) unless the signed-in role
+  has that permission. Technician (the "Analyzer" role) has
+  `canEnterResults` only, so it sees **only** Pending Upload.
+- No new decision logic — every action calls the same
+  `bulkDecideParameter` / `bulkReleaseParameter` / `setRequestedTestStatus`
+  functions the old locations used.
+- "Matrix" field in Sample Detail's edit view was renamed to "Sample Type"
+  to match the Registration form's label for the same underlying
+  `sample.matrix` field (was previously two different labels for one field).
+
 
 ## Why this split
 
@@ -591,3 +617,481 @@ top of cramped per-sample rows:
   changes to `20-sample-model.js`, `19-reference-model.js`, or any other
   file — `onCreate(shared, validRows, reference)`'s shape is identical to
   before, so nothing downstream needed touching.
+
+
+## Per-user overrides now cover Samples (Register / Assign / Review / Approve / Release)
+
+The Module × Action permission matrix (Users → Permission Matrix, plus the
+"Custom permissions for this user" editor on each user) previously covered
+everything *except* the Sample Lifecycle's own register/assign/review/
+approve/release permissions — those were still role-only
+(`ROLE_PERMISSIONS` / `permissionsFor(role)` in `20-sample-model.js`), with
+no way to grant or revoke one person's access without moving them to a
+different role.
+
+- **`permissionsFor()`** (`20-sample-model.js`) now takes
+  `(permissionMatrix, session)` instead of a bare role string. Resolution
+  order matches every other module: Administrator always full access →
+  `session.overrides.samples.<action>` (per-user override) → the matrix's
+  `permissionMatrix[role].samples.<action>` (role default) → a defensive
+  fallback to the original `ROLE_PERMISSIONS` constant if a role is
+  somehow missing a `samples` entry. All three call sites (`SamplesTab`
+  and `SampleDetail` in `21-sample-ui.js`, `ResultsWorkflowTab` in
+  `22-results-workflow-ui.js`) now take `permissionMatrix` as a prop,
+  threaded down from `AppRoot`/`LabApp` in `99-app.js`.
+- **`41-rbac-ui.js`**: added a `SAMPLE_MODULE` definition (Register /
+  Assign / Enter Results / Review / Approve / Release — a different
+  action set than the shared View/Create/Edit/Delete columns, so it's
+  rendered as its own small grid rather than forced into
+  `PERMISSION_MODULES`). Both `PermissionMatrixPanel` (role-level
+  defaults) and `UserPermissionOverridesEditor` (per-user Allow/Deny/
+  Inherit) now show this second grid, using the exact same
+  `toggleCell()`/`cycle()`/`overrideCellState()` logic already used for
+  every other module — no new interaction pattern to learn.
+- **Migration**: `DEFAULT_PERMISSION_MATRIX[role].samples` is seeded from
+  the existing `ROLE_PERMISSIONS` values, so behavior for every role is
+  identical to before on a fresh install. For labs that already have a
+  `permissionMatrix` saved in localStorage (from before this change, so
+  missing the `samples` key entirely), `backfillSamplePermissions()` fills
+  it in from the same `ROLE_PERMISSIONS` defaults the first time the app
+  loads after updating — a no-op if it's already been through this once,
+  same idempotent-migration pattern used elsewhere in this app.
+- Verified end-to-end: created a Technician user with an explicit
+  per-user "Approve" override — Results Workflow correctly shows them the
+  "Awaiting Approval" queue (which a stock Technician never sees), while
+  Review/Release stayed hidden since those weren't overridden.
+
+
+## 2026-08-09 — RBAC enforcement audit: buttons that ignored permissions entirely
+
+Reported bug: turning a role's (or a per-user override's) edit/delete off
+for a module had no effect on several screens — the button still worked.
+Root cause was **not** in permission resolution (`can()` /
+`permissionsFor()` and their override logic were already correct — see the
+previous section's migration work) but in UI code that never called those
+functions at all. A permission can't do anything if nothing checks it.
+
+**Confirmed gaps, closed this round:**
+
+- **Inventory** (`11-inventory-ui.js`) — top-level Chemical/Glassware/
+  Equipment/Gas add/edit/delete were already gated, but everything nested
+  one level down was not: chemical **batch** edit/delete, glassware
+  **move actions** (To Analysis Room / To Store / Mark Broken — these had
+  no gate at all, not even a hidden one), equipment **history event**
+  edit/delete, and gas **cylinder** add/edit/delete/refill/mark-empty.
+  Also the three **Import Data** buttons (Chemicals/Glassware/Equipment)
+  and their `importChemicals`/`importGlassware`/`importEquipment`
+  functions — completely ungated.
+- **Test Configuration › Parameters** (`12a-parameters-ui.js`) — didn't
+  even receive `session`/`permissionMatrix` as props from
+  `TestConfigurationTab` (`12-testtypes-ui.js`), so Add/Edit/Delete
+  Parameter ran unconditionally for every role. Now shares the
+  `testTypes` module's permissions (Parameters lives inside Test
+  Configuration; it has no RBAC bucket of its own).
+- **Sub-Batches** (`21-sample-ui.js`, `SubBatchBuilder`) — same story:
+  `permissionMatrix` wasn't threaded in from `SamplesTab`, so
+  create/edit/delete and the tester-reassignment dropdown were wide open
+  regardless of the `subBatches` module's settings.
+- **Add Test Record** (`13-testrecords-ui.js`, `AddTestTab`) — had zero
+  permission checks, and worse, was reachable even when its nav tab was
+  hidden: `goToTestEntry()` (called from the Results Workflow "Upload
+  Results" queue, `99-app.js`) does a direct `setTab("addTest")`, which
+  bypasses the nav bar's own `can()` filter entirely since that filter
+  only hides the *button*, not programmatic tab switches. Fixed by
+  gating `handleSave` (covers both the create and the edit-via-row-Edit
+  path, using `testRecords.create`/`testRecords.edit` respectively) and
+  the **Upload Results (Excel)** bulk-fill button — the latter needed its
+  own gate because otherwise a blocked person could still open the modal
+  and fill the form from a spreadsheet; only the final Save was blocked,
+  which reads as "it worked" even though nothing was persisted.
+- **Archive** (`18-archive-ui.js`) Restore, **Reports**
+  (`17-report-generator.js`) Generate & Print, **Sample** edit/delete and
+  **Register/Import Sample** (`21-sample-ui.js`) — all previously gated
+  correctly, converted to the new pattern below for consistency.
+
+**The fix — two small shared helpers, not a rewrite of every screen:**
+
+- **`permGate(matrix, session, moduleKey, action, notify, actionLabel)`**
+  (`41-rbac-ui.js`, next to `can()`) — for the generic Module × Action
+  matrix. Returns `{ allowed, visible, guard(handler) }`.
+- **`sampleActionGate(perms, actionKey, session, notify, actionLabel)`**
+  (`20-sample-model.js`, next to `permissionsFor()`) — same shape, built
+  on the Sample Lifecycle's fine-grained `canRegister`/`canReview`/
+  `canApprove`/`canRelease`/etc. booleans instead of the generic matrix.
+
+Both encode the same rule, which is also this round's UX decision:
+
+- **Guest** is meant to browse the whole app like an Administrator would —
+  every button and every tab stays visible, nothing hidden, including
+  ones it can't use. But `guard(handler)` only calls `handler` if
+  `allowed` is actually true; otherwise it shows a toast ("Guest access
+  can't … — this login is view-only for this action.") and does nothing.
+  So `visible = allowed || role === "Guest"`, while the click itself
+  always checks `allowed`, never `visible`.
+- **Every other role** (Technician, Reviewer, QA Manager, or anyone with
+  a tightened per-user override) keeps the pre-existing convention: a
+  control it has no permission for is hidden entirely, same as it's
+  always been in this app.
+
+Applied `permGate`/`sampleActionGate` across Inventory (all of it, listed
+above), Parameters, Test Types, Test Records (Edit/Archive/Delete/Add/
+bulk-upload), Archive Restore, Reports Generate, Sub-Batches, Sample
+edit/delete, Register/Import Sample, and — the biggest piece — **Results
+Workflow** (`22-results-workflow-ui.js`): Upload Results / Awaiting
+Review / Awaiting Approval / Approved-Release are now all visible tabs
+for Guest (`stageDefs[].show` includes `|| isGuestUser`), with a single
+`stageGate` computed once per tab in `ResultsWorkflowTab` and threaded
+down through `ReviewQueue`/`ApproveQueue`/`ReleaseQueue` →
+`StageQueueBody` → `FlatStageTable`/`BatchStageTable` → `StageRow` →
+`RowHoldReturnActions`, gating Mark Reviewed, Final Approve/Reject
+(single row and whole-batch signing), Release, Hold/Resume, Return to
+Analyst, and reviewer-remark editing.
+
+Also updated the **nav bar itself** (`99-app.js`): Guest now sees every
+tab a `Guest`-role-appropriate person would expect, including ones whose
+underlying action it can't perform (e.g. "Add Test Record", which needs
+`testRecords.create`) — the page itself blocks the actual mutation, per
+above. Users & Audit Log stay hidden from Guest specifically, since the
+default permission matrix already denies Guest *view* access to those
+two (a deliberate design choice, not a bug — see
+`DEFAULT_PERMISSION_MATRIX.Guest` in `41-rbac-ui.js`).
+
+Every hide-vs-block point also got a matching check inside the mutating
+function itself (not just the `onClick`), e.g. `createGroup`,
+`doDeleteSubBatch`, `handleSave`, `doBulkRelease`, `importChemicals` —
+so a handler can never fire past its permission check even if something
+somehow calls it directly instead of through the guarded button.
+
+**Known boundary, not addressed:** the `references` RBAC module
+(View/Create/Edit/Delete, defined in the Permission Matrix) has no
+standalone screen to gate — References are only ever created implicitly
+during Sample Registration, folded into that flow's own `samples`
+permission. Nothing to fix here; noted so it isn't mistaken for a missed
+spot later.
+
+
+## 2026-08-09 — Audit Log coverage extended to Inventory, Sub-Batches, Parameters
+
+The Audit Log viewer itself (`42-audit-log-ui.js` — search, filters, CSV
+export, `auditLog.view` gating) was already fully built; the gap was in
+*what gets written*. Before this round, `DataService.appendAudit()` was
+only called from Sample state changes (automatically, via the central
+`setSamples(updater, changedRecord)` wrapper in `99-app.js`), Test
+Records, Test Types, and Users/Permission Matrix edits — so deleting a
+chemical batch or a sub-batch left no trail at all, silently.
+
+- Added `DataService.appendAudit()` calls at every mutation point covered
+  by this round's `permGate()` audit above:
+  **Inventory** (`11-inventory-ui.js`) — chemical create/edit/delete,
+  batch add/edit/delete, glassware create/edit/delete/move (to Analysis
+  Room / to Store / Mark Broken), equipment create/edit/delete + event
+  log/edit/delete, gas create/edit/delete + cylinder add/edit/delete/
+  refill/mark-empty, and the three bulk-import actions (one summary
+  entry per import, e.g. "Imported 12 chemical batch row(s)…").
+  **Sub-Batches** (`21-sample-ui.js`) — create/edit (`createGroup`) and
+  delete (`doDeleteSubBatch`). **Parameters** (`12a-parameters-ui.js`) —
+  create/edit (`handleSave`) and delete (`handleDelete`).
+- Every new call uses the same field shape already established
+  elsewhere: `{ entity, entityId, action, user: session.username,
+  role: session.role, note }` — no new conventions.
+- `AUDIT_ENTITY_OPTIONS` (`42-audit-log-ui.js`) extended with `chemical`,
+  `glassware`, `equipment`, `gas`, `subBatch`, and `parameter` so the new
+  entries are filterable, not just visible in an unfiltered dump. Updated
+  the file's own header comment (it previously documented this exact gap
+  as known-and-open) to reflect the closed state and list every
+  write-site for future reference.
+
+
+## 2026-08-09 — Navigation redesign: left sidebar + 3-tier cascading flyout
+
+Replaced the horizontal top-nav bar with a left icon rail plus a
+horizontal, cascading multi-level flyout menu (Module → Sub-module →
+Sub-sub-module), collapsible to an icon-only rail, with a full slide-over
+drawer on mobile. New file: `03-sidebar-nav.js`, self-contained — only
+depends on `Icon`/`C` (`00-core.js`) and `loadKey`/`saveKey`
+(`06-legacy-storage.js`, called lazily so load order doesn't matter).
+
+**Component shape** — `<SidebarNav tree={...} activePath={[...]}
+onNavigate={fn} session={} permissionMatrix={} topOffset={px}
+collapsed={bool} onToggleCollapsed={fn} mobileOpen={bool}
+onCloseMobile={fn} />`:
+
+- **Desktop**: a fixed left rail (216px expanded / 64px collapsed —
+  `SIDEBAR_EXPANDED_W`/`SIDEBAR_COLLAPSED_W`). Clicking or hovering a
+  module with children opens a 236px-wide flyout column
+  (`FLYOUT_COL_W`) to its right; a sub-module with its own children
+  opens a third column to *its* right. Columns are positioned with
+  plain `left` offsets built from those width constants, so they sit
+  side by side and never overlap. `shadow-xl` + a 1px border give them
+  depth; chevrons (`chevronRight`) mark anything with children.
+- **Transitions**: `useSlideReveal(isOpen)`, a small hook that keeps a
+  flyout column mounted for one extra `SIDEBAR_TRANSITION_MS` (200ms)
+  after it "closes" so the fade/slide-out can actually play, instead of
+  the column vanishing the instant React would otherwise unmount it.
+  Getting this right took two passes: the first version conditionally
+  *rendered* the column based on the same open/closed state driving the
+  animation, which meant the exit transition never had a chance to run;
+  fixed by caching the last-known items list (`tier2Cache`/`tier3Cache`)
+  so the column keeps its content while fading, and letting `isOpen`
+  (not the presence of items) drive `useSlideReveal`.
+- **Click-away**: an invisible full-viewport div behind the flyout
+  columns (`z-index` between the rail and the columns) closes everything
+  on click; Escape does the same. Clicks *inside* a flyout column are
+  excluded from the click-away check via a `[data-sidebar-flyout]`
+  marker, so drilling into a sub-menu doesn't also trigger its own close.
+- **Mobile** (`<768px`, plain `hidden md:flex` / `md:hidden` — no JS
+  breakpoint detection needed): a hamburger button in the header opens a
+  slide-over drawer showing the same tree as a vertical accordion
+  (`MobileNavNode`, recursive) instead of horizontal columns, since a
+  flyout has nowhere to cascade *to* on a narrow screen. Opening the
+  drawer auto-expands every ancestor branch of wherever you currently
+  are, not just the top level.
+- **Collapsed-rail state** is lifted up to `LabApp` (`99-app.js`), not
+  kept inside `SidebarNav` itself, persisted via `loadKey`/`saveKey`
+  under `"sidebarCollapsed"` — so the main content area's left padding
+  (`md:pl-[${collapsed ? SIDEBAR_COLLAPSED_W : SIDEBAR_EXPANDED_W}px]`)
+  can reference the exact same constants the rail itself uses, instead
+  of a second hardcoded pixel value that could drift out of sync (an
+  earlier draft did exactly that — `pl-20`/`pl-[236px]` next to a
+  64px/216px rail — caught and fixed before shipping).
+
+**Wiring into the real app** (`99-app.js`) — `buildNavTree()` mirrors the
+app's actual sub-tab structure, not a cosmetic mockup: Inventory
+(Chemicals/Glassware/Equipment/Gas → `invTab`), Test Configuration (Test
+Types/Parameters → `testConfigTab`), and — the one genuine 3-tier
+example — Samples → Results Workflow → Upload Results/Awaiting
+Review/Awaiting Approval/Approved-Release. `invTab`/`testConfigTab` were
+already lifted to `LabApp`; Results Workflow's stage wasn't, so it got
+the same `focusStage`/`setFocusStage` controlled-if-provided treatment
+already used for `focusSamplesSubTab` (`22-results-workflow-ui.js`,
+threaded through `21-sample-ui.js`). `buildActivePath()` is the single
+source of truth for "where am I" (root → leaf, matching the tree shape),
+used both to highlight the active item and to figure out where a click
+should land; `handleSidebarNavigate(path)` reverses that — `setTab` plus
+whichever of `setInvTab`/`setTestConfigTab`/`setFocusSamplesSubTab`/
+`setFocusResultsStage` applies. Preserved two pre-existing quirks
+exactly rather than "fixing" them as a drive-by: the `samples` nav node
+has no `moduleKey` (it was never permission-gated, same as before), and
+Guest still sees every tab except Users/Audit Log — this redesign
+changes *how* the nav looks, not what any role is allowed to see (that
+was the subject of the RBAC round above).
+
+Also: header height is measured live via `ResizeObserver`
+(`headerRef`/`headerHeight`) rather than assumed as a fixed pixel value,
+since the header's actual height is organic (wraps on narrow screens,
+grows with the build-version footer line) — the sidebar's `topOffset`
+tracks whatever that real number is on every resize. Two new icons
+(`menu`, `panelLeft`) added to `Icon` (`00-core.js`) for the hamburger
+and collapse-toggle buttons. `style.css` gained a `.sidebar-scroll` thin
+scrollbar and a `.sidebar-nav-item:focus-visible` ring, since Tailwind's
+reset removes the browser's default outline and nothing else in this
+app was relying on keyboard focus visibility as much as a click-driven
+cascading menu does.
+
+**Caught in review before shipping** (worth naming since they're the
+kind of bug that doesn't show up in a syntax check): a flyout column
+computed each item's navigation path from `activePath` (wherever the
+user currently *is*) instead of `expandedPath` (the branch they're
+currently *browsing*) — harmless whenever those happen to be the same
+branch, silently wrong the moment they weren't (e.g. hovering Samples'
+flyout while the active page is still Inventory would have navigated
+into `["inventory", "samples"]`, which doesn't exist). Also: `Icon`
+doesn't accept or forward a `style` prop, so a chevron rotation
+animation passed directly to `<Icon style={...}>` would have been
+silently dropped — fixed by wrapping the icon in a plain `<span>` that
+actually receives the style instead.
+
+
+## 2026-08-10 — Sidebar visual bugs, real ones this time
+
+Screenshots came back showing every page's own colored headings (e.g.
+Reports & Analytics' title/subtitle/breadcrumb) sitting on a dark teal
+background instead of the light page background, washing them out to
+near-unreadable. Root cause: the paren-balance fix from the previous
+round closed the teal header `<div>` in the wrong place — one paren
+short right before `SidebarNav`, one paren extra way down near
+`AuditLogTab` — so the header's `React.createElement(...)` call never
+actually closed until the very end of the component. `SidebarNav`, the
+whole content area, every tab body, all of it was — structurally, not
+just visually — nested *inside* the teal header div the entire time.
+`node --check` can't catch this class of bug (the file is syntactically
+valid either way); found it by walking the actual paren nesting with a
+small Python script rather than re-guessing by eye, which is what
+produced the wrong fix in the first place. Also fixed along the way:
+
+- **Sidebar top not aligned with the header** — same root symptom,
+  different mechanism: the rail used `position: fixed; top:
+  <headerHeight measured via ResizeObserver>`, which depends on
+  measurement timing and can't be *guaranteed* pixel-exact. Replaced
+  with a structural fix instead of a tighter measurement: the outer
+  wrapper is now `flex flex-col` (header, then a new `flex flex-1
+  min-w-0` row for sidebar+content); the rail is `position: sticky; top:
+  0` instead of `fixed`, so its very first rendered position is wherever
+  normal document flow puts it — directly after the header, always,
+  by construction, not by measurement. Bonus: since the rail is now a
+  real flex child instead of a `fixed` element pulled out of flow, the
+  content area no longer needs the `md:pl-[${…}px]` padding hack that
+  had to be kept in sync with `SIDEBAR_COLLAPSED_W`/`SIDEBAR_EXPANDED_W`
+  by hand (the exact bug class from two sessions ago) — flexbox sizes it
+  automatically now, so that whole category of bug can't recur.
+- **Flyout opens then instantly closes on hover** — moving the mouse
+  diagonally from a rail item toward its already-open flyout sweeps
+  across whatever *other* rail items sit in between, each one's
+  `onMouseEnter` firing and immediately stealing the menu shut — the
+  classic hover-menu "safe triangle" problem. Fixed with a hover-intent
+  delay (`scheduleHoverOpen`/`cancelHoverOpen`, ~150ms): a row only
+  commits to opening after the cursor actually rests there; a quick
+  pass-through cancels before that timer fires, leaving whatever was
+  already open alone. Click still opens instantly — no reason to delay
+  an explicit click. Wired into both the rail and the flyout columns'
+  own rows (`onMouseLeave` added to `NavRow` to support it).
+- **Flyout column too tall, empty space below Test Types/Parameters** —
+  it used `top` + `bottom: 12` (always stretching to the viewport's
+  bottom), regardless of item count. Now uses `maxHeight: calc(100vh -
+  ${top}px - 12px)` instead, so the column hugs its content and only
+  caps out (with internal scroll) if it would genuinely run off-screen.
+- **Flyout not aligned with whichever row opened it** — was always
+  `top: topOffset + 8` no matter which rail item was clicked. Each rail
+  row (and each tier-2 row, for tier-3's sake) now registers its own DOM
+  node in a ref map (`registerRowRef(depth, key, el)`); a
+  `useLayoutEffect` measures the triggering row's `getBoundingClientRect()`
+  and the column opens level with it (clamped so it can't render above
+  the header or past the bottom of the viewport).
+- **"Sample Management" label clipped** — `t("samples")` really is that
+  long a string; the 216px rail was cutting it close. Widened to 240px.
+- **Icon set had real duplicates** — audited the whole tree
+  programmatically (a small script that groups icons by "would these
+  ever be on screen together" — same flyout column, or top-level rail
+  vs. its own open flyout) rather than eyeballing it. Found and fixed:
+  Reports/QC (both top-level, both `chart`) → QC is now `check`;
+  Samples/Add Test Record (both top-level, both `clipboard`) → Add Test
+  Record is now `plus`; Inventory's own flyout reused `flask` three
+  times (top-level Inventory, Chemicals, *and* Gas) → Inventory's own
+  icon is now `wrench`, freeing `flask` for Chemicals alone, `droplet`
+  for Gas. One accepted, disclosed trade-off remains: QC's top-level
+  `check` and Results Workflow's "Awaiting Approval" (three tiers deep
+  in a completely different branch) still share an icon — the ~30-icon
+  vocabulary doesn't stretch to a fully unique assignment across every
+  node without sacrificing semantic fit somewhere, and this is the
+  least visually adjacent place to accept it.
+- **Settings moved out of the header, into the sidebar** — the header's
+  "Settings" popover (Backend Settings + Lab Identity) is gone; a new
+  `settings` branch sits at the bottom of the sidebar tree instead, with
+  those same two items as children. Since they open modals rather than
+  switch tabs, `handleSidebarNavigate` special-cases `top === "settings"`
+  to call `setShowBackendSettings`/`setShowLabIdentitySettings` directly
+  and return early, instead of touching `tab` at all — so Settings never
+  shows as an "active" sidebar item, which is correct for something
+  that floats a modal rather than being a page. Hidden from Guest the
+  same way Users/Audit Log are (the permission matrix denies Guest even
+  *view* access to `settings`). No icon in the existing set fit "gear/
+  settings" semantically without colliding with something else already
+  in use, so a real gear/cog icon was added to `Icon` (`00-core.js`)
+  rather than force a compromise. Cleaned up the now-dead
+  `settingsMenuOpen` state and a dangling reference to its setter in the
+  user-menu button's `onClick` that `node --check` didn't catch (unused
+  variable reads aren't a syntax error) but would have thrown at runtime
+  the first time that button was clicked.
+
+## 2026-08-10 — Small-fixes round: header alignment, sticky flyout, nav-order parity, Reports cleanup
+
+- **Header left/right alignment** (`99-app.js`) — the top bar now uses two
+  explicit flex groups (`justify-between`) instead of a single `flex-wrap`
+  row with one child pushed by `mr-auto`: a left group (menu button + logo +
+  "Zonal Water Quality Lab" / subtitle / build line, `min-w-0` + `truncate`
+  so long text can't force a wrap) and a right group (language toggle, theme
+  toggle, account pill — `flex-shrink-0`). Title stays flush-left and the
+  account/role info stays flush-right regardless of viewport width, instead
+  of the whole right-hand block being able to drop onto its own line under
+  certain widths.
+- **Flyout menu no longer flickers open/closed on hover** (`03-sidebar-nav.js`)
+  — clicking a rail item with children (Samples, Inventory, Test
+  Configuration, Reports, Settings) now **pins** that menu open
+  (`pinnedRef`): once pinned, both the hover-close timer and the hover-open
+  timer are skipped entirely, so the submenu stays exactly where it is no
+  matter where the mouse pointer wanders next. It closes again only on a
+  deliberate action — clicking the same item, clicking a different
+  top-level item, clicking away, selecting a leaf, or Escape — all of which
+  now also clear the pinned flag. Hovering without clicking still works as
+  a quick, non-committal preview with the existing short intent delay.
+- **Sidebar sub-module order now matches the actual page tabs, everywhere**:
+  - Inventory: was Chemicals/Glassware/Equipment/Gas in the sidebar vs.
+    Equipment/Glassware/Chemicals/Gas on the page — sidebar reordered to
+    match the page (`InventoryTab`, `11-inventory-ui.js`).
+  - Test Configuration: reordered to Parameters, then Test Types, matching
+    `TestConfigurationTab` (`12-testtypes-ui.js`).
+  - Samples and Results Workflow were already in the correct order —
+    verified, not changed.
+- **Reports now has a real sidebar sub-module** instead of being a single
+  flat item with nothing to expand: added **Report & Analytics** and
+  **Custom Report** children, mirroring the two pill groups on the page
+  itself (`REPORT_GROUPS` / `ReportGroupPills`, `14c-analytics-pages-2.js`).
+  Picking either from the sidebar switches `reportTab` to that group's
+  first page; `buildActivePath()` resolves the current page back to
+  whichever of the two groups it belongs to, so the sidebar highlight and
+  the page's own pills always agree.
+- **Reports page: removed the redundant heading block** — the "Reports &
+  Analytics" title, "Enterprise business intelligence for laboratory
+  operations." subtitle, and the "Report & Analytics / Executive Dashboard"
+  breadcrumb are gone. The group pills (Report & Analytics / Custom Report)
+  are now the first thing shown, right under the Load Demo Data / Print
+  buttons, instead of sitting underneath descriptive text that duplicated
+  what the pills already say.
+
+## 2026-08-10 (round 2) — Parameters export/import, Data Backup + GAS backend, delete-cascade fix
+
+- **Parameters: Export / Import / Template**, made identical to Test Types
+  (`12a-parameters-ui.js`): per-row "Export" to `.json`, a full Import modal
+  (select → preview → importing → done) accepting `.xlsx`/`.csv`/`.json`,
+  and "Download CSV Template". The shared CSV parser used by both modules
+  was de-duplicated into one implementation in `10-inventory-logic.js`
+  (`parseCSVText`) instead of two copies that could drift apart.
+- **Settings → Data Backup** (new `23-data-backup.js`):
+  - **Manual backup** — "Download Backup Now" bundles every collection
+    (legacy localStorage modules + DataService-backed ones) into one
+    timestamped `.json`, no backend required.
+  - **Automatic email backup** — schedule (daily/weekly/2-weekly/monthly) +
+    recipient email, saved server-side via the new GAS backend so it runs
+    even with no browser open. Sends the export as a Gmail attachment, then
+    **deletes the previous backup email it sent** — only the newest stays
+    in the inbox. Requires the Google Apps Script backend (see
+    `gas-backend/`); a "Sync Local Data to Backend" button bridges the
+    legacy localStorage-only modules, which don't otherwise reach the
+    server.
+  - **Auto-archive** — a settable "archive completed records older than N
+    days" threshold, checked automatically once a day on app load, entirely
+    client-side (no server needed) and never reading `archived_records`
+    itself — only the active Test Records list, so it can't be what slows
+    the app down. The existing manual per-record/bulk Archive button in
+    Test Records keeps working unchanged; a "Run Sweep Now" button was
+    added alongside it for an on-demand manual sweep.
+- **New `gas-backend/Code.gs` + `gas-backend/README.md`** — the full Google
+  Apps Script backend: generic list/save/remove/bulkSet/appendAudit CRUD
+  (one Sheet per collection, one JSON-stringified record per row), the
+  daily trigger that drives the automatic backup email + old-email
+  deletion, and a one-time `runOnce_setup()` to install it. Deployment
+  steps are documented in that README.
+- **Delete-cascade fix, sample ↔ test record ↔ Analytical Batch ↔ Ref
+  Batch**:
+  - Deleting a **Test Record** (`doDelete`, `13-testrecords-ui.js`) now
+    also reverts every member sample's per-parameter status back to
+    "in_progress" via the same `returnRequestedTestToAnalyst` helper the
+    Results Workflow's own "Return to Analyst" action already uses — before
+    this fix, the stored status was left wherever it was, so a sample
+    stayed invisible to a brand-new Analytical Batch even though its test
+    record was gone.
+  - Deleting a **pending Analytical Batch** (`doDeleteSubBatch`,
+    `21-sample-ui.js`) already made members eligible for a new batch again
+    (eligibility never depended on the stored status field to begin with —
+    see `pendingTestTypeIdsForSample`, `16-sub-batch.js`); this pass adds
+    resetting that stored status back to "pending" too, so what's displayed
+    on Sample Detail stops saying "In Progress" for a batch that no longer
+    exists.
+  - Deleting a **Ref Batch (Reference)** did not exist as a feature at all
+    before this — Samples → Group by Batch now has a delete action on each
+    batch header. It's only allowed while every member sample is still
+    untouched (every requested test still "pending"), the same "must be
+    pending" safety rule the Analytical Batch delete button already
+    enforces; deleting it removes the Reference and every one of its member
+    samples, so they no longer appear in Register Sample — closing the
+    cascade exactly as described.

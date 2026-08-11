@@ -29,6 +29,32 @@ function normalizeGlassware(glassware) {
     ...g
   }));
 }
+// Parameters (Test Configuration › Parameters) — analytical parameters such as
+// Ammonia (NH3), pH, Arsenic, etc. Deliberately decoupled from the "Test Method
+// Engine" fields (chemical/gas requirements, formulas, instrument linking) that
+// live on Test Type — a Parameter is just the definition/reference-limit record
+// that one or more Test Types then link to.
+function normalizeParameters(parameters) {
+  return (parameters || []).map(p => ({
+    id: p.id,
+    code: p.code || "",
+    name: p.name || "",
+    shortName: p.shortName || "",
+    unit: p.unit || "",
+    methodRef: p.methodRef || "",
+    category: p.category || "Others",
+    decimalPlaces: Number.isFinite(Number(p.decimalPlaces)) ? Number(p.decimalPlaces) : 2,
+    lod: p.lod ?? "",
+    loq: p.loq ?? "",
+    tatHours: p.tatHours ?? "",
+    standardFee: p.standardFee ?? "",
+    minDetection: p.minDetection ?? "",
+    maxDetection: p.maxDetection ?? "",
+    refLimitMin: p.refLimitMin ?? "",
+    refLimitMax: p.refLimitMax ?? "",
+    refStandard: p.refStandard || ""
+  }));
+}
 function normalizeEquipment(equipment) {
   return (equipment || []).map(eq => ({
     origin: "",
@@ -138,6 +164,10 @@ function normalizeTestTypes(testTypes) {
       dilutionEnabled: false,
       resultParameters: t.resultParameters || [],
       qcRules: t.qcRules || [],
+      // Many-to-many link to the Parameters sub-tab (Test Configuration ›
+      // Parameters). Stored as a flat array of Parameter ids, same pattern
+      // already used for gasRequirements/chemicalRequirements above.
+      linkedParameterIds: t.linkedParameterIds || [],
       testName: t.testName ?? t.name ?? "",
       method: t.method ?? "",
       ...t,
@@ -303,6 +333,45 @@ function readWorkbook(file, cb) {
   reader.onerror = () => cb(new Error("Could not read file"));
   reader.readAsBinaryString(file);
 }
+// Small dependency-free CSV parser (quoted fields, escaped quotes) shared by
+// every module's Import flow (Test Types, Parameters, ...) so there's one
+// implementation to trust instead of several copies drifting apart.
+function parseCSVText(text) {
+  const lines = text.split(/\r\n|\n|\r/).filter(l => l.trim() !== "");
+  if (lines.length === 0) return [];
+  function splitLine(line) {
+    const out = [];
+    let cur = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (line[i + 1] === '"') {
+            cur += '"';
+            i++;
+          } else inQuotes = false;
+        } else cur += ch;
+      } else {
+        if (ch === '"') inQuotes = true;else if (ch === ",") {
+          out.push(cur);
+          cur = "";
+        } else cur += ch;
+      }
+    }
+    out.push(cur);
+    return out.map(s => s.trim());
+  }
+  const headers = splitLine(lines[0]);
+  return lines.slice(1).map(line => {
+    const cells = splitLine(line);
+    const obj = {};
+    headers.forEach((h, i) => {
+      obj[h] = cells[i] ?? "";
+    });
+    return obj;
+  });
+}
 function downloadTemplate(kind) {
   let headers, rows;
   if (kind === "samples") {
@@ -312,8 +381,13 @@ function downloadTemplate(kind) {
     // Note: Requested Tests, Client Type/Source, and Tracking No./Reference are
     // no longer per-row columns — after uploading this file you'll pick the
     // tests and enter the Client/Reference details once, in-app.
+    // Note: CollectionDate can be left blank per row — any row without one
+    // gets the start date of the Collection Date Range entered on the same
+    // "a few more details" screen used to pick tests/Client after upload.
+    // Note: Priority is also no longer a per-row column — it's picked once,
+    // for the whole upload, on the same "a few more details" screen.
     headers = SAMPLE_IMPORT_COLUMNS.map(c => c.header);
-    rows = [["Md. Musha Mia", "Md. Abdul Karim", "Rangpur", "Sadar", "Chandanpat", "Sreerampur", "25.7439", "89.2752", "Shallow TW (STW)", "", "Drinking Water", "2026-01-10", "Field Team A", "2026-01-12", "Routine", ""], ["Md. Moynul Hossain", "Md. Rafiqul Islam", "Rangpur", "Sadar", "City Corporation", "New Jummapara", "25.7501", "89.2612", "Deep TW (DTW)", "", "Drinking Water", "2026-01-10", "Field Team A", "2026-01-12", "Routine", ""]];
+    rows = [["Md. Musha Mia", "Md. Abdul Karim", "Rangpur", "Sadar", "Chandanpat", "Sreerampur", "25.7439", "89.2752", "Shallow TW (STW)", "", "Drinking Water", "2026-01-10", "Field Team A", "2026-01-12"], ["Md. Moynul Hossain", "Md. Rafiqul Islam", "Rangpur", "Sadar", "City Corporation", "New Jummapara", "25.7501", "89.2612", "Deep TW (DTW)", "", "Drinking Water", "", "Field Team A", "2026-01-12"]];
   } else if (kind === "chemicals") {
     headers = ["ChemicalName", "Unit", "DateReceived", "ExpiryDate", "Amount", "Origin", "ReceivedFrom"];
     rows = [["Fe Standard", "ml", "2026-01-10", "2026-07-10", 500, "Central Reagent Store", "DPHE Water Safety Project"], ["HCl", "ml", "2026-01-10", "2026-12-31", 1000, "Local Chemical Supplier", "Zonal Office Procurement"]];

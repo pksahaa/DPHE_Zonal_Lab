@@ -6,21 +6,9 @@
 // ============================================================================
 // ---------------- Seed data ----------------
 function seedUsers() {
-  return [{
-    id: uid("user"),
-    username: "admin",
-    password: "admin123",
-    name: "Lab Administrator",
-    designation: "Senior Chemist",
-    role: "Administrator"
-  }, {
-    id: uid("user"),
-    username: "tester",
-    password: "tester123",
-    name: "Lab Technician",
-    designation: "Sample Analyzer",
-    role: "Technician"
-  }];
+  // Demo users removed for production readiness.
+  // First-time installation triggers FirstTimeSetupPage to dynamically set up Initial Super-Admin.
+  return [];
 }
 // Master Chemical List — Admin-controlled list of approved chemical names. New chemicals in
 // Inventory must be picked from here (not free-typed) so the same chemical can't be added twice.
@@ -78,19 +66,96 @@ function seedChemicals() {
     }]
   }];
 }
-function seedTestTypes(chemicals, equipment, gasList) {
+function seedParameters() {
+  return [{
+    id: uid("param"),
+    code: "NH3",
+    name: "Ammonia",
+    shortName: "NH3",
+    unit: "mg/L",
+    methodRef: "APHA 4500-NH3 B",
+    category: "Chemical",
+    decimalPlaces: 2,
+    lod: 0.01,
+    loq: 0.03,
+    tatHours: 24,
+    standardFee: 100,
+    minDetection: 0,
+    maxDetection: 5,
+    refLimitMin: "",
+    refLimitMax: 0.5,
+    refStandard: "Bangladesh Drinking Water Standard"
+  }, {
+    id: uid("param"),
+    code: "Fe",
+    name: "Iron",
+    shortName: "Fe",
+    unit: "mg/L",
+    methodRef: "APHA 3500-Fe B",
+    category: "Heavy Metal",
+    decimalPlaces: 2,
+    lod: 0.02,
+    loq: 0.05,
+    tatHours: 24,
+    standardFee: 100,
+    minDetection: 0,
+    maxDetection: 10,
+    refLimitMin: "",
+    refLimitMax: 0.3,
+    refStandard: "Bangladesh Drinking Water Standard"
+  }, {
+    id: uid("param"),
+    code: "pH",
+    name: "pH",
+    shortName: "pH",
+    unit: "",
+    methodRef: "APHA 4500-H+ B",
+    category: "Physical",
+    decimalPlaces: 1,
+    lod: "",
+    loq: "",
+    tatHours: 2,
+    standardFee: 50,
+    minDetection: 0,
+    maxDetection: 14,
+    refLimitMin: 6.5,
+    refLimitMax: 8.5,
+    refStandard: "Bangladesh Drinking Water Standard"
+  }, {
+    id: uid("param"),
+    code: "TC",
+    name: "Total Coliform",
+    shortName: "TC",
+    unit: "CFU/100mL",
+    methodRef: "APHA 9222 B",
+    category: "Microbiological",
+    decimalPlaces: 0,
+    lod: "",
+    loq: "",
+    tatHours: 48,
+    standardFee: 150,
+    minDetection: "",
+    maxDetection: "",
+    refLimitMin: "",
+    refLimitMax: 0,
+    refStandard: "Bangladesh Drinking Water Standard"
+  }];
+}
+function seedTestTypes(chemicals, equipment, gasList, parameters) {
   const feStd = chemicals.find(c => c.name === "Fe Standard");
   const hcl = chemicals.find(c => c.name === "HCl");
   const spectro = (equipment || []).find(e => e.name === "UV-Vis Spectrophotometer");
   const acetylene = (gasList || []).find(g => g.name === "Acetylene");
+  const feParam = (parameters || []).find(p => p.code === "Fe");
   return [{
     id: uid("test"),
-    testName: "Iron Test",
-    method: "Fe",
-    name: "Iron Test-Fe",
-    costPerTest: 100,
+    testName: feParam ? `${feParam.name} (${feParam.shortName})` : "Iron (Fe)",
+    method: feParam?.methodRef || "APHA 3500-Fe B",
+    name: feParam ? `${feParam.name} (${feParam.shortName})` : "Iron (Fe)",
+    costPerTest: feParam?.standardFee ?? 100,
     feeApplicable: true,
     defaultEquipmentId: spectro?.id || "",
+    linkedParameterIds: feParam ? [feParam.id] : [],
     chemicalRequirements: [{
       chemicalId: feStd?.id,
       chemical: feStd?.name || "Fe Standard",
