@@ -26,21 +26,23 @@
 
 const DataService = (() => {
   const CONFIG_KEY = "lims_backend_config";
+  // Hardcoded default backend — every browser/device starts pointed at this
+  // shared Google Apps Script Web App out of the box, so nobody has to open
+  // Settings ▸ Backend Settings and paste the URL/token manually. Users can
+  // still override via that screen (saved to their own localStorage), which
+  // takes priority over these defaults.
+  const DEFAULT_CONFIG = {
+    mode: "gas",
+    gasUrl: "https://script.google.com/macros/s/AKfycbyKiOeHtZSismoRIgx2w87d6ruL-Blvj9PlDH0L13EeE0as4PQ5QFv40AdcCyDcP5UdHQ/exec",
+    token: "Dphe_Zonal_Lab"
+  };
   function loadConfig() {
     try {
       const raw = localStorage.getItem(CONFIG_KEY);
-      return raw ? JSON.parse(raw) : {
-        mode: "local",
-        gasUrl: "",
-        token: ""
-      };
+      return raw ? JSON.parse(raw) : { ...DEFAULT_CONFIG };
     } catch (e) {
       reportStorageError("load", "backend config", e);
-      return {
-        mode: "local",
-        gasUrl: "",
-        token: ""
-      };
+      return { ...DEFAULT_CONFIG };
     }
   }
   let config = loadConfig();
@@ -368,7 +370,7 @@ function BackendSettingsModal({
     style: {
       color: C.muted
     }
-  }, "By default this app stores data in the browser (localStorage) — nothing to configure. To share data across devices/users, deploy the included Google Apps Script backend (see ", /*#__PURE__*/React.createElement("code", null, "/gas-backend/README.md"), ") and paste its Web App URL below."), /*#__PURE__*/React.createElement("div", {
+  }, "This app is pre-configured to use the shared Google Apps Script backend — data is shared across every device/browser automatically, nothing to set up. Only change these fields if you're pointing the app at a different Apps Script deployment."), /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-2 gap-3"
   }, /*#__PURE__*/React.createElement(SelectField, {
     simple: true,
