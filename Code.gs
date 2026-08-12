@@ -70,12 +70,18 @@ function checkToken_(token) {
 function getSpreadsheet_() {
   let id = scriptProps_().getProperty("SPREADSHEET_ID");
   if (id) {
-    try {
-      return SpreadsheetApp.openById(id);
-    } catch (e) {
-      // fall through and create a new one if the stored ID is stale
-    }
+    // A configured ID that fails to open must be a loud error, not a
+    // silent "start over with a brand-new empty spreadsheet" — that used
+    // to make every single collection look wiped (app AND the sheet you'd
+    // check both looked empty) whenever openById hit any transient issue
+    // (a Google API hiccup, a temporary permissions glitch after
+    // redeploying, etc.), even though the real data was completely intact
+    // and untouched in the original sheet the whole time.
+    return SpreadsheetApp.openById(id);
   }
+  // Only auto-create when truly unconfigured (id was never set at all) —
+  // this path is for a brand-new deployment's very first run, not a
+  // recovery path for an existing one.
   const ss = SpreadsheetApp.create("DPHE LIMS — Data (auto-created)");
   scriptProps_().setProperty("SPREADSHEET_ID", ss.getId());
   return ss;
@@ -239,35 +245,54 @@ function doGet(e) {
     return jsonOut_({ error: String(err && err.message || err) });
   }
 }
+// A write (save/remove/bulkSet) reads the sheet, modifies it, and writes it
+// back — with no lock, two overlapping requests (e.g. the app firing
+// several auto-saves in quick succession, or two people/tabs editing at
+// once) can interleave and clobber each other, since Apps Script Web Apps
+// genuinely do run concurrent executions. LockService serializes just the
+// write path (reads stay lock-free/fast) so one write always finishes
+// before the next one starts touching the same spreadsheet.
+const WRITE_ACTIONS_ = new Set(["save", "remove", "bulkSet", "appendAudit", "restoreRecord"]);
 function doPost(e) {
   try {
     const body = JSON.parse(e.postData.contents || "{}");
     const { action, collection, payload, token } = body;
     if (!checkToken_(token)) return jsonOut_({ error: "Invalid token." });
-    switch (action) {
-      case "save":
-        return jsonOut_({ data: upsertRow_(collection, payload) });
-      case "remove":
-        removeRow_(collection, payload.id);
-        return jsonOut_({ data: { ok: true } });
-      case "bulkSet":
-        return jsonOut_({ data: replaceAllRows_(collection, payload) });
-      case "appendAudit":
-        return jsonOut_({ data: upsertRow_("auditLog", payload) });
-      case "restoreRecord":
-        if (typeof handleRestoreRecord_ === "function") {
-          return jsonOut_({ data: handleRestoreRecord_(payload) });
-        }
-        return jsonOut_({ error: "restoreRecord handler not available" });
-      case "configureBackup":
-        return jsonOut_({ data: configureBackup_(payload) });
-      case "getBackupConfig":
-        return jsonOut_({ data: getBackupConfig_() });
-      case "backupNow":
-        sendBackupEmail_(/* isManualTest */ true);
-        return jsonOut_({ data: { ok: true } });
-      default:
-        return jsonOut_({ error: `Unknown POST action "${action}".` });
+    let lock = null;
+    if (WRITE_ACTIONS_.has(action)) {
+      lock = LockService.getScriptLock();
+      // Waits up to 30s for any other in-flight write to finish rather than
+      // failing immediately — a queued write beats a silently dropped one.
+      lock.waitLock(30000);
+    }
+    try {
+      switch (action) {
+        case "save":
+          return jsonOut_({ data: upsertRow_(collection, payload) });
+        case "remove":
+          removeRow_(collection, payload.id);
+          return jsonOut_({ data: { ok: true } });
+        case "bulkSet":
+          return jsonOut_({ data: replaceAllRows_(collection, payload) });
+        case "appendAudit":
+          return jsonOut_({ data: upsertRow_("auditLog", payload) });
+        case "restoreRecord":
+          if (typeof handleRestoreRecord_ === "function") {
+            return jsonOut_({ data: handleRestoreRecord_(payload) });
+          }
+          return jsonOut_({ error: "restoreRecord handler not available" });
+        case "configureBackup":
+          return jsonOut_({ data: configureBackup_(payload) });
+        case "getBackupConfig":
+          return jsonOut_({ data: getBackupConfig_() });
+        case "backupNow":
+          sendBackupEmail_(/* isManualTest */ true);
+          return jsonOut_({ data: { ok: true } });
+        default:
+          return jsonOut_({ error: `Unknown POST action "${action}".` });
+      }
+    } finally {
+      if (lock) lock.releaseLock();
     }
   } catch (err) {
     return jsonOut_({ error: String(err && err.message || err) });

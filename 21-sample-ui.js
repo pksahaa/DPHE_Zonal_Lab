@@ -2264,8 +2264,7 @@ function SamplesTab({
   // a BatchRef column.
   async function confirmImportSamples(requestedTests, ref, batchDefaults) {
     let runningSamples = [...samples];
-    let count = 0;
-    const newIds = [];
+    const newSamples = [];
     for (const row of pendingImportRows) {
       const rowCollectionDate = String(readSampleImportField(row, "collectionDate") || "").trim();
       const sample = createSample({
@@ -2299,11 +2298,40 @@ function SamplesTab({
         requestedTests
       }, runningSamples, session);
       runningSamples = [...runningSamples, sample];
-      await setSamples(prev => [...prev, sample], sample);
-      newIds.push(sample.id);
-      count++;
+      newSamples.push(sample);
     }
-    notify(`Imported ${count} sample(s) from manifest under ${ref ? referenceDisplayLabel(ref) : "(no reference)"}${pendingImportSkipped ? `, skipped ${pendingImportSkipped} row(s) missing Client Name/Site Location` : ""}.`, count ? "ok" : "warn");
+    if (!newSamples.length) {
+      notify(`No usable rows to import${pendingImportSkipped ? ` (skipped ${pendingImportSkipped} row(s) missing Client Name/Site Location)` : ""}.`, "warn");
+      setPendingImportRows(null);
+      setPendingImportSkipped(0);
+      return;
+    }
+    // ONE bulk write for the whole manifest, instead of the old approach of
+    // one HTTP round-trip PER ROW (a save + an appendAudit call, sequentially
+    // awaited). Importing 50 samples used to mean 100 sequential requests —
+    // slow enough to time out or get interrupted partway through, which
+    // silently left only some rows actually saved with no clear error
+    // ("50 samples doesn't upload properly"). A single bulkSet is both much
+    // faster and all-or-nothing from the app's point of view: either it
+    // succeeds and local state is updated to match, or it throws and
+    // NOTHING is marked as imported — no silent partial batches.
+    try {
+      await DataService.bulkSet("samples", runningSamples);
+    } catch (e) {
+      notify(`Import failed before anything was saved: ${e.message}. Nothing was partially imported — fix the issue (check Settings ▸ Backend Settings) and try the same file again.`, "warn");
+      return;
+    }
+    await setSamples(() => runningSamples);
+    const newIds = newSamples.map(s => s.id);
+    DataService.appendAudit({
+      entity: "sample",
+      entityId: newIds.join(","),
+      action: "bulk_import",
+      user: session.name,
+      role: session.role,
+      note: `Bulk-imported ${newSamples.length} sample(s) from manifest under ${ref ? referenceDisplayLabel(ref) : "(no reference)"}`
+    }).catch(err => console.error("Audit log write for bulk import failed (non-fatal, import itself already succeeded):", err));
+    notify(`Imported ${newSamples.length} sample(s) from manifest under ${ref ? referenceDisplayLabel(ref) : "(no reference)"}${pendingImportSkipped ? `, skipped ${pendingImportSkipped} row(s) missing Client Name/Site Location` : ""}.`, "ok");
     setPendingImportRows(null);
     setPendingImportSkipped(0);
     if (ref) setExpandedBatches(prev => new Set(prev).add(ref.id));
@@ -2405,8 +2433,7 @@ function SamplesTab({
   }
   async function handleBatchCreate(shared, rows, ref) {
     let runningSamples = [...samples];
-    let count = 0;
-    const newIds = [];
+    const newSamples = [];
     const { collectionDateFrom, collectionDateTo, ...sharedRest } = shared;
     for (const row of rows) {
       const sample = createSample({
@@ -2430,13 +2457,31 @@ function SamplesTab({
         numberOfSamples: 1
       }, runningSamples, session);
       runningSamples = [...runningSamples, sample];
-      await setSamples(prev => [...prev, sample], sample);
-      newIds.push(sample.id);
-      count++;
+      newSamples.push(sample);
     }
+    // Same reasoning as confirmImportSamples above: one bulkSet instead of
+    // one save+appendAudit round-trip per row — a large batch (many water
+    // points under one Reference) used to mean dozens of sequential
+    // requests, slow enough to partially fail with no clear signal.
+    try {
+      await DataService.bulkSet("samples", runningSamples);
+    } catch (e) {
+      notify(`Batch registration failed before anything was saved: ${e.message}. Nothing was partially registered — try again.`, "warn");
+      return;
+    }
+    await setSamples(() => runningSamples);
+    const newIds = newSamples.map(s => s.id);
+    DataService.appendAudit({
+      entity: "sample",
+      entityId: newIds.join(","),
+      action: "bulk_register",
+      user: session.name,
+      role: session.role,
+      note: `Registered ${newSamples.length} sample(s) under Reference ${referenceDisplayLabel(ref)} (Tracking No. ${ref.trackingNo})`
+    }).catch(err => console.error("Audit log write for batch registration failed (non-fatal, registration itself already succeeded):", err));
     setShowBatchForm(false);
     setExpandedBatches(prev => new Set(prev).add(ref.id));
-    notify?.(`${count} sample(s) registered under Reference ${referenceDisplayLabel(ref)} (Tracking No. ${ref.trackingNo}).`, "ok");
+    notify?.(`${newSamples.length} sample(s) registered under Reference ${referenceDisplayLabel(ref)} (Tracking No. ${ref.trackingNo}).`, "ok");
     flagRecentlyAdded(newIds);
   }
   const stats = sampleLifecycleStats(samples);

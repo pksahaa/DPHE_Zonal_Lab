@@ -1075,15 +1075,35 @@ function AddTestTab({
       // "Test Records" and "Awaiting Review".
       const AWAITING_REVIEW = "results_entered";
       if (selectedSubBatch && setSamples) {
-        for (const memberId of selectedSubBatch.memberSampleIds) {
-          const member = (samples || []).find(s => s.id === memberId);
-          if (!member) continue;
-          const updatedMember = setRequestedTestStatus({
-            ...member,
-            linkedTestRecordIds: [...(member.linkedTestRecordIds || []), newRecordId]
+        // One bulkSet for every member of this batch, instead of the old
+        // approach of one save() PER member fired without waiting for the
+        // previous one to finish (up to a few dozen simultaneous requests
+        // to the same backend for a big Analytical Batch) — that had no
+        // error handling at all, so a failed member update was invisible,
+        // and firing that many requests at once risked the same kind of
+        // write-write collision the Apps Script lock (see Code.gs doPost)
+        // now guards against anyway. This is simpler AND safer.
+        const memberIdSet = new Set(selectedSubBatch.memberSampleIds);
+        const updatedSamples = (samples || []).map(s => {
+          if (!memberIdSet.has(s.id)) return s;
+          return setRequestedTestStatus({
+            ...s,
+            linkedTestRecordIds: [...(s.linkedTestRecordIds || []), newRecordId]
           }, selectedSubBatch.testTypeId, AWAITING_REVIEW, actingUser);
-          setSamples(prev => prev.map(s => s.id === memberId ? updatedMember : s), updatedMember);
-        }
+        });
+        DataService.bulkSet("samples", updatedSamples).then(() => {
+          setSamples(() => updatedSamples);
+          DataService.appendAudit({
+            entity: "sample",
+            entityId: selectedSubBatch.memberSampleIds.join(","),
+            action: AWAITING_REVIEW,
+            user: actingUser.name,
+            role: actingUser.role,
+            note: `${selectedSubBatch.memberSampleIds.length} sample(s) moved to Awaiting Review via Analytical Batch "${recordPayload.testTypeName}"`
+          }).catch(err => console.error("Audit log write failed (non-fatal):", err));
+        }).catch(err => {
+          notify(`Test record saved, but updating the ${selectedSubBatch.memberSampleIds.length} sample statuses failed: ${err.message}. Reload and re-check this batch's samples — they may still show as pending review.`, "warn");
+        });
         if (setSubBatches) {
           setSubBatches(prev => prev.map(sb => sb.id === selectedSubBatch.id ? {
             ...sb,

@@ -135,6 +135,17 @@ function LabApp({
   setPermissionMatrix
 }) {
   const [loaded, setLoaded] = useState(false);
+  // If the initial fetch of any collection fails, `loaded` still needs to
+  // become true eventually (so the UI stops spinning and becomes usable
+  // read-only), but the auto-save effects below must NOT run — a failed
+  // fetch leaves that collection's React state at its empty initial
+  // default, and auto-saving that empty default would silently overwrite
+  // real backend data with nothing. This is exactly how a transient
+  // network blip used to turn into permanent data loss. See the load
+  // effect (loadAllData) and every `if (loaded) DataService.bulkSet(...)`
+  // effect further down, which now all check `!loadHadFailures` too.
+  const [loadHadFailures, setLoadHadFailures] = useState(false);
+  const [loadReloadNonce, setLoadReloadNonce] = useState(0);
   const [tab, setTab] = useState("dashboard");
   // Sample Detail (in the Samples tab) is the single source of truth for
   // "everything about this sample" — Test Record UI, QC Module, and the
@@ -433,12 +444,24 @@ function LabApp({
   // Google Apps Script Web App URL (mode "gas") — see gas-backend/README.md.
   const [samples, setSamplesState] = useState([]);
   const [samplesLoaded, setSamplesLoaded] = useState(false);
+  const [samplesLoadFailed, setSamplesLoadFailed] = useState(false);
   useEffect(() => {
     DataService.list("samples").then(list => {
       setSamplesState(list);
       setSamplesLoaded(true);
+      setSamplesLoadFailed(false);
+    }).catch(err => {
+      // No .catch previously meant a failed fetch here just hung forever
+      // with an unexplained loading spinner (samplesLoaded never became
+      // true, and nothing told the user why). It's safe to surface loudly
+      // rather than silently retry into a partial state, because nothing
+      // downstream of samplesLoaded=false ever runs a bulk-overwrite — see
+      // the migration effect's `!samplesLoaded` guard below.
+      console.error("Failed to load samples from backend:", err);
+      setSamplesLoadFailed(true);
+      notify?.(`Could not load Samples from the backend (${err.message}). Check Settings ▸ Backend Settings, then reload.`, "warn");
     });
-  }, []);
+  }, [loadReloadNonce]);
   const setSamples = useCallback(async (updater, changedRecord) => {
     setSamplesState(prev => updater(prev));
     if (changedRecord) {
@@ -464,8 +487,11 @@ function LabApp({
     DataService.list("references").then(list => {
       setReferencesState(list);
       setReferencesLoaded(true);
+    }).catch(err => {
+      console.error("Failed to load references from backend:", err);
+      notify?.(`Could not load Reference batches from the backend (${err.message}). Check Settings ▸ Backend Settings, then reload.`, "warn");
     });
-  }, []);
+  }, [loadReloadNonce]);
   const setReferences = useCallback(async (updater, changedRecord) => {
     setReferencesState(prev => updater(prev));
     if (changedRecord) {
@@ -511,47 +537,56 @@ function LabApp({
     runAutoArchiveSweepIfDue({ testRecords, samples, subBatches, setTestRecords, session, notify });
   }, [loaded, samplesLoaded, autoArchiveChecked, testRecords, samples, subBatches, session]);
   useEffect(() => {
-    Promise.all([
-      DataService.list("chemicals"),
-      DataService.list("glassware"),
-      DataService.list("equipment"),
-      DataService.list("gas"),
-      DataService.list("parameters"),
-      DataService.list("testTypes"),
-      DataService.listActive("testRecords"),
-      DataService.list("subBatches"),
-      DataService.getSingleton("masterChemicals")
-    ]).then(([rawChems, rawGlass, rawEquip, rawGas, rawParams, rawTestTypes, rawTestRecs, rawSubBatches, rawMasterChem]) => {
+    const collections = ["chemicals", "glassware", "equipment", "gas", "parameters", "testTypes", "testRecords(active)", "subBatches", "masterChemicals"];
+    Promise.allSettled([DataService.list("chemicals"), DataService.list("glassware"), DataService.list("equipment"), DataService.list("gas"), DataService.list("parameters"), DataService.list("testTypes"), DataService.listActive("testRecords"), DataService.list("subBatches"), DataService.getSingleton("masterChemicals")]).then(results => {
+      const failed = results.map((r, i) => r.status === "rejected" ? collections[i] : null).filter(Boolean);
+      const val = i => results[i].status === "fulfilled" ? results[i].value : undefined;
+      const [rawChems, rawGlass, rawEquip, rawGas, rawParams, rawTestTypes, rawTestRecs, rawSubBatches, rawMasterChem] = [0, 1, 2, 3, 4, 5, 6, 7, 8].map(val);
       // NOTE: production deployments must NOT fall back to seed/demo data
       // when a collection comes back empty from the backend — an empty
       // result is a legitimate state (e.g. the admin deleted everything),
       // not a signal to repopulate. No demo/seed data exists anywhere in
       // this app — inventory starts genuinely empty and stays that way
       // until an admin adds real data.
-      const chems = markExpiredBatches(normalizeChemicals(rawChems || []));
-      const equip = normalizeEquipment(rawEquip || []);
-      const gases = normalizeGas(rawGas || []);
-      setChemicals(chems);
-      setGlassware(normalizeGlassware(rawGlass || []));
-      setEquipment(equip);
-      setGasList(gases);
-      const params = normalizeParameters(rawParams || []);
-      setParameters(params);
-      setTestTypes(normalizeTestTypes(rawTestTypes || []).map(t => ({
+      //
+      // CRITICAL: only apply state (and therefore only allow auto-save to
+      // ever run) for collections that actually loaded successfully. Using
+      // Promise.allSettled (not Promise.all) means one failed fetch no
+      // longer silently blanks out the other eight — but a failed fetch's
+      // own state must be left completely untouched (not even set to []),
+      // and loadHadFailures must gate auto-save globally, because a
+      // half-loaded app is not a safe state to start writing back to the
+      // backend from.
+      if (results[0].status === "fulfilled") setChemicals(markExpiredBatches(normalizeChemicals(rawChems || [])));
+      if (results[1].status === "fulfilled") setGlassware(normalizeGlassware(rawGlass || []));
+      if (results[2].status === "fulfilled") setEquipment(normalizeEquipment(rawEquip || []));
+      if (results[3].status === "fulfilled") setGasList(normalizeGas(rawGas || []));
+      if (results[4].status === "fulfilled") setParameters(normalizeParameters(rawParams || []));
+      if (results[5].status === "fulfilled") setTestTypes(normalizeTestTypes(rawTestTypes || []).map(t => ({
         costPerTest: 0,
         ...t
       })));
-      setTestRecords(rawTestRecs || []);
-      setSubBatches(rawSubBatches || []);
-      if (rawMasterChem && rawMasterChem.list) {
-        setMasterChemicals(rawMasterChem.list);
+      if (results[6].status === "fulfilled") setTestRecords(rawTestRecs || []);
+      if (results[7].status === "fulfilled") setSubBatches(rawSubBatches || []);
+      if (results[8].status === "fulfilled" && rawMasterChem && rawMasterChem.list) setMasterChemicals(rawMasterChem.list);
+      if (failed.length) {
+        setLoadHadFailures(true);
+        console.error("Failed to load from backend, auto-save disabled until reload succeeds:", failed);
+        notify(`Could not load ${failed.join(", ")} from the backend. Editing is disabled this session to protect your data — use Settings ▸ Backend Settings ▸ Test Connection, then reload the page, before making changes.`, "warn");
+      } else {
+        setLoadHadFailures(false);
       }
       setLoaded(true);
     }).catch(err => {
+      // Only reachable if something threw outside the per-item handling
+      // above (e.g. Promise.allSettled itself isn't available) — treat it
+      // exactly like "everything failed": load stays blocked, nothing gets
+      // auto-saved.
       console.error("Error loading data via DataService:", err);
+      setLoadHadFailures(true);
       setLoaded(true);
     });
-  }, []);
+  }, [loadReloadNonce]);
 
   // Auto-save effects below persist every in-memory change to the backend.
   // Previously these had no .catch — if a save/delete failed (network drop,
@@ -565,31 +600,31 @@ function LabApp({
     notify(`Could not save ${what} to the backend — your change may be lost on reload. (${err && err.message || err})`, "warn");
   };
   useEffect(() => {
-    if (loaded) DataService.bulkSet("chemicals", chemicals).catch(err => notifyBackendSaveError("chemicals/inventory", err));
+    if (loaded && !loadHadFailures) DataService.bulkSet("chemicals", chemicals).catch(err => notifyBackendSaveError("chemicals/inventory", err));
   }, [chemicals, loaded]);
   useEffect(() => {
-    if (loaded) DataService.saveSingleton("masterChemicals", { list: masterChemicals }).catch(err => notifyBackendSaveError("master chemical list", err));
+    if (loaded && !loadHadFailures) DataService.saveSingleton("masterChemicals", { list: masterChemicals }).catch(err => notifyBackendSaveError("master chemical list", err));
   }, [masterChemicals, loaded]);
   useEffect(() => {
-    if (loaded) DataService.bulkSet("glassware", glassware).catch(err => notifyBackendSaveError("glassware", err));
+    if (loaded && !loadHadFailures) DataService.bulkSet("glassware", glassware).catch(err => notifyBackendSaveError("glassware", err));
   }, [glassware, loaded]);
   useEffect(() => {
-    if (loaded) DataService.bulkSet("equipment", equipment).catch(err => notifyBackendSaveError("equipment", err));
+    if (loaded && !loadHadFailures) DataService.bulkSet("equipment", equipment).catch(err => notifyBackendSaveError("equipment", err));
   }, [equipment, loaded]);
   useEffect(() => {
-    if (loaded) DataService.bulkSet("gas", gasList).catch(err => notifyBackendSaveError("gas cylinders", err));
+    if (loaded && !loadHadFailures) DataService.bulkSet("gas", gasList).catch(err => notifyBackendSaveError("gas cylinders", err));
   }, [gasList, loaded]);
   useEffect(() => {
-    if (loaded) DataService.bulkSet("parameters", parameters).catch(err => notifyBackendSaveError("parameters", err));
+    if (loaded && !loadHadFailures) DataService.bulkSet("parameters", parameters).catch(err => notifyBackendSaveError("parameters", err));
   }, [parameters, loaded]);
   useEffect(() => {
-    if (loaded) DataService.bulkSet("testTypes", testTypes).catch(err => notifyBackendSaveError("test types", err));
+    if (loaded && !loadHadFailures) DataService.bulkSet("testTypes", testTypes).catch(err => notifyBackendSaveError("test types", err));
   }, [testTypes, loaded]);
   useEffect(() => {
-    if (loaded) DataService.bulkSet("testRecords", testRecords).catch(err => notifyBackendSaveError("test records", err));
+    if (loaded && !loadHadFailures) DataService.bulkSet("testRecords", testRecords).catch(err => notifyBackendSaveError("test records", err));
   }, [testRecords, loaded]);
   useEffect(() => {
-    if (loaded) DataService.bulkSet("subBatches", subBatches).catch(err => notifyBackendSaveError("sub-batches", err));
+    if (loaded && !loadHadFailures) DataService.bulkSet("subBatches", subBatches).catch(err => notifyBackendSaveError("sub-batches", err));
   }, [subBatches, loaded]);
   const notify = useCallback((msg, tone = "ok") => {
     setToast({
@@ -607,12 +642,25 @@ function LabApp({
       color: C.muted
     }
   }, "Loading lab data…");
+  const loadFailureBanner = loadHadFailures ? /*#__PURE__*/React.createElement("div", {
+    className: "px-4 py-2.5 text-xs sm:text-sm font-medium text-center",
+    style: {
+      background: "#7c2d12",
+      color: "#fff"
+    }
+  }, "⚠ Could not load some data from the backend just now — to protect your data, changes won't be saved this session. ", /*#__PURE__*/React.createElement("button", {
+    className: "underline font-semibold ml-1",
+    onClick: () => {
+      setLoaded(false);
+      setLoadReloadNonce(n => n + 1);
+    }
+  }, "Retry Loading")) : null;
   return /*#__PURE__*/React.createElement("div", {
     className: "min-h-screen w-full flex flex-col",
     style: {
       background: C.bg
     }
-  }, /*#__PURE__*/React.createElement("div", {
+  }, loadFailureBanner, /*#__PURE__*/React.createElement("div", {
     ref: headerRef,
     style: {
       background: C.tealDark

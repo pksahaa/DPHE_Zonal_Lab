@@ -100,7 +100,27 @@ const DataService = (() => {
   // every request from the browser must qualify as a CORS "simple request".
   // GET-with-query-string and POST-with-text/plain both qualify; a POST with
   // Content-Type: application/json would silently fail in the browser.
-  async function gasCall(action, {
+  // Transient network hiccups (a dropped packet, a slow Apps Script cold
+  // start, a brief CORS/quota blip) used to bubble straight up as a
+  // failure. That's dangerous here specifically because the app's initial
+  // page-load fetches 9 collections in parallel — one flaky call used to
+  // sink the whole load, and everything downstream of a failed load then
+  // treated "still empty because it never actually loaded" the same as
+  // "genuinely empty because someone deleted everything", and would
+  // auto-save that emptiness straight back over real data (see the
+  // load-vs-loadHadFailures gating in 99-app.js). Retrying a couple of
+  // times here, before ever giving up, closes off most of that risk at
+  // the source.
+  async function gasCallWithRetry(action, opts, attempt = 1) {
+    try {
+      return await gasCallOnce(action, opts);
+    } catch (e) {
+      if (attempt >= 3) throw e;
+      await new Promise(r => setTimeout(r, 400 * attempt));
+      return gasCallWithRetry(action, opts, attempt + 1);
+    }
+  }
+  async function gasCallOnce(action, {
     collection,
     payload
   } = {}) {
@@ -137,6 +157,9 @@ const DataService = (() => {
     const json = await res.json();
     if (json.error) throw new Error(json.error);
     return json.data;
+  }
+  async function gasCall(action, opts) {
+    return gasCallWithRetry(action, opts);
   }
 
   // ---- public, backend-agnostic API ----
