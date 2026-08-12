@@ -232,18 +232,29 @@ function CustomReportGeneratorPage({
   const [selectionMode, setSelectionMode] = React.useState(forceMode || "individual"); // "individual" | "batch" | "subbatch"
   const [reportReferenceIds, setReportReferenceIds] = React.useState([]);
   const [reportSubBatchIds, setReportSubBatchIds] = React.useState([]);
-  const filteredSamples = (samples || []).filter(s => !q || `${s.sampleCode} ${s.clientName} ${s.siteLocation} ${s.village}`.toLowerCase().includes(q.toLowerCase()));
+  // A sample only qualifies for reporting once at least one of its
+  // requested tests has actually been RELEASED — matching the same rule
+  // Archiving now uses (see isTestRecordArchivable in 13-testrecords-ui.js).
+  // A batch/reference can contain a mix of released and not-yet-released
+  // samples (some on_hold, rejected, cancelled, or simply still in review);
+  // only the released ones are eligible to appear here at all, everywhere
+  // below that lists or auto-selects samples.
+  function releasedTestTypeIdsForSample(sample) {
+    return (sample.requestedTests || []).filter(rt => testStageForSample(sample, rt.testTypeId, testRecords, subBatches) === "released").map(rt => rt.testTypeId);
+  }
+  const releasedSamples = React.useMemo(() => (samples || []).filter(s => releasedTestTypeIdsForSample(s).length > 0), [samples, testRecords, subBatches]);
+  const filteredSamples = releasedSamples.filter(s => !q || `${s.sampleCode} ${s.clientName} ${s.siteLocation} ${s.village}`.toLowerCase().includes(q.toLowerCase()));
   // Reporting is done by Reference (the actual source paperwork — DPHE /
   // institution / walk-in letter+ref no.), not by whichever Sub-Batch
   // happened to test the samples. Only list References that have at least
   // one sample pointing at them.
-  const referenceOptions = Array.from(new Set((samples || []).map(s => s.referenceId).filter(Boolean))).map(id => findReferenceById(references, id)).filter(Boolean).sort((a, b) => (a.refNo || "").localeCompare(b.refNo || ""));
+  const referenceOptions = Array.from(new Set(releasedSamples.map(s => s.referenceId).filter(Boolean))).map(id => findReferenceById(references, id)).filter(Boolean).sort((a, b) => (a.refNo || "").localeCompare(b.refNo || ""));
   const reportSubBatchOptions = [...(subBatches || [])].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
   const selectedReportSubBatches = (subBatches || []).filter(sb => reportSubBatchIds.includes(sb.id));
-  const selectedSamples = (samples || []).filter(s => selectedSampleIds.includes(s.id));
+  const selectedSamples = releasedSamples.filter(s => selectedSampleIds.includes(s.id));
   const availableTestIds = React.useMemo(() => {
     const ids = new Set();
-    selectedSamples.forEach(s => s.requestedTests.forEach(rt => ids.add(rt.testTypeId)));
+    selectedSamples.forEach(s => releasedTestTypeIdsForSample(s).forEach(id => ids.add(id)));
     return Array.from(ids);
   }, [selectedSampleIds]);
   React.useEffect(() => {
@@ -436,7 +447,7 @@ function CustomReportGeneratorPage({
   function toggleReference(refId) {
     setReportReferenceIds(prev => {
       const next = prev.includes(refId) ? prev.filter(x => x !== refId) : [...prev, refId];
-      setSelectedSampleIds((samples || []).filter(s => next.includes(s.referenceId)).map(s => s.id));
+      setSelectedSampleIds(releasedSamples.filter(s => next.includes(s.referenceId)).map(s => s.id));
       // Memo fields (ref no., date, sample source) describe a single source
       // document, so auto-fill only when exactly one Reference is selected —
       // with several selected at once, leave them for the user to edit by
@@ -463,7 +474,7 @@ function CustomReportGeneratorPage({
     onClick: () => {
       const allIds = referenceOptions.map(r => r.id);
       setReportReferenceIds(allIds);
-      setSelectedSampleIds((samples || []).filter(s => allIds.includes(s.referenceId)).map(s => s.id));
+      setSelectedSampleIds(releasedSamples.filter(s => allIds.includes(s.referenceId)).map(s => s.id));
     }
   }, "Select All References"), /*#__PURE__*/React.createElement(Button, {
     variant: "ghost",
@@ -491,7 +502,7 @@ function CustomReportGeneratorPage({
     checked: reportReferenceIds.includes(ref.id),
     onChange: () => toggleReference(ref.id),
     onClick: e => e.stopPropagation()
-  }), /*#__PURE__*/React.createElement("span", null, `${referenceSourceMeta(ref.sourceType).label} — ${referenceDisplayLabel(ref)} (${(samples || []).filter(s => s.referenceId === ref.id).length} samples)`)))), selectedSampleIds.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }), /*#__PURE__*/React.createElement("span", null, `${referenceSourceMeta(ref.sourceType).label} — ${referenceDisplayLabel(ref)} (${releasedSamples.filter(s => s.referenceId === ref.id).length} samples)`)))), selectedSampleIds.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "flex flex-wrap gap-1.5 mb-2"
   }, selectedSamples.map(s => /*#__PURE__*/React.createElement("span", {
     key: s.id,
@@ -506,7 +517,12 @@ function CustomReportGeneratorPage({
 
   function applySubBatchSelection(ids) {
     const selected = (subBatches || []).filter(sb => ids.includes(sb.id));
-    const sampleIds = Array.from(new Set(selected.flatMap(sb => sb.memberSampleIds || [])));
+    // Only member samples actually RELEASED for that sub-batch's test type
+    // qualify — a sub-batch can be a mix of released/held/rejected members.
+    const sampleIds = Array.from(new Set(selected.flatMap(sb => (sb.memberSampleIds || []).filter(sid => {
+      const sample = releasedSamples.find(s => s.id === sid);
+      return sample && releasedTestTypeIdsForSample(sample).includes(sb.testTypeId);
+    }))));
     const testTypeIds = Array.from(new Set(selected.map(sb => sb.testTypeId).filter(Boolean)));
     setSelectedSampleIds(sampleIds);
     setSelectedTestIds(testTypeIds);

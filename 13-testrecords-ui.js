@@ -1,24 +1,31 @@
 // ============================================================================
-// ARCHIVING — a "completed" record is one whose sample(s) have reached the
-// final "released" stage for this record's test type. Both record shapes are
-// covered: a Sub-Batch/Analytical Batch record (memberSampleIds) needs EVERY
-// member sample released; a legacy individual record (sampleId) just needs
-// that one sample released. If a referenced sample can no longer be found,
-// the record is treated as not-yet-archivable rather than guessing.
+// ARCHIVING — a record only becomes eligible for archiving once samples in
+// it have actually been RELEASED (not merely results-entered/under-review/
+// approved). A batch/Analytical-Batch record (memberSampleIds) can contain a
+// mix — some members released, others on_hold/rejected/cancelled/still in
+// review — so archiving is done PER RELEASED MEMBER, not all-or-nothing:
+// releasedMemberSampleIds() below tells you exactly which member sample IDs
+// (out of the whole record) are actually archivable right now. The archive
+// action (see archiveOne/archiveSelectedRecords) splits a batch record:
+// released members move into a new archived_records row, and any remaining
+// not-yet-released members stay behind in the still-active testRecords row
+// so they can be archived later once released. A legacy individual record
+// (sampleId, no members) is archivable only when that one sample is
+// released. If a referenced sample can no longer be found, it's treated as
+// not-yet-archivable rather than guessing.
 // ============================================================================
+function releasedMemberSampleIds(r, samples, testRecords, subBatches) {
+  if (!r) return [];
+  const sampleIds = r.memberSampleIds && r.memberSampleIds.length ? r.memberSampleIds : r.sampleId ? [r.sampleId] : [];
+  return sampleIds.filter(sid => {
+    const sample = (samples || []).find(s => s.id === sid);
+    if (!sample) return false;
+    return testStageForSample(sample, r.testTypeId, testRecords, subBatches) === "released";
+  });
+}
 function isTestRecordArchivable(r, samples, testRecords, subBatches) {
   if (!r) return false;
-  const sampleIds = r.memberSampleIds && r.memberSampleIds.length ? r.memberSampleIds : r.sampleId ? [r.sampleId] : [];
-  // If record has entered results or memberResults, it is completed and archivable
-  const hasResults = (r.results && r.results.length > 0) || (r.memberResults && r.memberResults.length > 0);
-  if (hasResults) return true;
-  if (!sampleIds.length) return true;
-  return sampleIds.every(sid => {
-    const sample = (samples || []).find(s => s.id === sid);
-    if (!sample) return true;
-    const stage = testStageForSample(sample, r.testTypeId, testRecords, subBatches);
-    return stage === "released" || stage === "approved" || stage === "under_review" || stage === "results_entered";
-  });
+  return releasedMemberSampleIds(r, samples, testRecords, subBatches).length > 0;
 }
 // ===== 13-testrecords-ui.js =====
 // ============================================================================
@@ -2172,30 +2179,75 @@ function TestRecordsTab({
   const trDeleteGate = permGate(permissionMatrix, session, "testRecords", "delete", notify, "delete test records");
   const canEditRecords = trEditGate.visible;
   const canDeleteRecords = trDeleteGate.visible;
-  // Archiving a Test Record is an edit to its own lifecycle (moving it out
-  // of the active list), gated on the testRecords module itself — the
-  // separate "archive" module permission instead governs the Archive tab's
-  // own Restore action (see 18-archive-ui.js).
+  // A record can only be archived once at least one of its samples has
+  // reached the final "released" stage for this record's test type — see
+  // isTestRecordArchivable()/releasedMemberSampleIds() near the top of this
+  // file. Archiving pulls out ONLY the released member(s); anything not yet
+  // released (on_hold / rejected / cancelled / still in review) stays
+  // behind in the active list so it can be archived later once released.
   const trArchiveGate = trEditGate;
   const canArchiveRecords = trArchiveGate.visible;
   const [archiveSelection, setArchiveSelection] = useState([]);
   const [archivingId, setArchivingId] = useState(null);
   const [bulkArchiving, setBulkArchiving] = useState(false);
-  // A record can only be archived once every sample it covers has reached
-  // the final "released" stage for this record's test type — see
-  // isTestRecordArchivable() near the top of this file.
   const isArchivable = React.useCallback(r => isTestRecordArchivable(r, samples, testRecords, subBatches), [samples, testRecords, subBatches]);
   function toggleArchiveSelect(id) {
     setArchiveSelection(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   }
+  // Splits `rec` into (a) an archived_records row containing only the
+  // released member(s) — tagged with originRecordId so the Archive tab can
+  // reunite it with any still-active remainder — and (b) whatever's left of
+  // `rec` in the active testRecords list (or nothing, if every member was
+  // released). Works the same for legacy single-sample records (releasedIds
+  // is either [] or [rec.sampleId] there, never a partial split).
+  async function archiveReleasedMembers(rec, releasedIds) {
+    const isBatch = !!(rec.memberSampleIds && rec.memberSampleIds.length);
+    const allSampleIds = isBatch ? rec.memberSampleIds : rec.sampleId ? [rec.sampleId] : [];
+    const remainingIds = allSampleIds.filter(sid => !releasedIds.includes(sid));
+    const archivedSampleSnapshots = releasedIds.map(id => (samples || []).find(s => s.id === id)).filter(Boolean);
+    const fullyReleased = remainingIds.length === 0;
+    const archivedRecord = isBatch ? {
+      ...rec,
+      id: fullyReleased ? rec.id : uid("tr"),
+      originRecordId: rec.id,
+      memberSampleIds: releasedIds,
+      memberResults: (rec.memberResults || []).filter(m => releasedIds.includes(m.sampleId)),
+      archivedAt: new Date().toISOString(),
+      archivedSampleSnapshots
+    } : {
+      ...rec,
+      originRecordId: rec.id,
+      archivedAt: new Date().toISOString(),
+      archivedSampleSnapshots
+    };
+    await DataService.save("archived_records", archivedRecord);
+    if (fullyReleased) {
+      setTestRecords(prev => prev.filter(r => r.id !== rec.id));
+    } else {
+      const trimmedRecord = {
+        ...rec,
+        memberSampleIds: remainingIds,
+        memberResults: (rec.memberResults || []).filter(m => !releasedIds.includes(m.sampleId))
+      };
+      setTestRecords(prev => prev.map(r => r.id === rec.id ? trimmedRecord : r));
+    }
+    return {
+      fullyReleased,
+      archivedCount: releasedIds.length
+    };
+  }
   async function archiveOne(rec) {
     setArchivingId(rec.id);
     try {
-      await DataService.archiveTestRecord(rec.id, {
-        testRecords,
-        samples
-      });
-      setTestRecords(prev => prev.filter(r => r.id !== rec.id));
+      const releasedIds = releasedMemberSampleIds(rec, samples, testRecords, subBatches);
+      if (releasedIds.length === 0) {
+        notify("No released sample in this record yet — nothing eligible to archive.", "warn");
+        return;
+      }
+      const {
+        fullyReleased,
+        archivedCount
+      } = await archiveReleasedMembers(rec, releasedIds);
       setArchiveSelection(prev => prev.filter(x => x !== rec.id));
       DataService.appendAudit({
         entity: "testRecord",
@@ -2203,9 +2255,9 @@ function TestRecordsTab({
         action: "archive",
         user: session.username,
         role: session.role,
-        note: `Archived "${rec.testTypeName}" (${rec.date})`
+        note: fullyReleased ? `Archived "${rec.testTypeName}" (${rec.date})` : `Archived ${archivedCount} released sample(s) of "${rec.testTypeName}" (${rec.date}); ${releasedIds.length && rec.memberSampleIds ? rec.memberSampleIds.length - archivedCount : 0} sample(s) remain active pending release`
       });
-      notify(`Archived "${rec.testTypeName}" (${rec.date}). Find it any time in the Archive tab.`, "ok");
+      notify(fullyReleased ? `Archived "${rec.testTypeName}" (${rec.date}). Find it any time in the Archive tab.` : `Archived ${archivedCount} released sample(s) — the rest of this batch stays here until released.`, "ok");
     } catch (e) {
       notify(`Archive failed: ${e.message}`, "warn");
     } finally {
@@ -2218,38 +2270,40 @@ function TestRecordsTab({
       return rec && isArchivable(rec);
     });
     if (ids.length === 0) {
-      notify("Nothing eligible selected — only fully Released records can be archived.", "warn");
+      notify("Nothing eligible selected — a record needs at least one Released sample to be archived.", "warn");
       return;
     }
     setBulkArchiving(true);
     let archivedCount = 0;
+    let recordCount = 0;
     for (const id of ids) {
       try {
-        // Don't pass `testRecords` here — it's a stale snapshot from this
-        // render and won't reflect records already archived earlier in
-        // this same loop. Passing `samples` alone is safe since archiving
-        // never changes the samples collection.
-        await DataService.archiveTestRecord(id, {
-          samples
-        });
-        archivedCount++;
+        // Re-read from `testRecords` (not a captured snapshot) each loop —
+        // a prior iteration may have already trimmed this exact row if two
+        // selected records shared members (rare, but cheap to guard).
+        const rec = testRecords.find(r => r.id === id);
+        if (!rec) continue;
+        const releasedIds = releasedMemberSampleIds(rec, samples, testRecords, subBatches);
+        if (releasedIds.length === 0) continue;
+        const result = await archiveReleasedMembers(rec, releasedIds);
+        archivedCount += result.archivedCount;
+        recordCount++;
       } catch (e) {
         notify(`Couldn't archive one record: ${e.message}`, "warn");
       }
     }
-    setTestRecords(prev => prev.filter(r => !ids.includes(r.id)));
     setArchiveSelection([]);
     setBulkArchiving(false);
-    if (archivedCount > 0) {
+    if (recordCount > 0) {
       DataService.appendAudit({
         entity: "testRecord",
         entityId: ids.join(","),
         action: "archive",
         user: session.username,
         role: session.role,
-        note: `Bulk-archived ${archivedCount} record(s)`
+        note: `Bulk-archived ${archivedCount} released sample(s) across ${recordCount} record(s)`
       });
-      notify(`Archived ${archivedCount} record(s). Find them any time in the Archive tab.`, "ok");
+      notify(`Archived ${archivedCount} released sample(s) across ${recordCount} record(s). Find them any time in the Archive tab.`, "ok");
     }
   }
   // Resolves the Reference behind a record — via its single sample, or (for

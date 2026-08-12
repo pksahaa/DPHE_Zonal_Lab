@@ -246,32 +246,98 @@ function ArchiveTab({
     });
   }
 
-  // Restoring always acts on the WHOLE record — a batch either goes back
-  // in full or not at all, since "send back one member" is already a
-  // distinct, existing concept elsewhere (Results Workflow's per-sample
-  // "Return to Analyst", which voids just one member's result without
-  // touching the rest of the batch — see voidSampleResultForTest in
-  // 16-sub-batch.js). Restore here is deliberately simpler than that.
-  async function handleRestore(rec) {
+  // Restoring can act on the WHOLE record, or on just one/some sample(s)
+  // out of a multi-sample batch — a batch's members can have been archived
+  // gradually (each one only becomes archivable once IT is released), so
+  // restoring needs the same per-sample granularity. When `sampleIds` is
+  // omitted, every member of the archived record is restored (unchanged
+  // "Restore Batch" / legacy single-record behavior). When a subset is
+  // given, only those member(s) come back: if the batch's not-yet-released
+  // remainder is still sitting in active Test Records (originRecordId),
+  // the restored sample(s) are merged back into that same row so the batch
+  // reunites; otherwise a new active row is created for just that subset.
+  // The archived row shrinks to whatever wasn't restored, or is deleted
+  // entirely once nothing archived remains of it.
+  async function handleRestore(rec, sampleIds) {
     if (!archiveRestoreGate.allowed) {
       notify?.("Guest access can't restore archived records — this login is view-only for this action.", "warn");
       return;
     }
+    const isBatch = !!(rec.memberSampleIds && rec.memberSampleIds.length);
+    const allMemberIds = isBatch ? rec.memberSampleIds : rec.sampleId ? [rec.sampleId] : [];
+    const idsToRestore = sampleIds && sampleIds.length ? sampleIds : allMemberIds;
+    const restoringAll = !isBatch || idsToRestore.length >= allMemberIds.length;
     setRestoringId(rec.id);
     try {
-      const restored = await DataService.restoreRecord(rec.id, rec);
-      setTestRecords(prev => prev.some(r => r.id === restored.id) ? prev : [...prev, restored]);
-      setResults(prev => prev.filter(r => r.id !== rec.id));
-      const n = restored.memberSampleIds?.length || 1;
+      if (restoringAll) {
+        const restored = await DataService.restoreRecord(rec.id, rec);
+        setTestRecords(prev => prev.some(r => r.id === restored.id) ? prev : [...prev, restored]);
+        setResults(prev => prev.filter(r => r.id !== rec.id));
+        const n = restored.memberSampleIds?.length || 1;
+        DataService.appendAudit({
+          entity: "testRecord",
+          entityId: rec.id,
+          action: "restore",
+          user: session.username,
+          role: session.role,
+          note: `Restored "${rec.testTypeName}" (${rec.date}, ${n} sample${n > 1 ? "s" : ""})`
+        });
+        notify(`Restored "${rec.testTypeName}" (${rec.date}, ${n} sample${n > 1 ? "s" : ""}) back to active Test Records.`, "ok");
+        return;
+      }
+      // Partial restore of a batch.
+      const restoredMemberResults = (rec.memberResults || []).filter(m => idsToRestore.includes(m.sampleId));
+      const remainingMemberIds = allMemberIds.filter(id => !idsToRestore.includes(id));
+      const remainingMemberResults = (rec.memberResults || []).filter(m => !idsToRestore.includes(m.sampleId));
+      const originId = rec.originRecordId || rec.id;
+      const activeTestRecordsArr = await DataService.list("testRecords");
+      const activeSibling = activeTestRecordsArr.find(r => r.id === originId);
+      if (activeSibling) {
+        const merged = {
+          ...activeSibling,
+          memberSampleIds: [...new Set([...(activeSibling.memberSampleIds || []), ...idsToRestore])],
+          memberResults: [...(activeSibling.memberResults || []), ...restoredMemberResults]
+        };
+        await DataService.save("testRecords", merged);
+        setTestRecords(prev => prev.map(r => r.id === merged.id ? merged : r));
+      } else {
+        const {
+          archivedAt,
+          archivedSampleSnapshots,
+          originRecordId,
+          ...rest
+        } = rec;
+        const newActiveRecord = {
+          ...rest,
+          id: originId,
+          memberSampleIds: idsToRestore,
+          memberResults: restoredMemberResults
+        };
+        await DataService.save("testRecords", newActiveRecord);
+        setTestRecords(prev => prev.some(r => r.id === newActiveRecord.id) ? prev.map(r => r.id === newActiveRecord.id ? newActiveRecord : r) : [...prev, newActiveRecord]);
+      }
+      if (remainingMemberIds.length === 0) {
+        await DataService.remove("archived_records", rec.id);
+        setResults(prev => prev.filter(r => r.id !== rec.id));
+      } else {
+        const trimmedArchived = {
+          ...rec,
+          memberSampleIds: remainingMemberIds,
+          memberResults: remainingMemberResults,
+          archivedSampleSnapshots: (rec.archivedSampleSnapshots || []).filter(s => remainingMemberIds.includes(s.id))
+        };
+        await DataService.save("archived_records", trimmedArchived);
+        setResults(prev => prev.map(r => r.id === rec.id ? trimmedArchived : r));
+      }
       DataService.appendAudit({
         entity: "testRecord",
         entityId: rec.id,
         action: "restore",
         user: session.username,
         role: session.role,
-        note: `Restored "${rec.testTypeName}" (${rec.date}, ${n} sample${n > 1 ? "s" : ""})`
+        note: `Restored ${idsToRestore.length} sample(s) of "${rec.testTypeName}" (${rec.date}) back to active Test Records`
       });
-      notify(`Restored "${rec.testTypeName}" (${rec.date}, ${n} sample${n > 1 ? "s" : ""}) back to active Test Records.`, "ok");
+      notify(`Restored ${idsToRestore.length} sample${idsToRestore.length > 1 ? "s" : ""} back to active Test Records.`, "ok");
     } catch (e) {
       notify(`Restore failed: ${e.message}`, "warn");
     } finally {
@@ -618,6 +684,12 @@ function BatchArchiveGroups({
         color: C.info,
         title: "Print this sample only",
         onClick: () => onPrint(rec, row.sample?.id)
+      }), canRestore && row.sample?.id && React.createElement(IconButton, {
+        name: "restore",
+        color: C.teal,
+        title: "Restore this sample only",
+        disabled: restoringId === rec.id,
+        onClick: () => onRestore(rec, [row.sample.id])
       })));
     });
     const theadEl = React.createElement("thead", null, React.createElement("tr", null, ["Sample ID", "Parameter", "Result", "Actions"].map(h => React.createElement("th", {
