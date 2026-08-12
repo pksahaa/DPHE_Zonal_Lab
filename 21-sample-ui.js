@@ -2400,21 +2400,48 @@ function SamplesTab({
   // it except: samples that already have that parameter (silently skipped,
   // no error) and samples that are rejected/cancelled (physically no
   // longer testable — skipped and called out in the result count).
+  //
+  // ONE bulk write for the whole batch, not one save+appendAudit round-trip
+  // PER sample — that old per-sample loop was both slow (N sequential
+  // requests for an N-sample batch) and wrote N separate audit log entries
+  // for what is, from the user's point of view, a single action ("add this
+  // parameter to the batch"). Matches the same fix already applied to bulk
+  // sample import/registration — see confirmImportSamples/handleBatchCreate.
   async function handleAddParamsToBatch(refId, newTests) {
     const members = referenceMembers(refId);
+    const memberIds = new Set(members.map(s => s.id));
     let count = 0;
     let skippedUnusable = 0;
-    for (const s of members) {
+    const addedSampleIds = [];
+    const updatedSamples = (samples || []).map(s => {
+      if (!memberIds.has(s.id)) return s;
       if (["rejected", "cancelled"].includes(s.status)) {
         skippedUnusable++;
-        continue;
+        return s;
       }
       const next = addRequestedTests(s, newTests, session);
       if (next !== s) {
-        await handleUpdate(next);
         count++;
+        addedSampleIds.push(s.id);
       }
+      return next;
+    });
+    if (count === 0) {
+      return {
+        count,
+        skippedUnusable
+      };
     }
+    await DataService.bulkSet("samples", updatedSamples);
+    await setSamples(() => updatedSamples);
+    DataService.appendAudit({
+      entity: "sample",
+      entityId: addedSampleIds.join(","),
+      action: "add_parameter",
+      user: session.name,
+      role: session.role,
+      note: `Added ${newTests.map(t => t.testTypeName).join(", ")} to ${count} sample(s) in batch`
+    }).catch(err => console.error("Audit log write for batch add-parameter failed (non-fatal, the add itself already succeeded):", err));
     return {
       count,
       skippedUnusable
@@ -2422,14 +2449,18 @@ function SamplesTab({
   }
   async function confirmAddBatchParams() {
     if (!addBatchParamSelection.length || !addBatchParamRefId) return;
-    const {
-      count,
-      skippedUnusable
-    } = await handleAddParamsToBatch(addBatchParamRefId, addBatchParamSelection);
-    const skippedNote = skippedUnusable > 0 ? ` (${skippedUnusable} rejected/cancelled sample${skippedUnusable > 1 ? "s" : ""} skipped)` : "";
-    notify?.(count > 0 ? `Added ${addBatchParamSelection.map(t => t.testTypeName).join(", ")} to ${count} sample(s) in this batch.${skippedNote}` : `Every eligible sample in this batch already had all the selected parameter(s) — nothing to add.${skippedNote}`, count > 0 ? "ok" : "warn");
-    setAddBatchParamSelection([]);
-    setAddBatchParamRefId(null);
+    try {
+      const {
+        count,
+        skippedUnusable
+      } = await handleAddParamsToBatch(addBatchParamRefId, addBatchParamSelection);
+      const skippedNote = skippedUnusable > 0 ? ` (${skippedUnusable} rejected/cancelled sample${skippedUnusable > 1 ? "s" : ""} skipped)` : "";
+      notify?.(count > 0 ? `Added ${addBatchParamSelection.map(t => t.testTypeName).join(", ")} to ${count} sample(s) in this batch.${skippedNote}` : `Every eligible sample in this batch already had all the selected parameter(s) — nothing to add.${skippedNote}`, count > 0 ? "ok" : "warn");
+      setAddBatchParamSelection([]);
+      setAddBatchParamRefId(null);
+    } catch (e) {
+      notify?.(`Could not add the parameter(s) to this batch: ${e.message}. Nothing was saved — try again.`, "warn");
+    }
   }
   async function handleBatchCreate(shared, rows, ref) {
     let runningSamples = [...samples];
