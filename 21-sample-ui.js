@@ -790,6 +790,15 @@ function SampleDetail({
   const canDeleteAllowed = perms.canRegister && (sample.linkedTestRecordIds || []).length === 0;
   const canEdit = canEditAllowed || (isGuestUser && sample.status !== "released");
   const canDelete = canDeleteAllowed || (isGuestUser && (sample.linkedTestRecordIds || []).length === 0);
+  // Deliberately NOT gated the same way as "Correct Registration" (which
+  // blocks once sample.status is "released") — adding a NEW parameter is
+  // exactly what you need to do *after* the original parameter(s) were
+  // already released and the client asks for one more test on the same
+  // retained sample. The new parameter starts at "pending" regardless, so
+  // it's always safe to add — the only real blocker is the physical sample
+  // itself being unusable (rejected/cancelled).
+  const canAddParamAllowed = perms.canRegister && !["rejected", "cancelled"].includes(sample.status);
+  const canAddParam = canAddParamAllowed || (isGuestUser && !["rejected", "cancelled"].includes(sample.status));
   function guardSampleAction(allowed, handler) {
     return () => {
       if (allowed) return handler();
@@ -1186,13 +1195,13 @@ function SampleDetail({
     return /*#__PURE__*/React.createElement(React.Fragment, {
       key: t.testTypeId
     }, chipRow);
-  })), canEdit && !addParamOpen && /*#__PURE__*/React.createElement("button", {
+  })), canAddParam && !addParamOpen && /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "text-[11px] underline mt-1",
     style: {
       color: C.teal
     },
-    onClick: guardSampleAction(canEditAllowed, () => setAddParamOpen(true))
+    onClick: guardSampleAction(canAddParamAllowed, () => setAddParamOpen(true))
   }, "+ Add Parameter"), !!sample.linkedTestRecordIds.length && /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] mt-1.5",
     style: {
@@ -2356,27 +2365,41 @@ function SamplesTab({
     setDeleteReferenceId(null);
   }
   // Batch version of the same fix as SampleDetail's "+ Add Parameter" — a
-  // batch registered together can just as easily have missed a parameter
-  // at registration time as a single sample can. Applies the same new
-  // parameter(s) to every member sample of this Reference batch in one go;
-  // each sample that doesn't already have that parameter gets it added at
-  // "pending" (samples that already had it are silently skipped, no error).
+  // batch registered together can just as easily need a parameter added
+  // later as a single sample can, INCLUDING after the original parameter(s)
+  // for that batch were already released (adding a fresh "pending"
+  // parameter doesn't touch anything already reported). Every member gets
+  // it except: samples that already have that parameter (silently skipped,
+  // no error) and samples that are rejected/cancelled (physically no
+  // longer testable — skipped and called out in the result count).
   async function handleAddParamsToBatch(refId, newTests) {
     const members = referenceMembers(refId);
     let count = 0;
+    let skippedUnusable = 0;
     for (const s of members) {
+      if (["rejected", "cancelled"].includes(s.status)) {
+        skippedUnusable++;
+        continue;
+      }
       const next = addRequestedTests(s, newTests, session);
       if (next !== s) {
         await handleUpdate(next);
         count++;
       }
     }
-    return count;
+    return {
+      count,
+      skippedUnusable
+    };
   }
   async function confirmAddBatchParams() {
     if (!addBatchParamSelection.length || !addBatchParamRefId) return;
-    const count = await handleAddParamsToBatch(addBatchParamRefId, addBatchParamSelection);
-    notify?.(count > 0 ? `Added ${addBatchParamSelection.map(t => t.testTypeName).join(", ")} to ${count} sample(s) in this batch.` : "Every sample in this batch already had all the selected parameter(s) — nothing to add.", count > 0 ? "ok" : "warn");
+    const {
+      count,
+      skippedUnusable
+    } = await handleAddParamsToBatch(addBatchParamRefId, addBatchParamSelection);
+    const skippedNote = skippedUnusable > 0 ? ` (${skippedUnusable} rejected/cancelled sample${skippedUnusable > 1 ? "s" : ""} skipped)` : "";
+    notify?.(count > 0 ? `Added ${addBatchParamSelection.map(t => t.testTypeName).join(", ")} to ${count} sample(s) in this batch.${skippedNote}` : `Every eligible sample in this batch already had all the selected parameter(s) — nothing to add.${skippedNote}`, count > 0 ? "ok" : "warn");
     setAddBatchParamSelection([]);
     setAddBatchParamRefId(null);
   }
