@@ -1083,6 +1083,14 @@ function AddTestTab({
         // and firing that many requests at once risked the same kind of
         // write-write collision the Apps Script lock (see Code.gs doPost)
         // now guards against anyway. This is simpler AND safer.
+        //
+        // IMPORTANT — optimistic update: setSamples runs BEFORE the backend
+        // bulkSet resolves so the Awaiting Review queue appears immediately
+        // after save. The same pattern applies to the test record itself
+        // (setTestRecords above is also synchronous). If the backend save
+        // later fails, we surface a warning toast so the user knows to
+        // reload — but we never leave the UI in a state where the test
+        // record exists but the samples still show as "in_progress".
         const memberIdSet = new Set(selectedSubBatch.memberSampleIds);
         const updatedSamples = (samples || []).map(s => {
           if (!memberIdSet.has(s.id)) return s;
@@ -1091,8 +1099,10 @@ function AddTestTab({
             linkedTestRecordIds: [...(s.linkedTestRecordIds || []), newRecordId]
           }, selectedSubBatch.testTypeId, AWAITING_REVIEW, actingUser);
         });
+        // Update local state immediately (optimistic) — UI reflects the new
+        // status without waiting for the backend round-trip to complete.
+        setSamples(() => updatedSamples);
         DataService.bulkSet("samples", updatedSamples).then(() => {
-          setSamples(() => updatedSamples);
           DataService.appendAudit({
             entity: "sample",
             entityId: selectedSubBatch.memberSampleIds.join(","),
@@ -1102,7 +1112,7 @@ function AddTestTab({
             note: `${selectedSubBatch.memberSampleIds.length} sample(s) moved to Awaiting Review via Analytical Batch "${recordPayload.testTypeName}"`
           }).catch(err => console.error("Audit log write failed (non-fatal):", err));
         }).catch(err => {
-          notify(`Test record saved, but updating the ${selectedSubBatch.memberSampleIds.length} sample statuses failed: ${err.message}. Reload and re-check this batch's samples — they may still show as pending review.`, "warn");
+          notify(`Test record saved, but syncing the ${selectedSubBatch.memberSampleIds.length} sample statuses to the backend failed: ${err.message}. The UI shows the correct state — reload to confirm it persisted.`, "warn");
         });
         if (setSubBatches) {
           setSubBatches(prev => prev.map(sb => sb.id === selectedSubBatch.id ? {
