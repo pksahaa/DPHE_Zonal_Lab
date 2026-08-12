@@ -537,11 +537,8 @@ function LabApp({
     runAutoArchiveSweepIfDue({ testRecords, samples, subBatches, setTestRecords, session, notify });
   }, [loaded, samplesLoaded, autoArchiveChecked, testRecords, samples, subBatches, session]);
   useEffect(() => {
-    const collections = ["chemicals", "glassware", "equipment", "gas", "parameters", "testTypes", "testRecords(active)", "subBatches", "masterChemicals"];
-    Promise.allSettled([DataService.list("chemicals"), DataService.list("glassware"), DataService.list("equipment"), DataService.list("gas"), DataService.list("parameters"), DataService.list("testTypes"), DataService.listActive("testRecords"), DataService.list("subBatches"), DataService.getSingleton("masterChemicals")]).then(results => {
-      const failed = results.map((r, i) => r.status === "rejected" ? collections[i] : null).filter(Boolean);
-      const val = i => results[i].status === "fulfilled" ? results[i].value : undefined;
-      const [rawChems, rawGlass, rawEquip, rawGas, rawParams, rawTestTypes, rawTestRecs, rawSubBatches, rawMasterChem] = [0, 1, 2, 3, 4, 5, 6, 7, 8].map(val);
+    const collectionsList = ["chemicals", "glassware", "equipment", "gas", "parameters", "testTypes", "active:testRecords", "subBatches", "masterChemicals"];
+    DataService.multiList(collectionsList).then(res => {
       // NOTE: production deployments must NOT fall back to seed/demo data
       // when a collection comes back empty from the backend — an empty
       // result is a legitimate state (e.g. the admin deleted everything),
@@ -549,42 +546,29 @@ function LabApp({
       // this app — inventory starts genuinely empty and stays that way
       // until an admin adds real data.
       //
-      // CRITICAL: only apply state (and therefore only allow auto-save to
-      // ever run) for collections that actually loaded successfully. Using
-      // Promise.allSettled (not Promise.all) means one failed fetch no
-      // longer silently blanks out the other eight — but a failed fetch's
-      // own state must be left completely untouched (not even set to []),
-      // and loadHadFailures must gate auto-save globally, because a
-      // half-loaded app is not a safe state to start writing back to the
-      // backend from.
-      if (results[0].status === "fulfilled") setChemicals(markExpiredBatches(normalizeChemicals(rawChems || [])));
-      if (results[1].status === "fulfilled") setGlassware(normalizeGlassware(rawGlass || []));
-      if (results[2].status === "fulfilled") setEquipment(normalizeEquipment(rawEquip || []));
-      if (results[3].status === "fulfilled") setGasList(normalizeGas(rawGas || []));
-      if (results[4].status === "fulfilled") setParameters(normalizeParameters(rawParams || []));
-      if (results[5].status === "fulfilled") setTestTypes(normalizeTestTypes(rawTestTypes || []).map(t => ({
+      // Using multiList fetches all 9 collections in one single request,
+      // avoiding massive initial load latency and queueing timeouts.
+      setChemicals(markExpiredBatches(normalizeChemicals(res["chemicals"] || [])));
+      setGlassware(normalizeGlassware(res["glassware"] || []));
+      setEquipment(normalizeEquipment(res["equipment"] || []));
+      setGasList(normalizeGas(res["gas"] || []));
+      setParameters(normalizeParameters(res["parameters"] || []));
+      setTestTypes(normalizeTestTypes(res["testTypes"] || []).map(t => ({
         costPerTest: 0,
         ...t
       })));
-      if (results[6].status === "fulfilled") setTestRecords(rawTestRecs || []);
-      if (results[7].status === "fulfilled") setSubBatches(rawSubBatches || []);
-      if (results[8].status === "fulfilled" && rawMasterChem && rawMasterChem.list) setMasterChemicals(rawMasterChem.list);
-      if (failed.length) {
-        setLoadHadFailures(true);
-        console.error("Failed to load from backend, auto-save disabled until reload succeeds:", failed);
-        notify(`Could not load ${failed.join(", ")} from the backend. Editing is disabled this session to protect your data — use Settings ▸ Backend Settings ▸ Test Connection, then reload the page, before making changes.`, "warn");
-      } else {
-        setLoadHadFailures(false);
+      setTestRecords(res["active:testRecords"] || []);
+      setSubBatches(res["subBatches"] || []);
+      const rawMasterChem = res["masterChemicals"];
+      if (rawMasterChem && rawMasterChem.length && rawMasterChem[0].list) {
+        setMasterChemicals(rawMasterChem[0].list);
       }
+      setLoadHadFailures(false);
       setLoaded(true);
     }).catch(err => {
-      // Only reachable if something threw outside the per-item handling
-      // above (e.g. Promise.allSettled itself isn't available) — treat it
-      // exactly like "everything failed": load stays blocked, nothing gets
-      // auto-saved.
-      console.error("Error loading data via DataService:", err);
+      console.error("Error loading data via DataService multiList:", err);
       setLoadHadFailures(true);
-      setLoaded(true);
+      notify(`Could not load data from the backend. Editing is disabled this session to protect your data — use Settings ▸ Backend Settings ▸ Test Connection, then reload the page, before making changes.`, "warn");
     });
   }, [loadReloadNonce]);
 

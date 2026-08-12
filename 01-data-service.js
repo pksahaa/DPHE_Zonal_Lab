@@ -129,12 +129,13 @@ const DataService = (() => {
       token
     } = config;
     if (!gasUrl) throw new Error("Google Apps Script URL is not configured (Settings → Backend).");
-    if (action === "list" || action === "ping") {
+    if (action === "list" || action === "ping" || action === "multiList") {
       const qs = new URLSearchParams({
         action,
-        collection: collection || "",
         token: token || ""
       });
+      if (collection) qs.set("collection", collection);
+      if (opts.collections) qs.set("collections", opts.collections);
       const res = await fetch(`${gasUrl}?${qs.toString()}`, {
         method: "GET"
       });
@@ -167,6 +168,26 @@ const DataService = (() => {
     return config.mode === "gas" ? gasCall("list", {
       collection
     }) : localList(collection);
+  }
+  async function multiList(collectionsArray) {
+    if (config.mode === "gas") {
+      return gasCall("multiList", { collections: collectionsArray.join(",") });
+    } else {
+      const res = {};
+      collectionsArray.forEach(col => {
+        if (col.startsWith("active:")) {
+          const c = col.slice(7);
+          const cutoff = new Date();
+          cutoff.setFullYear(cutoff.getFullYear() - 1);
+          const cutoffStr = cutoff.toISOString().slice(0, 10);
+          const all = localList(c);
+          res[col] = all.filter(r => !r.date || r.date >= cutoffStr);
+        } else {
+          res[col] = localList(col);
+        }
+      });
+      return res;
+    }
   }
   async function save(collection, record) {
     const withId = record.id ? record : {
@@ -337,8 +358,9 @@ const DataService = (() => {
     configure,
     getConfig,
     list,
-    listActive,
+    multiList,
     save,
+    listActive,
     remove,
     bulkSet,
     getSingleton,
