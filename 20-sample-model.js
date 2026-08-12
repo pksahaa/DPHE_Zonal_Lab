@@ -434,6 +434,7 @@ function createSample(fields, existingSamples, user) {
     waterPointType: fields.waterPointType || "",
     waterPointTypeOther: fields.waterPointTypeOther || "",
     sampleSourceId: fields.sampleSourceId || "",
+    twId: fields.twId || "",
     // e.g. "STW-6"
     batchRef: fields.batchRef || "",
     // shared reference (e.g. office memo no.) linking samples uploaded together

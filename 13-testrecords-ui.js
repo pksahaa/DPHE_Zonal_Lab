@@ -871,7 +871,17 @@ function AddTestTab({
     }));
     // Only gas entries explicitly ticked "Update Gas Inventory" get deducted — others are logged for
     // reporting only (inventory tracked manually), per the optional Amount Used design.
-    const allGasUsage = [...gasesUsed, ...(dilutionRequired ? dilutionGasesUsed : [])].filter(e => e.updateInventory);
+    
+    const allGasEntries = [...gasesUsed, ...(dilutionRequired ? dilutionGasesUsed : [])];
+    if (allGasEntries.length > 0) {
+      const noCylinder = allGasEntries.filter(e => !e.cylinderId);
+      if (noCylinder.length > 0) {
+        notify(`Please select which cylinder was used for: ${noCylinder.map(e => e.gasName).join(", ")}`, "warn");
+        return;
+      }
+    }
+
+    const allGasUsage = allGasEntries.filter(e => e.updateInventory);
     const gasInsufficient = [];
     allGasUsage.forEach(e => {
       if (!e.cylinderId) {

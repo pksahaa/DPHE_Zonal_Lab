@@ -429,6 +429,7 @@ function SampleRegistrationForm({
     village: "",
     caretakerName: "",
     sampleSourceId: "",
+    twId: "",
     sampleType: "Drinking Water",
     collectionDate: todayStr(),
     collectedBy: "",
@@ -527,6 +528,14 @@ function SampleRegistrationForm({
     onChange: v => setForm({
       ...form,
       sampleSourceId: v
+    })
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "TW ID",
+    value: form.twId,
+    onChange: v => setForm({
+      ...form,
+      twId: v
     })
   }), /*#__PURE__*/React.createElement(SelectField, {
     simple: true,
@@ -685,7 +694,7 @@ function SignatureCapture({
   onConfirm,
   label
 }) {
-  const [signedName, setSignedName] = React.useState("");
+  const [signedName, setSignedName] = React.useState(user?.name || user?.username || "");
   const [attested, setAttested] = React.useState(false);
   const [comment, setComment] = React.useState("");
   return /*#__PURE__*/React.createElement("div", {
@@ -1479,6 +1488,11 @@ function SampleEntryCard({ index, row, updateRow, onDuplicate, onRemove, canRemo
     label: "Water Point Type — Please Specify",
     value: row.waterPointTypeOther,
     onChange: v => updateRow("waterPointTypeOther", v)
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "TW ID",
+    value: row.twId,
+    onChange: v => updateRow("twId", v)
   })));
 }
 
@@ -1495,6 +1509,7 @@ function emptySampleRow() {
     longitude: "",
     waterPointType: "",
     waterPointTypeOther: "",
+    twId: "",
     collectionDate: ""
   };
 }
@@ -1911,6 +1926,7 @@ function ImportTestPickerModal({
 // there's always at least an identifier and a way to act on each row.
 const SAMPLE_TABLE_COLUMNS = [
   { key: "sampleCode", label: "Sample Code" },
+  { key: "twId", label: "TW ID" },
   { key: "refNo", label: "Ref / Memo No." },
   { key: "trackingNo", label: "Tracking No.", locked: true },
   { key: "clientContact", label: "Client" },
@@ -2657,6 +2673,9 @@ function SamplesTab({
         className: "inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wide",
         style: { background: C.teal, color: "#fff" }
       }, "New"))),
+      twId: /*#__PURE__*/React.createElement("td", {
+        className: "px-2 py-1.5 whitespace-nowrap", style: { color: C.ink }
+      }, s.twId || "—"),
       refNo: /*#__PURE__*/React.createElement("td", {
         className: "px-2 py-1.5 whitespace-nowrap", style: { color: C.muted }
       }, rowRef?.refNo || "—"),

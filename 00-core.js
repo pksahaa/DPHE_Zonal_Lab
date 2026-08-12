@@ -576,6 +576,14 @@ const SAMPLE_IMPORT_COLUMNS = [{
   header: "Type of Water Point - Other",
   aliases: ["WaterPointTypeOther"]
 }, {
+  key: "sampleSourceId",
+  header: "Sample Source",
+  aliases: ["SampleSource", "Sample Source (e.g. STW-6)"]
+}, {
+  key: "twId",
+  header: "TW ID",
+  aliases: ["TW_ID", "TWID"]
+}, {
   key: "sampleType",
   header: "Sample Type",
   aliases: ["Matrix", "SampleType"]
