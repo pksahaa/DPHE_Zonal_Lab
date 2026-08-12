@@ -277,14 +277,32 @@ function backfillRequestedTestStatuses(samples, testRecords, subBatches) {
 // ============================================================================
 function reviewSubBatchApprove(sb, samples, setSamples, setSubBatches, session, notify) {
   if (!setSamples || !sb) return;
+  const updatedList = [];
   (sb.memberSampleIds || []).forEach(id => {
     const member = (samples || []).find(s => s.id === id);
     if (!member) return;
     const rt = (member.requestedTests || []).find(r => r.testTypeId === sb.testTypeId);
     if (!rt || rt.status !== "results_entered") return;
     const updated = setRequestedTestStatus(member, sb.testTypeId, "under_review", session);
-    setSamples(prev => prev.map(s => s.id === id ? updated : s), updated);
+    updatedList.push(updated);
   });
+  
+  if (updatedList.length > 0) {
+    updatedList.forEach(updated => {
+      setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), null);
+    });
+    
+    DataService.list("samples").then(allSamples => {
+      const idSet = new Set(updatedList.map(u => u.id));
+      const merged = allSamples.map(s => idSet.has(s.id) ? updatedList.find(u => u.id === s.id) : s);
+      return DataService.bulkSet("samples", merged);
+    }).catch(err => {
+      console.error("Failed to persist samples to backend:", err);
+      notify?.("Changes applied locally but backend save failed — reload to re-check.", "warn");
+    });
+    DataService.appendAudit(session, "Bulk Sub-Batch Review", `Marked ${updatedList.length} sample(s) reviewed for ${sb.testTypeName}.`);
+  }
+
   setSubBatches(prev => prev.map(x => x.id === sb.id ? {
     ...x,
     status: "reviewed"
@@ -294,14 +312,32 @@ function reviewSubBatchApprove(sb, samples, setSamples, setSubBatches, session, 
 function reviewSubBatchReturn(sb, samples, setSamples, setSubBatches, session, notify, note) {
   if (!setSamples || !sb) return;
   const finalNote = (note || "").trim() || `Returned to analyst for ${sb.testTypeName}.`;
+  const updatedList = [];
   (sb.memberSampleIds || []).forEach(id => {
     const member = (samples || []).find(s => s.id === id);
     if (!member) return;
     const rt = (member.requestedTests || []).find(r => r.testTypeId === sb.testTypeId);
     if (!rt || !["results_entered", "under_review"].includes(rt.status)) return;
     const updated = setRequestedTestStatus(member, sb.testTypeId, "in_progress", session, finalNote);
-    setSamples(prev => prev.map(s => s.id === id ? updated : s), updated);
+    updatedList.push(updated);
   });
+  
+  if (updatedList.length > 0) {
+    updatedList.forEach(updated => {
+      setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), null);
+    });
+    
+    DataService.list("samples").then(allSamples => {
+      const idSet = new Set(updatedList.map(u => u.id));
+      const merged = allSamples.map(s => idSet.has(s.id) ? updatedList.find(u => u.id === s.id) : s);
+      return DataService.bulkSet("samples", merged);
+    }).catch(err => {
+      console.error("Failed to persist samples to backend:", err);
+      notify?.("Changes applied locally but backend save failed — reload to re-check.", "warn");
+    });
+    DataService.appendAudit(session, "Bulk Sub-Batch Return", `Returned ${updatedList.length} sample(s) to analyst for ${sb.testTypeName}.`);
+  }
+
   setSubBatches(prev => prev.map(x => x.id === sb.id ? {
     ...x,
     status: "pending"
@@ -324,9 +360,22 @@ function bulkApproveSubBatch(sb, samples, setSamples, setSubBatches, session, no
     notify?.(e.message, "warn");
     return;
   }
-  result.updated.forEach(updated => {
-    setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), updated);
-  });
+  if (result.updated.length > 0) {
+    result.updated.forEach(updated => {
+      setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), null);
+    });
+
+    DataService.list("samples").then(allSamples => {
+      const idSet = new Set(result.updated.map(u => u.id));
+      const merged = allSamples.map(s => idSet.has(s.id) ? result.updated.find(u => u.id === s.id) : s);
+      return DataService.bulkSet("samples", merged);
+    }).catch(err => {
+      console.error("Failed to persist samples to backend:", err);
+      notify?.("Changes applied locally but backend save failed — reload to re-check.", "warn");
+    });
+    const actionDesc = signaturePayload.decision === "approved" ? "approved" : "sent back to analyst";
+    DataService.appendAudit(session, "Bulk Sub-Batch Approval", `${result.updated.length} sample(s) ${actionDesc} for ${sb.testTypeName}.`);
+  }
   const allApproved = result.skipped === 0 && result.updated.length > 0;
   if (signaturePayload.decision === "approved") {
     if (allApproved) {
@@ -351,9 +400,21 @@ function bulkApproveSubBatch(sb, samples, setSamples, setSubBatches, session, no
 function bulkReleaseSubBatch(sb, samples, setSamples, setSubBatches, session, notify, note) {
   const members = (sb.memberSampleIds || []).map(id => (samples || []).find(s => s.id === id)).filter(Boolean);
   const result = bulkReleaseParameter(members, sb.testTypeId, sb.testTypeName, session, note);
-  result.updated.forEach(updated => {
-    setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), updated);
-  });
+  if (result.updated.length > 0) {
+    result.updated.forEach(updated => {
+      setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), null);
+    });
+
+    DataService.list("samples").then(allSamples => {
+      const idSet = new Set(result.updated.map(u => u.id));
+      const merged = allSamples.map(s => idSet.has(s.id) ? result.updated.find(u => u.id === s.id) : s);
+      return DataService.bulkSet("samples", merged);
+    }).catch(err => {
+      console.error("Failed to persist samples to backend:", err);
+      notify?.("Changes applied locally but backend save failed — reload to re-check.", "warn");
+    });
+    DataService.appendAudit(session, "Bulk Sub-Batch Release", `Released ${result.updated.length} sample(s) for ${sb.testTypeName}.`);
+  }
   if (result.skipped === 0 && result.updated.length > 0) {
     setSubBatches(prev => prev.map(x => x.id === sb.id ? {
       ...x,

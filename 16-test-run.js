@@ -151,14 +151,39 @@ function TestRunTab({
     };
     setTestRecords(prev => [...prev, newRecord]);
     if (setSamples) {
+      const updatedMembers = [];
       for (const sampleId of selectedSampleIds) {
         const member = samples.find(s => s.id === sampleId);
         if (!member) continue;
-        const updatedMember = {
+        updatedMembers.push({
           ...member,
           linkedTestRecordIds: [...(member.linkedTestRecordIds || []), newRecord.id]
-        };
-        await setSamples(prev => prev.map(s => s.id === sampleId ? updatedMember : s), updatedMember);
+        });
+      }
+      if (updatedMembers.length) {
+        // Update local state without triggering per-item server calls
+        updatedMembers.forEach(u => {
+          setSamples(prev => prev.map(s => s.id === u.id ? u : s), null);
+        });
+        
+        // Persist all changes in one bulkSet call
+        DataService.list("samples").then(allSamples => {
+          const idSet = new Set(updatedMembers.map(u => u.id));
+          const merged = allSamples.map(s => idSet.has(s.id) ? updatedMembers.find(u => u.id === s.id) : s);
+          return DataService.bulkSet("samples", merged);
+        }).then(() => {
+          // One audit entry summarizing the batch action
+          return DataService.appendAudit({
+            entity: "sample",
+            entityId: updatedMembers.map(s => s.id).join(","),
+            action: "link_test_record",
+            user: session.username,
+            role: session.role,
+            note: `Linked ${updatedMembers.length} sample(s) to test record "${selectedTest.name}"`
+          });
+        }).catch(err => {
+          console.error("Failed to persist linked samples to backend:", err);
+        });
       }
     }
     notify(`Test run saved — ${selectedSampleIds.length} sample(s) logged for ${selectedTest.name}.${hasQc ? " QC check recorded." : ""}`, "ok");

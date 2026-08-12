@@ -50,9 +50,17 @@ function runArchiveSweep() {
 
     Object.keys(byYear).forEach(year => {
       const archiveSheetName = `${collection}_Archive_${year}`;
+      // Read existing archive rows once (creates sheet if needed)
+      const existing = readAllRows_(archiveSheetName);
+      const existingById = {};
+      existing.forEach(r => { existingById[r.id] = r; });
+      // Merge new records into the existing set
       byYear[year].forEach(rec => {
-        upsertRow_(archiveSheetName, Object.assign({}, rec, { archivedAt: now.toISOString() }));
+        existingById[rec.id] = Object.assign({}, rec, { archivedAt: now.toISOString() });
       });
+      const merged = Object.values(existingById);
+      // Write all rows at once instead of one-by-one upserts
+      replaceAllRows_(archiveSheetName, merged);
     });
 
     // Update active collection with lightweight remaining records

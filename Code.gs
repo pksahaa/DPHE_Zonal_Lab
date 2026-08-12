@@ -226,6 +226,23 @@ function doGet(e) {
       const active = all.filter(r => !r.date || r.date >= cutoffStr);
       return jsonOut_({ data: active });
     }
+    if (action === "multiList") {
+      const collections = (e.parameter.collections || "").split(",").filter(Boolean);
+      const res = {};
+      collections.forEach(col => {
+        if (col.startsWith("active:")) {
+          const c = col.slice(7);
+          const cutoff = new Date();
+          cutoff.setFullYear(cutoff.getFullYear() - 1);
+          const cutoffStr = cutoff.toISOString().slice(0, 10);
+          const all = readAllRows_(c);
+          res[col] = all.filter(r => !r.date || r.date >= cutoffStr);
+        } else {
+          res[col] = readAllRowsCached_(col);
+        }
+      });
+      return jsonOut_({ data: res });
+    }
     if (action === "listSince") {
       const collection = e.parameter.collection;
       const since = e.parameter.since || "";

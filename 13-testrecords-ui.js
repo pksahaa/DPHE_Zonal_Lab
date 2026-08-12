@@ -2370,11 +2370,23 @@ function TestRecordsTab({
     // again wherever Ref Batch/Register Sample groups it.
     const memberIds = rec.memberSampleIds && rec.memberSampleIds.length ? rec.memberSampleIds : rec.sampleId ? [rec.sampleId] : [];
     if (memberIds.length) {
+      const updatedMembers = [];
       memberIds.forEach(id => {
         const member = (samples || []).find(s => s.id === id);
         if (!member) return;
-        const updated = returnRequestedTestToAnalyst(member, rec.testTypeId, rec.testTypeName, session, `Test record for "${rec.testTypeName}" (${rec.date}) was deleted — back to pending testing.`);
-        setSamples(prev => prev.map(s => s.id === id ? updated : s), updated);
+        updatedMembers.push(returnRequestedTestToAnalyst(member, rec.testTypeId, rec.testTypeName, session, `Test record for "${rec.testTypeName}" (${rec.date}) was deleted — back to pending testing.`));
+      });
+      // Update local state without per-item server calls
+      updatedMembers.forEach(u => {
+        setSamples(prev => prev.map(s => s.id === u.id ? u : s), null);
+      });
+      // Persist all sample resets in one backend call
+      DataService.list("samples").then(allSamples => {
+        const idSet = new Set(updatedMembers.map(u => u.id));
+        const merged = allSamples.map(s => idSet.has(s.id) ? updatedMembers.find(u => u.id === s.id) : s);
+        return DataService.bulkSet("samples", merged);
+      }).catch(err => {
+        console.error("Failed to persist sample resets to backend:", err);
       });
     }
     // Reset the linked Analytical Batch (sub-batch) back to "pending" so it
