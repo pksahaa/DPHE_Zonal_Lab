@@ -114,12 +114,32 @@ function groupSamplesByParamStage(samples, stage) {
 // of requiring a Sub-Batch wrapper object. ----
 function bulkMarkReviewed(sampleList, testTypeId, testTypeName, session, setSamples, notify) {
   let count = 0;
+  const updatedList = [];
   sampleList.forEach(sample => {
     const rt = (sample.requestedTests || []).find(r => r.testTypeId === testTypeId);
     if (!rt || rt.status !== "results_entered") return;
     const updated = setRequestedTestStatus(sample, testTypeId, "under_review", session);
-    setSamples(prev => prev.map(s => s.id === sample.id ? updated : s), updated);
+    updatedList.push(updated);
     count++;
+  });
+  if (!updatedList.length) return;
+  // Apply all updates to local state at once, then persist to backend.
+  // Using bulkSet via a single setSamples updater avoids firing one save
+  // per sample and ensures all changes are committed atomically.
+  updatedList.forEach(updated => {
+    setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), null);
+  });
+  // Persist all updated samples to the backend via a single bulkSet call
+  // rather than one save per sample — avoids overlapping write requests and
+  // ensures a failed backend save surfaces as a visible toast instead of
+  // being silently dropped.
+  DataService.list("samples").then(allSamples => {
+    const idSet = new Set(updatedList.map(u => u.id));
+    const merged = allSamples.map(s => idSet.has(s.id) ? updatedList.find(u => u.id === s.id) : s);
+    return DataService.bulkSet("samples", merged);
+  }).catch(err => {
+    console.error("Failed to save reviewed samples to backend:", err);
+    notify?.(`Marked reviewed in this session, but backend save failed — reload to re-check. (${err && err.message || err})`, "warn");
   });
   notify?.(`${count} sample(s) marked reviewed for ${testTypeName} — ready for final approval.`, "ok");
 }
@@ -285,7 +305,15 @@ function StageRow({ row, stage, testRecords, testTypes, parameters, references, 
   function doRelease() {
     if (!stageGate.allowed) return;
     const result = bulkReleaseParameter([sample], testTypeId, testTypeName, session);
-    result.updated.forEach(u => setSamples(prev => prev.map(s => s.id === u.id ? u : s), u));
+    result.updated.forEach(u => {
+      // Update local state immediately for instant feedback
+      setSamples(prev => prev.map(s => s.id === u.id ? u : s), null);
+      // Persist to backend; surface errors as a toast instead of silent drop
+      DataService.save("samples", u).catch(err => {
+        console.error("Failed to save released sample to backend:", err);
+        notify?.(`Released in this session, but backend save failed — reload to re-check. (${err && err.message || err})`, "warn");
+      });
+    });
     if (result.updated.length) notify?.(`${sample.sampleCode} released for ${testTypeName}.`, "ok");
   }
   const cells = [
@@ -346,8 +374,17 @@ function StageRow({ row, stage, testRecords, testTypes, parameters, references, 
           }
           try {
             const result = bulkDecideParameter([sample], testTypeId, testTypeName, payload, session);
-            result.updated.forEach(u => setSamples(prev => prev.map(s => s.id === u.id ? u : s), u));
-            if (result.updated.length) {
+            const updatedList = result.updated;
+            updatedList.forEach(u => {
+              // Update local state immediately for instant feedback
+              setSamples(prev => prev.map(s => s.id === u.id ? u : s), null);
+              // Persist to backend with error notification
+              DataService.save("samples", u).catch(err => {
+                console.error("Failed to save approved sample to backend:", err);
+                notify?.(`Approval recorded in this session, but backend save failed — reload to re-check. (${err && err.message || err})`, "warn");
+              });
+            });
+            if (updatedList.length) {
               notify?.(
                 payload.decision === "approved" ? `${sample.sampleCode} approved for ${testTypeName}.` : `${sample.sampleCode} sent back to analyst for ${testTypeName}.`,
                 payload.decision === "approved" ? "ok" : "warn"
@@ -432,7 +469,19 @@ function BatchStageTable({ rows, stage, testRecords, subBatches, testTypes, para
       function doBulkRelease() {
         if (!stageGate.allowed) return;
         const result = bulkReleaseParameter(activeSamples, bucket.testTypeId, bucket.testTypeName, session);
-        result.updated.forEach(u => setSamples(prev => prev.map(s => s.id === u.id ? u : s), u));
+        if (!result.updated.length) return;
+        // Apply all updates to local state at once for instant UI feedback
+        result.updated.forEach(u => setSamples(prev => prev.map(s => s.id === u.id ? u : s), null));
+        // Persist the full updated set to the backend in one bulkSet call
+        // to avoid concurrent write conflicts on GAS and surface any error
+        DataService.list("samples").then(allSamples => {
+          const idSet = new Set(result.updated.map(u => u.id));
+          const merged = allSamples.map(s => idSet.has(s.id) ? result.updated.find(u => u.id === s.id) : s);
+          return DataService.bulkSet("samples", merged);
+        }).catch(err => {
+          console.error("Failed to save released samples to backend:", err);
+          notify?.(`Released in this session, but backend save failed — reload to re-check. (${err && err.message || err})`, "warn");
+        });
         notify?.(`${result.updated.length} sample(s) released for ${bucket.testTypeName}.`, "ok");
       }
       const bucketSigningKey = `bucket__${bucket.key}`;
@@ -492,9 +541,22 @@ function BatchStageTable({ rows, stage, testRecords, subBatches, testTypes, para
             }
             try {
               const result = bulkDecideParameter(activeSamples, bucket.testTypeId, bucket.testTypeName, payload, session);
-              result.updated.forEach(u => setSamples(prev => prev.map(s => s.id === u.id ? u : s), u));
+              const updatedList = result.updated;
+              if (updatedList.length) {
+                // Apply all updates to local state at once for instant UI feedback
+                updatedList.forEach(u => setSamples(prev => prev.map(s => s.id === u.id ? u : s), null));
+                // Persist in one bulkSet call to avoid concurrent write conflicts
+                DataService.list("samples").then(allSamples => {
+                  const idSet = new Set(updatedList.map(u => u.id));
+                  const merged = allSamples.map(s => idSet.has(s.id) ? updatedList.find(u => u.id === s.id) : s);
+                  return DataService.bulkSet("samples", merged);
+                }).catch(err => {
+                  console.error("Failed to save approved samples to backend:", err);
+                  notify?.(`Approval recorded in this session, but backend save failed — reload to re-check. (${err && err.message || err})`, "warn");
+                });
+              }
               notify?.(
-                payload.decision === "approved" ? `${result.updated.length} sample(s) approved for ${bucket.testTypeName}.` : `${result.updated.length} sample(s) sent back to analyst for ${bucket.testTypeName}.`,
+                payload.decision === "approved" ? `${updatedList.length} sample(s) approved for ${bucket.testTypeName}.` : `${updatedList.length} sample(s) sent back to analyst for ${bucket.testTypeName}.`,
                 payload.decision === "approved" ? "ok" : "warn"
               );
             } catch (e) {

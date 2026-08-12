@@ -2224,7 +2224,14 @@ function TestRecordsTab({
     const isBatch = !!(rec.memberSampleIds && rec.memberSampleIds.length);
     const allSampleIds = isBatch ? rec.memberSampleIds : rec.sampleId ? [rec.sampleId] : [];
     const remainingIds = allSampleIds.filter(sid => !releasedIds.includes(sid));
-    const archivedSampleSnapshots = releasedIds.map(id => (samples || []).find(s => s.id === id)).filter(Boolean);
+    // Limit snapshot to ID + sampleCode + clientName only — storing full sample
+    // objects in each archived record bloated payloads and could hit GAS size
+    // limits on large batches. The Archive tab fetches full sample detail via
+    // the active samples list if needed.
+    const archivedSampleSnapshots = releasedIds.map(id => {
+      const s = (samples || []).find(x => x.id === id);
+      return s ? { id: s.id, sampleCode: s.sampleCode, clientName: s.clientName } : { id };
+    });
     const fullyReleased = remainingIds.length === 0;
     const archivedRecord = isBatch ? {
       ...rec,
@@ -2240,6 +2247,9 @@ function TestRecordsTab({
       archivedAt: new Date().toISOString(),
       archivedSampleSnapshots
     };
+    // Save to backend FIRST — only update local state after the backend
+    // confirms the save. This prevents the record from disappearing from the
+    // active list if the backend call fails, keeping the UI consistent.
     await DataService.save("archived_records", archivedRecord);
     if (fullyReleased) {
       setTestRecords(prev => prev.filter(r => r.id !== rec.id));
@@ -2367,6 +2377,19 @@ function TestRecordsTab({
         setSamples(prev => prev.map(s => s.id === id ? updated : s), updated);
       });
     }
+    // Reset the linked Analytical Batch (sub-batch) back to "pending" so it
+    // can immediately be used again in Add Test Records — without this the
+    // batch stays at "tested" status and disappears from the Add Test Record
+    // picker (which only shows pending sub-batches). The user can either
+    // re-enter test results for the same batch, or delete the batch from
+    // Analytical Batch management to start fresh with a new one.
+    if (rec.subBatchId && setSubBatches) {
+      setSubBatches(prev => prev.map(sb => sb.id === rec.subBatchId ? {
+        ...sb,
+        status: "pending",
+        testRecordId: null
+      } : sb));
+    }
     setTestRecords(prev => prev.filter(r => r.id !== rec.id));
     setDeleteRecord(null);
     DataService.appendAudit({
@@ -2375,9 +2398,9 @@ function TestRecordsTab({
       action: "delete",
       user: session.username,
       role: session.role,
-      note: `Deleted test record "${rec.testTypeName}" (${rec.date}) — ${memberIds.length} sample(s) returned to pending testing`
+      note: `Deleted test record "${rec.testTypeName}" (${rec.date}) — ${memberIds.length} sample(s) returned to pending testing; analytical batch reset to pending`
     });
-    notify("Test record deleted — consumed chemical/gas amounts were restored, and its sample(s) are back in the pending-testing queue.");
+    notify(`Test record deleted — chemical/gas amounts restored, sample(s) back in the pending-testing queue.${ rec.subBatchId ? " The analytical batch has been reset to pending — you can enter new results for it, or delete it from Analytical Batch management." : ""}`);
   }
   const q = search.trim().toLowerCase();
   const filtered = [...testRecords].reverse().filter(r => {

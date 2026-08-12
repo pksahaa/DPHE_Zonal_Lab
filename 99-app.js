@@ -588,6 +588,22 @@ function LabApp({
     });
   }, [loadReloadNonce]);
 
+  // `notify` must be defined BEFORE the auto-save useEffect blocks below so
+  // that `notifyBackendSaveError` (which calls notify) always has a live
+  // reference when those effects' .catch() handlers fire. Declaring both
+  // after the effects would leave notify as `undefined` the first time any
+  // effect ran, silently swallowing save errors instead of showing the toast.
+  const notify = useCallback((msg, tone = "ok") => {
+    setToast({
+      msg,
+      tone
+    });
+    setTimeout(() => setToast(null), 3200);
+  }, []);
+  // A failed localStorage save/load now surfaces as a toast instead of
+  // failing silently — see reportStorageError() in 00-core.js.
+  registerStorageErrorHandler(notify);
+
   // Auto-save effects below persist every in-memory change to the backend.
   // Previously these had no .catch — if a save/delete failed (network drop,
   // wrong/expired Apps Script URL, bad token, Apps Script quota, etc.) the
@@ -595,10 +611,12 @@ function LabApp({
   // received it — so on the next reload the old data would come back,
   // looking exactly like "delete doesn't work". Every write now surfaces a
   // toast on failure so a failed save is never silent.
-  const notifyBackendSaveError = (what, err) => {
+  // notifyBackendSaveError is defined after notify (above) so it always
+  // captures a live, stable notify reference — never undefined.
+  const notifyBackendSaveError = useCallback((what, err) => {
     console.error(`Failed to save ${what} to backend:`, err);
     notify(`Could not save ${what} to the backend — your change may be lost on reload. (${err && err.message || err})`, "warn");
-  };
+  }, [notify]);
   useEffect(() => {
     if (loaded && !loadHadFailures) DataService.bulkSet("chemicals", chemicals).catch(err => notifyBackendSaveError("chemicals/inventory", err));
   }, [chemicals, loaded]);
@@ -626,16 +644,6 @@ function LabApp({
   useEffect(() => {
     if (loaded && !loadHadFailures) DataService.bulkSet("subBatches", subBatches).catch(err => notifyBackendSaveError("sub-batches", err));
   }, [subBatches, loaded]);
-  const notify = useCallback((msg, tone = "ok") => {
-    setToast({
-      msg,
-      tone
-    });
-    setTimeout(() => setToast(null), 3200);
-  }, []);
-  // A failed localStorage save/load now surfaces as a toast instead of
-  // failing silently — see reportStorageError() in 00-core.js.
-  registerStorageErrorHandler(notify);
   if (!loaded) return /*#__PURE__*/React.createElement("div", {
     className: "p-8 text-sm",
     style: {
