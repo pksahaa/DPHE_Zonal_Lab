@@ -781,6 +781,8 @@ function SampleDetail({
   const [assignee, setAssignee] = React.useState(sample.assignedTo || "");
   const [editing, setEditing] = React.useState(false);
   const [editForm, setEditForm] = React.useState(null);
+  const [addParamOpen, setAddParamOpen] = React.useState(false);
+  const [addParamSelection, setAddParamSelection] = React.useState([]);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
   const [custodyAction, setCustodyAction] = React.useState(null); // target status string ("on_hold"|"rejected"|"cancelled") | null
   const isGuestUser = session?.role === "Guest";
@@ -822,6 +824,27 @@ function SampleDetail({
     onUpdate(next);
     notify?.("Registration details updated.", "ok");
     setEditing(false);
+  }
+  // Fixes "we meant to request 3 parameters but only ticked 2 at
+  // registration" — lets a missed parameter be added after the fact,
+  // for this one sample. It starts at "pending" just like any parameter
+  // picked at registration, and joins the normal pipeline from there
+  // (gets grouped into a Sub-Batch / test record like any other pending
+  // parameter). See addRequestedTests() in 20-sample-model.js.
+  const notYetRequestedTypes = (testTypes || []).filter(t => !(sample.requestedTests || []).some(rt => rt.testTypeId === t.id));
+  function toggleAddParamSelection(t) {
+    setAddParamSelection(prev => prev.some(x => x.testTypeId === t.id) ? prev.filter(x => x.testTypeId !== t.id) : [...prev, {
+      testTypeId: t.id,
+      testTypeName: t.name
+    }]);
+  }
+  function confirmAddParams() {
+    if (!addParamSelection.length) return;
+    const next = addRequestedTests(sample, addParamSelection, session);
+    onUpdate(next);
+    notify?.(`Added ${addParamSelection.map(t => t.testTypeName).join(", ")} to this sample's requested tests.`, "ok");
+    setAddParamSelection([]);
+    setAddParamOpen(false);
   }
   const step = sample.status === "results_entered" ? "review" : sample.status === "under_review" ? "approve" : null;
   // QC status check — only relevant once results are in and someone is about
@@ -1032,7 +1055,54 @@ function SampleDetail({
     color: C.warn,
     title: "Delete this sample (no test records linked yet)",
     onClick: guardSampleAction(canDeleteAllowed, () => setConfirmDelete(true))
-  }))), deleteConfirmPanel, editPanel, qcWarnings.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }))), deleteConfirmPanel, editPanel, addParamOpen ? /*#__PURE__*/React.createElement("div", {
+    className: "mb-3 p-3 rounded",
+    style: {
+      background: C.bg,
+      border: `1px solid ${C.border}`
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs font-semibold mb-1.5",
+    style: {
+      color: C.ink
+    }
+  }, "Add Parameter(s) to This Sample"), notYetRequestedTypes.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "text-xs mb-2",
+    style: {
+      color: C.muted
+    }
+  }, "Every available test type is already requested for this sample.") : /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-1.5 mb-2"
+  }, notYetRequestedTypes.map(t => {
+    const on = addParamSelection.some(x => x.testTypeId === t.id);
+    return /*#__PURE__*/React.createElement("button", {
+      key: t.id,
+      type: "button",
+      onClick: () => toggleAddParamSelection(t),
+      className: "px-2.5 py-1 rounded-full text-xs font-medium border",
+      style: {
+        borderColor: on ? C.teal : C.border,
+        background: on ? `${C.teal}14` : "transparent",
+        color: on ? C.teal : C.ink
+      }
+    }, t.name);
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end gap-2"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "outline",
+    size: "sm",
+    onClick: () => {
+      setAddParamOpen(false);
+      setAddParamSelection([]);
+    }
+  }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
+    size: "sm",
+    disabled: !addParamSelection.length,
+    onClick: confirmAddParams
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "check",
+    size: 12
+  }), `Add ${addParamSelection.length || ""} Parameter${addParamSelection.length === 1 ? "" : "s"}`))) : null, qcWarnings.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "mb-3 p-3 rounded text-xs",
     style: {
       background: qcWarnings.some(w => w.status.hasReject) ? C.warnBg : C.infoBg,
@@ -1116,7 +1186,14 @@ function SampleDetail({
     return /*#__PURE__*/React.createElement(React.Fragment, {
       key: t.testTypeId
     }, chipRow);
-  })), !!sample.linkedTestRecordIds.length && /*#__PURE__*/React.createElement("div", {
+  })), canEdit && !addParamOpen && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "text-[11px] underline mt-1",
+    style: {
+      color: C.teal
+    },
+    onClick: guardSampleAction(canEditAllowed, () => setAddParamOpen(true))
+  }, "+ Add Parameter"), !!sample.linkedTestRecordIds.length && /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] mt-1.5",
     style: {
       color: C.muted
@@ -2244,6 +2321,8 @@ function SamplesTab({
   // wiped; testing/results must be undone first (delete the Test Record /
   // Analytical Batch) the same way that's already required elsewhere.
   const [deleteReferenceId, setDeleteReferenceId] = React.useState(null);
+  const [addBatchParamRefId, setAddBatchParamRefId] = React.useState(null);
+  const [addBatchParamSelection, setAddBatchParamSelection] = React.useState([]);
   function referenceMembers(refId) {
     return samples.filter(s => s.referenceId === refId);
   }
@@ -2275,6 +2354,31 @@ function SamplesTab({
     });
     notify?.(`Ref Batch "${referenceDisplayLabel(ref)}" and its ${memberIds.length} sample(s) deleted.`, "ok");
     setDeleteReferenceId(null);
+  }
+  // Batch version of the same fix as SampleDetail's "+ Add Parameter" — a
+  // batch registered together can just as easily have missed a parameter
+  // at registration time as a single sample can. Applies the same new
+  // parameter(s) to every member sample of this Reference batch in one go;
+  // each sample that doesn't already have that parameter gets it added at
+  // "pending" (samples that already had it are silently skipped, no error).
+  async function handleAddParamsToBatch(refId, newTests) {
+    const members = referenceMembers(refId);
+    let count = 0;
+    for (const s of members) {
+      const next = addRequestedTests(s, newTests, session);
+      if (next !== s) {
+        await handleUpdate(next);
+        count++;
+      }
+    }
+    return count;
+  }
+  async function confirmAddBatchParams() {
+    if (!addBatchParamSelection.length || !addBatchParamRefId) return;
+    const count = await handleAddParamsToBatch(addBatchParamRefId, addBatchParamSelection);
+    notify?.(count > 0 ? `Added ${addBatchParamSelection.map(t => t.testTypeName).join(", ")} to ${count} sample(s) in this batch.` : "Every sample in this batch already had all the selected parameter(s) — nothing to add.", count > 0 ? "ok" : "warn");
+    setAddBatchParamSelection([]);
+    setAddBatchParamRefId(null);
   }
   async function handleBatchCreate(shared, rows, ref) {
     let runningSamples = [...samples];
@@ -2741,6 +2845,17 @@ function SamplesTab({
       className: "flex-1"
     }), /*#__PURE__*/React.createElement(BatchStatusSummary, {
       members: item.members
+    }), item.reference && registerGate.visible && /*#__PURE__*/React.createElement(IconButton, {
+      name: "plus",
+      color: C.teal,
+      title: "Add a parameter to every sample in this batch",
+      onClick: e => {
+        e.stopPropagation();
+        registerGate.guard(() => {
+          setAddBatchParamSelection([]);
+          setAddBatchParamRefId(item.referenceId);
+        })();
+      }
     }), item.reference && /*#__PURE__*/React.createElement(IconButton, {
       name: "trash",
       color: C.danger,
@@ -2749,7 +2864,60 @@ function SamplesTab({
         e.stopPropagation();
         setDeleteReferenceId(item.referenceId);
       }
-    })))), deleteReferenceId === item.referenceId && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    })))), addBatchParamRefId === item.referenceId && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+      colSpan: activeColumns.length,
+      className: "px-3 pb-2"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "p-3 rounded",
+      style: {
+        background: C.bg,
+        border: `1px solid ${C.border}`
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-xs font-semibold mb-1.5",
+      style: {
+        color: C.ink
+      }
+    }, `Add Parameter(s) to All ${item.members.length} Sample(s) in This Batch`), /*#__PURE__*/React.createElement("div", {
+      className: "text-[11px] mb-2",
+      style: {
+        color: C.muted
+      }
+    }, "Only samples that don't already have a selected parameter will get it added — the rest are left as-is."), /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-wrap gap-1.5 mb-2"
+    }, (testTypes || []).map(t => {
+      const on = addBatchParamSelection.some(x => x.testTypeId === t.id);
+      return /*#__PURE__*/React.createElement("button", {
+        key: t.id,
+        type: "button",
+        onClick: () => setAddBatchParamSelection(prev => prev.some(x => x.testTypeId === t.id) ? prev.filter(x => x.testTypeId !== t.id) : [...prev, {
+          testTypeId: t.id,
+          testTypeName: t.name
+        }]),
+        className: "px-2.5 py-1 rounded-full text-xs font-medium border",
+        style: {
+          borderColor: on ? C.teal : C.border,
+          background: on ? `${C.teal}14` : "transparent",
+          color: on ? C.teal : C.ink
+        }
+      }, t.name);
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "flex justify-end gap-2"
+    }, /*#__PURE__*/React.createElement(Button, {
+      variant: "outline",
+      size: "sm",
+      onClick: () => {
+        setAddBatchParamRefId(null);
+        setAddBatchParamSelection([]);
+      }
+    }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
+      size: "sm",
+      disabled: !addBatchParamSelection.length,
+      onClick: confirmAddBatchParams
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: "check",
+      size: 12
+    }), `Add ${addBatchParamSelection.length || ""} Parameter${addBatchParamSelection.length === 1 ? "" : "s"}`))))), deleteReferenceId === item.referenceId && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
       colSpan: activeColumns.length,
       className: "px-3"
     }, /*#__PURE__*/React.createElement(ConfirmBar, {

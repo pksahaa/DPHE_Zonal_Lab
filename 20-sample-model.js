@@ -163,6 +163,41 @@ function setRequestedTestStatus(sample, testTypeId, newStatus, user, note) {
   }, user);
 }
 
+// Add one or more brand-new parameters to a sample that's already been
+// registered — the fix for "we meant to request 3 parameters but only
+// ticked 2 at registration". Each new parameter starts at "pending" (exactly
+// like a parameter picked at registration) and is skipped if the sample
+// already has it (no duplicates). The whole-sample status is re-rolled the
+// same way setRequestedTestStatus() does it, so adding a pending parameter
+// to an already Approved/Released sample correctly pulls its rollup status
+// back down — the sample isn't genuinely "Released" as a whole while one of
+// its parameters hasn't even started. Returns `sample` unchanged (no-op, no
+// custody event) if every requested testTypeId was already present.
+function addRequestedTests(sample, newTests, user) {
+  const existingIds = new Set((sample.requestedTests || []).map(rt => rt.testTypeId));
+  const toAdd = (newTests || []).filter(t => t && t.testTypeId && !existingIds.has(t.testTypeId));
+  if (!toAdd.length) return sample;
+  const stampedNew = toAdd.map(t => ({
+    status: "pending",
+    testTypeId: t.testTypeId,
+    testTypeName: t.testTypeName
+  }));
+  const nextRequestedTests = [...(sample.requestedTests || []), ...stampedNew];
+  const withTests = {
+    ...sample,
+    requestedTests: nextRequestedTests
+  };
+  const next = {
+    ...withTests,
+    status: rollupSampleStatus(withTests)
+  };
+  return addCustodyEvent(next, {
+    action: "Parameter(s) Added",
+    toUser: user?.name,
+    notes: `Added to requested tests: ${stampedNew.map(t => t.testTypeName).join(", ")}.`
+  }, user);
+}
+
 // Bulk-move every requestedTest currently sitting at any of `fromStatuses`
 // up to `toStatus` — used when a whole-sample, signature-gated decision
 // (addApproval / releaseResults) needs to bring every parameter waiting at
