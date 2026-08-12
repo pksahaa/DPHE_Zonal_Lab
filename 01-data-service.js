@@ -122,6 +122,7 @@ const DataService = (() => {
   }
   async function gasCallOnce(action, {
     collection,
+    collections,
     payload
   } = {}) {
     const {
@@ -135,7 +136,7 @@ const DataService = (() => {
         token: token || ""
       });
       if (collection) qs.set("collection", collection);
-      if (opts.collections) qs.set("collections", opts.collections);
+      if (collections) qs.set("collections", collections);
       const res = await fetch(`${gasUrl}?${qs.toString()}`, {
         method: "GET"
       });
