@@ -102,7 +102,7 @@ function ReferencePicker({
     await setReferences(prev => [...prev, result.reference], result.reference);
     onChange(result.reference.id);
     setShowNew(false);
-    notify?.(`Client entry ${result.reference.refNo} created.`, "ok");
+    notify?.(`Client entry ${result.reference.refNo} created.${result.isDuplicateTrackingNo ? ` Tracking No. "${(result.reference.trackingNo || "").trim()}" matches an existing batch — these samples will be grouped under it.` : ""}`, "ok");
     setNewForm({ ...CLIENT_PART_EMPTY });
     setNewErr("");
   }
@@ -244,13 +244,15 @@ function ClientPartFields({
   setForm,
   references
 }) {
-  // Tracking No. is required + must be unique across Client entries. These
-  // two bits of local UI state drive the inline red-asterisk/red-border
-  // validation below and the "must be unique" popup modal, without
-  // affecting the shared submit-time validation in submitClientPart()
-  // (which still runs, and still wins, when the form is actually submitted).
+  // Tracking No. is required, but is intentionally allowed to repeat — a
+  // single batch of samples legitimately shares one Tracking No. These bits
+  // of local UI state just drive the inline red-asterisk/red-border
+  // "required" validation and the (non-blocking) "same batch" info note
+  // below, without affecting the shared submit-time validation in
+  // submitClientPart() (which still runs when the form is actually
+  // submitted, and no longer blocks on a repeated Tracking No. either).
   const [trackingTouched, setTrackingTouched] = React.useState(false);
-  const [showDupModal, setShowDupModal] = React.useState(false);
+  const [showDupInfoModal, setShowDupInfoModal] = React.useState(false);
   function set(field, value) {
     setForm(prev => ({
       ...prev,
@@ -259,23 +261,24 @@ function ClientPartFields({
   }
   const trackingNoTrimmed = (form.trackingNo || "").trim();
   const isDuplicateTrackingNo = !!trackingNoTrimmed && isTrackingNoTaken(form.trackingNo, references);
-  const trackingNoError = trackingTouched && !trackingNoTrimmed ? "Tracking No. is required." : isDuplicateTrackingNo ? `Tracking No. "${trackingNoTrimmed}" is already used by another Client entry — it must be unique.` : "";
+  const trackingNoError = trackingTouched && !trackingNoTrimmed ? "Tracking No. is required." : "";
+  const trackingNoInfo = !trackingNoError && isDuplicateTrackingNo ? `Tracking No. "${trackingNoTrimmed}" is already in use — these samples will be grouped under the same Tracking No.` : "";
   function checkTrackingNoOnBlur() {
     setTrackingTouched(true);
     if (trackingNoTrimmed && isTrackingNoTaken(form.trackingNo, references)) {
-      setShowDupModal(true);
+      setShowDupInfoModal(true);
     }
   }
-  return /*#__PURE__*/React.createElement("div", null, showDupModal && /*#__PURE__*/React.createElement(Modal, {
-    title: "Tracking No. must be unique",
-    onClose: () => setShowDupModal(false)
+  return /*#__PURE__*/React.createElement("div", null, showDupInfoModal && /*#__PURE__*/React.createElement(Modal, {
+    title: "Same Tracking No. as an existing batch",
+    onClose: () => setShowDupInfoModal(false)
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-sm",
     style: { color: C.ink }
-  }, `Tracking No. "${trackingNoTrimmed}" is already used by another Client entry. Please enter a different Tracking No., or use "Generate" to create a new unique one.`), /*#__PURE__*/React.createElement("div", {
+  }, `Tracking No. "${trackingNoTrimmed}" is already used by another Client entry. That's fine if these samples belong to the same batch — they'll be grouped under it. If they don't, enter a different Tracking No., or use "Generate" for a new one.`), /*#__PURE__*/React.createElement("div", {
     className: "flex justify-end mt-3"
   }, /*#__PURE__*/React.createElement(Button, {
-    onClick: () => setShowDupModal(false)
+    onClick: () => setShowDupInfoModal(false)
   }, "OK"))), /*#__PURE__*/React.createElement("div", {
     className: "text-xs font-semibold mb-1.5",
     style: {
@@ -363,10 +366,13 @@ function ClientPartFields({
       color: C.ink,
       background: C.card
     }
-  }, "Generate")), !trackingNoError && /*#__PURE__*/React.createElement("span", {
+  }, "Generate")), trackingNoInfo ? /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] flex items-center gap-1",
+    style: { color: C.teal }
+  }, /*#__PURE__*/React.createElement(Icon, { name: "info", size: 11 }), trackingNoInfo) : !trackingNoError && /*#__PURE__*/React.createElement("span", {
     className: "text-[11px]",
     style: { color: C.muted }
-  }, "Must be unique.")), /*#__PURE__*/React.createElement("div", {
+  }, "Samples from the same batch/delivery should share the same Tracking No.")), /*#__PURE__*/React.createElement("div", {
     style: { minWidth: 0 }
   }, /*#__PURE__*/React.createElement(TextField, {
     simple: true,
@@ -386,17 +392,17 @@ function ClientPartFields({
   })));
 }
 // Validates the Client Part form + actually creates the Reference. Shared
-// by the registration form and the bulk-upload popup so the Tracking No.
-// uniqueness rule and field mapping only live in one place.
+// by the registration form and the bulk-upload popup so field mapping only
+// lives in one place. Tracking No. is required, but — since one batch of
+// samples legitimately shares a single Tracking No. — it is NOT required to
+// be unique across Client entries. When it repeats an existing one, the
+// caller gets `isDuplicateTrackingNo: true` on a successful result so it can
+// surface an informational (non-blocking) message that the new samples will
+// be grouped under that same Tracking No.
 function submitClientPart(form, references, session) {
   if (!(form.trackingNo || "").trim()) {
     return {
       error: "Tracking No. is required."
-    };
-  }
-  if (isTrackingNoTaken(form.trackingNo, references)) {
-    return {
-      error: `Tracking No. "${form.trackingNo.trim()}" is already used by another Client entry — it must be unique.`
     };
   }
   if (form.sourceType === "others" && !form.sourceTypeOther.trim()) {
@@ -409,9 +415,11 @@ function submitClientPart(form, references, session) {
       error: "Please specify the Client Type."
     };
   }
+  const isDuplicateTrackingNo = isTrackingNoTaken(form.trackingNo, references);
   const reference = createReference(form, references, session);
   return {
-    reference
+    reference,
+    isDuplicateTrackingNo
   };
 }
 
@@ -1608,6 +1616,9 @@ function BatchRegistrationForm({
     }
     setReferences(prev => [...prev, result.reference], result.reference);
     setSaving(true);
+    if (result.isDuplicateTrackingNo) {
+      notify?.(`Tracking No. "${(result.reference.trackingNo || "").trim()}" matches an existing batch — these samples will be grouped under it.`, "ok");
+    }
     await onCreate({
       ...shared,
       requestedTests: selectedTests
@@ -1836,6 +1847,9 @@ function ImportTestPickerModal({
     }
     setReferences(prev => [...prev, result.reference], result.reference);
     setSaving(true);
+    if (result.isDuplicateTrackingNo) {
+      notify?.(`Tracking No. "${(result.reference.trackingNo || "").trim()}" matches an existing batch — these samples will be grouped under it.`, "ok");
+    }
     await onConfirm(selectedTests, result.reference, { collectionDateFrom, collectionDateTo, priority });
     setSaving(false);
   }

@@ -101,7 +101,7 @@ function archiveBatchLabel(rec) {
 // has since changed or been removed. Pass `onlySampleId` to print just one
 // member of a batch record; omit it to print every sample the record
 // covers together as one certificate.
-function printArchivedRecord(rec, testTypes, onlySampleId) {
+async function printArchivedRecord(rec, testTypes, onlySampleId) {
   const testType = (testTypes || []).find(t => t.id === rec.testTypeId) || {
     id: rec.testTypeId,
     name: rec.testTypeName || "Test",
@@ -117,8 +117,13 @@ function printArchivedRecord(rec, testTypes, onlySampleId) {
     upazila: ""
   }];
   const selectedSamples = onlySampleId ? allSnaps.filter(s => s.id === onlySampleId) : allSnaps;
+  // Open the popup synchronously (before any await) so it isn't blocked,
+  // then fill it in once the letterhead logos are resolved — see
+  // 17-report-generator.js for why this two-step dance is needed.
+  const reportWindow = openReportPrintWindow();
+  const labIdentity = await resolveLabIdentityLogos(getLabIdentity());
   const html = buildReportHtml({
-    labIdentity: getLabIdentity(),
+    labIdentity,
     memo: {
       memoNo: "",
       date: todayStr(),
@@ -146,7 +151,7 @@ function printArchivedRecord(rec, testTypes, onlySampleId) {
       }]
     }
   });
-  printOfficialReport(html);
+  finishReportPrintWindow(reportWindow, html);
 }
 
 // Plain CSV (no XLSX dependency needed for a flat export like this) —
