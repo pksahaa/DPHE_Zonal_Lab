@@ -481,7 +481,13 @@ function CustomReportGeneratorPage({
     // lab necessarily runs every parameter through the formal review step.
     if (setSamples) {
       const notYetApproved = [];
-      selectedSamples.forEach(sample => {
+      // Same fix as markMembersInProgress()/doDeleteSubBatch() in
+      // 21-sample-ui.js — compute every sample's update in one pure pass,
+      // then persist all of them in a single bulk call instead of one
+      // setSamples() round trip per sample (a report often covers a whole
+      // batch at once).
+      const changed = [];
+      const nextSamples = selectedSamples.reduce((acc, sample) => {
         let updated = sample;
         selectedTests.forEach(t => {
           const rt = (sample.requestedTests || []).find(r => r.testTypeId === t.id);
@@ -492,10 +498,11 @@ function CustomReportGeneratorPage({
             notYetApproved.push(`${sample.sampleCode} — ${t.name}`);
           }
         });
-        if (updated !== sample) {
-          setSamples(prev => prev.map(s => s.id === sample.id ? updated : s), updated);
-        }
-      });
+        if (updated === sample) return acc;
+        changed.push(updated);
+        return acc.map(s => s.id === sample.id ? updated : s);
+      }, samples || selectedSamples);
+      if (changed.length) setSamples(() => nextSamples, changed);
       if (notYetApproved.length) {
         notify?.(`Report generated — but ${notYetApproved.length} parameter(s) hadn't been through final approval yet, so they weren't marked Released: ${notYetApproved.slice(0, 5).join(", ")}${notYetApproved.length > 5 ? "…" : ""}.`, "warn");
       }

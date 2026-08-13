@@ -2341,12 +2341,14 @@ function SamplesTab({
     // awaited). Importing 50 samples used to mean 100 sequential requests —
     // slow enough to time out or get interrupted partway through, which
     // silently left only some rows actually saved with no clear error
-    // ("50 samples doesn't upload properly"). A single bulkSet is both much
-    // faster and all-or-nothing from the app's point of view: either it
+    // ("50 samples doesn't upload properly"). bulkUpsert only needs to send
+    // (and only touches) the newly-created rows — not the whole samples
+    // table — so this stays fast as the table grows into the thousands,
+    // and is all-or-nothing from the app's point of view: either it
     // succeeds and local state is updated to match, or it throws and
     // NOTHING is marked as imported — no silent partial batches.
     try {
-      await DataService.bulkSet("samples", runningSamples);
+      await DataService.bulkUpsert("samples", newSamples);
     } catch (e) {
       notify(`Import failed before anything was saved: ${e.message}. Nothing was partially imported — fix the issue (check Settings ▸ Backend Settings) and try the same file again.`, "warn");
       return;
@@ -2520,12 +2522,14 @@ function SamplesTab({
       runningSamples = [...runningSamples, sample];
       newSamples.push(sample);
     }
-    // Same reasoning as confirmImportSamples above: one bulkSet instead of
-    // one save+appendAudit round-trip per row — a large batch (many water
-    // points under one Reference) used to mean dozens of sequential
+    // Same reasoning as confirmImportSamples above: one bulkUpsert instead
+    // of one save+appendAudit round-trip per row — a large batch (many
+    // water points under one Reference) used to mean dozens of sequential
     // requests, slow enough to partially fail with no clear signal.
+    // bulkUpsert only sends/touches the newly-created rows, not the whole
+    // samples table, so this stays fast as the table grows.
     try {
-      await DataService.bulkSet("samples", runningSamples);
+      await DataService.bulkUpsert("samples", newSamples);
     } catch (e) {
       notify(`Batch registration failed before anything was saved: ${e.message}. Nothing was partially registered — try again.`, "warn");
       return;
@@ -3340,14 +3344,27 @@ function SubBatchBuilder({
   }
   function markMembersInProgress(memberIds, testTypeId) {
     if (!setSamples) return;
-    memberIds.forEach(id => {
-      const member = (samples || []).find(s => s.id === id);
-      if (!member) return;
+    // Computed as one pure pass over the current `samples` prop (not
+    // inside the setSamples updater — that runs the callback separately
+    // for local state vs. persistence, and this needs to happen exactly
+    // once) then persisted in a SINGLE bulk call — see setSamples() in
+    // 99-app.js for why looping N individual setSamples() calls here (one
+    // save + one audit-log append each) was the real cause of a second
+    // Analytical Batch, created right after the first, sometimes failing
+    // to save: N+N sequential round trips through the backend's shared
+    // write lock can genuinely queue long enough to time out.
+    const idSet = new Set(memberIds);
+    const changed = [];
+    const nextSamples = (samples || []).map(member => {
+      if (!idSet.has(member.id)) return member;
       const rt = (member.requestedTests || []).find(r => r.testTypeId === testTypeId);
-      if (!rt || rt.status !== "pending") return; // already past pending, or edit removed it — leave alone
+      if (!rt || rt.status !== "pending") return member; // already past pending, or edit removed it — leave alone
       const updated = setRequestedTestStatus(member, testTypeId, "in_progress", session);
-      setSamples(prev => prev.map(s => s.id === id ? updated : s), updated);
+      changed.push(updated);
+      return updated;
     });
+    if (!changed.length) return;
+    setSamples(() => nextSamples, changed);
   }
   function createGroup() {
     if (creatingRef.current) return;
@@ -3433,14 +3450,20 @@ function SubBatchBuilder({
     // key off whether a *pending* sub-batch still references it, not off
     // this stored field — but resetting it keeps what's displayed honest.
     if (setSamples && sb.status === "pending") {
-      (sb.memberSampleIds || []).forEach(id => {
-        const member = (samples || []).find(s => s.id === id);
-        if (!member) return;
+      // Same fix as markMembersInProgress() above — one pure pass +
+      // one bulk persisted call instead of one setSamples() round trip per
+      // member sample.
+      const idSet = new Set(sb.memberSampleIds || []);
+      const changed = [];
+      const nextSamples = (samples || []).map(member => {
+        if (!idSet.has(member.id)) return member;
         const rt = (member.requestedTests || []).find(r => r.testTypeId === sb.testTypeId);
-        if (!rt || rt.status !== "in_progress") return;
+        if (!rt || rt.status !== "in_progress") return member;
         const updated = setRequestedTestStatus(member, sb.testTypeId, "pending", session, `Analytical batch "${sb.label}" deleted — back to pending testing.`);
-        setSamples(prev => prev.map(s => s.id === id ? updated : s), updated);
+        changed.push(updated);
+        return updated;
       });
+      if (changed.length) setSamples(() => nextSamples, changed);
     }
     DataService.appendAudit({
       entity: "subBatch",

@@ -464,17 +464,37 @@ function LabApp({
   }, [loadReloadNonce]);
   const setSamples = useCallback(async (updater, changedRecord) => {
     setSamplesState(prev => updater(prev));
-    if (changedRecord) {
-      await DataService.save("samples", changedRecord);
-      await DataService.appendAudit({
+    if (!changedRecord) return;
+    // Bulk mode — pass an ARRAY of changed records when one user action
+    // updates several samples together (e.g. every member of a new
+    // Analytical Batch flipping to "in_progress" at once). This does ONE
+    // bulkUpsert + ONE bulkAppendAudit round trip instead of N of each —
+    // with N of both queued up through the backend's shared write lock, a
+    // second action fired right after the first could wait long enough to
+    // time out and silently be dropped. See markMembersInProgress() in
+    // 21-sample-ui.js for the call site this exists for.
+    if (Array.isArray(changedRecord)) {
+      if (!changedRecord.length) return;
+      await DataService.bulkUpsert("samples", changedRecord);
+      await DataService.bulkAppendAudit(changedRecord.map(rec => ({
         entity: "sample",
-        entityId: changedRecord.id,
-        sampleCode: changedRecord.sampleCode,
-        action: changedRecord.status,
+        entityId: rec.id,
+        sampleCode: rec.sampleCode,
+        action: rec.status,
         user: session.name,
         role: session.role
-      });
+      })));
+      return;
     }
+    await DataService.save("samples", changedRecord);
+    await DataService.appendAudit({
+      entity: "sample",
+      entityId: changedRecord.id,
+      sampleCode: changedRecord.sampleCode,
+      action: changedRecord.status,
+      user: session.name,
+      role: session.role
+    });
   }, [session.name, session.role]);
 
   // >>> PHASE 1: Reference collection — the real source-of-truth for who a

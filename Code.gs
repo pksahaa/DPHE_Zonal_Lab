@@ -188,6 +188,61 @@ function replaceAllRows_(collection, records) {
   invalidateCache_(collection);
   return records;
 }
+// Updates/inserts several records in ONE call — unlike replaceAllRows_
+// (bulkSet), this only touches the given records; everything else already
+// in the sheet is left alone. Used wherever a single user action changes
+// many records of a collection that's normally saved one row at a time
+// (e.g. every member sample of a new Analytical Batch flipping to
+// "in_progress" together) — doing that as N separate upsertRow_ calls means
+// N round trips through the shared write lock (see WRITE_ACTIONS_ below);
+// queue enough of those up (worse, doubled by N audit-log appends
+// alongside them) and a second action fired right after the first can
+// genuinely wait long enough to time out and get dropped. One bulkUpsert_
+// call reads the sheet once and writes every changed/new row in a single
+// pass instead.
+function bulkUpsertRows_(collection, records) {
+  const sheet = getSheet_(collection);
+  const lastRow = sheet.getLastRow();
+  const now = new Date().toISOString();
+  const idIndex = {};
+  if (lastRow >= 2) {
+    sheet.getRange(2, 1, lastRow - 1, 1).getValues().forEach(([id], i) => {
+      if (id) idIndex[id] = i + 2; // sheet row number
+    });
+  }
+  const toAppend = [];
+  const stampedRecords = [];
+  (records || []).forEach(record => {
+    const stamped = Object.assign({}, record, { updatedAt: now });
+    stampedRecords.push(stamped);
+    const rowValues = [stamped.id, JSON.stringify(stamped), now];
+    const rowIndex = idIndex[record.id];
+    if (rowIndex) {
+      sheet.getRange(rowIndex, 1, 1, 3).setValues([rowValues]);
+    } else {
+      toAppend.push(rowValues);
+    }
+  });
+  if (toAppend.length) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, toAppend.length, 3).setValues(toAppend);
+  }
+  invalidateCache_(collection);
+  return stampedRecords;
+}
+// Appends several already-stamped audit-log entries (each already carrying
+// its own id/ts from the client) in one sheet write instead of one
+// upsertRow_ call per entry — same reasoning as bulkUpsertRows_ above.
+function bulkAppendAuditRows_(entries) {
+  const sheet = getSheet_("auditLog");
+  const now = new Date().toISOString();
+  const list = entries || [];
+  if (list.length) {
+    const rows = list.map(e => [e.id, JSON.stringify(e), now]);
+    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 3).setValues(rows);
+  }
+  invalidateCache_("auditLog");
+  return list;
+}
 
 function handleLogin_(payload) {
   const { username, passwordHash } = payload || {};
@@ -269,7 +324,7 @@ function doGet(e) {
 // genuinely do run concurrent executions. LockService serializes just the
 // write path (reads stay lock-free/fast) so one write always finishes
 // before the next one starts touching the same spreadsheet.
-const WRITE_ACTIONS_ = new Set(["save", "remove", "bulkSet", "appendAudit", "restoreRecord"]);
+const WRITE_ACTIONS_ = new Set(["save", "remove", "bulkSet", "bulkUpsert", "bulkAppendAudit", "appendAudit", "restoreRecord"]);
 function doPost(e) {
   try {
     const body = JSON.parse(e.postData.contents || "{}");
@@ -291,6 +346,10 @@ function doPost(e) {
           return jsonOut_({ data: { ok: true } });
         case "bulkSet":
           return jsonOut_({ data: replaceAllRows_(collection, payload) });
+        case "bulkUpsert":
+          return jsonOut_({ data: bulkUpsertRows_(collection, payload) });
+        case "bulkAppendAudit":
+          return jsonOut_({ data: bulkAppendAuditRows_(payload) });
         case "appendAudit":
           return jsonOut_({ data: upsertRow_("auditLog", payload) });
         case "restoreRecord":

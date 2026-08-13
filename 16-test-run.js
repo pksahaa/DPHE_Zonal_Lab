@@ -166,12 +166,10 @@ function TestRunTab({
           setSamples(prev => prev.map(s => s.id === u.id ? u : s), null);
         });
         
-        // Persist all changes in one bulkSet call
-        DataService.list("samples").then(allSamples => {
-          const idSet = new Set(updatedMembers.map(u => u.id));
-          const merged = allSamples.map(s => idSet.has(s.id) ? updatedMembers.find(u => u.id === s.id) : s);
-          return DataService.bulkSet("samples", merged);
-        }).then(() => {
+        // Persist all changes in one bulkUpsert call — only these rows,
+        // no full-table re-fetch/replace, so it's fast even with a huge
+        // samples table and can't race with another bulk action.
+        DataService.bulkUpsert("samples", updatedMembers).then(() => {
           // One audit entry summarizing the batch action
           return DataService.appendAudit({
             entity: "sample",

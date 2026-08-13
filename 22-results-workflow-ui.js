@@ -129,15 +129,12 @@ function bulkMarkReviewed(sampleList, testTypeId, testTypeName, session, setSamp
   updatedList.forEach(updated => {
     setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), null);
   });
-  // Persist all updated samples to the backend via a single bulkSet call
-  // rather than one save per sample — avoids overlapping write requests and
-  // ensures a failed backend save surfaces as a visible toast instead of
-  // being silently dropped.
-  DataService.list("samples").then(allSamples => {
-    const idSet = new Set(updatedList.map(u => u.id));
-    const merged = allSamples.map(s => idSet.has(s.id) ? updatedList.find(u => u.id === s.id) : s);
-    return DataService.bulkSet("samples", merged);
-  }).catch(err => {
+  // Persist all updated samples to the backend via a single bulkUpsert call
+  // (touches only these rows — no re-fetching the whole samples table
+  // first) rather than one save per sample — avoids overlapping write
+  // requests and ensures a failed backend save surfaces as a visible toast
+  // instead of being silently dropped.
+  DataService.bulkUpsert("samples", updatedList).catch(err => {
     console.error("Failed to save reviewed samples to backend:", err);
     notify?.(`Marked reviewed in this session, but backend save failed — reload to re-check. (${err && err.message || err})`, "warn");
   });
@@ -472,13 +469,10 @@ function BatchStageTable({ rows, stage, testRecords, subBatches, testTypes, para
         if (!result.updated.length) return;
         // Apply all updates to local state at once for instant UI feedback
         result.updated.forEach(u => setSamples(prev => prev.map(s => s.id === u.id ? u : s), null));
-        // Persist the full updated set to the backend in one bulkSet call
-        // to avoid concurrent write conflicts on GAS and surface any error
-        DataService.list("samples").then(allSamples => {
-          const idSet = new Set(result.updated.map(u => u.id));
-          const merged = allSamples.map(s => idSet.has(s.id) ? result.updated.find(u => u.id === s.id) : s);
-          return DataService.bulkSet("samples", merged);
-        }).catch(err => {
+        // Persist the changed rows in one bulkUpsert call — no full-table
+        // re-fetch/replace, so it's fast even with a huge samples table and
+        // can't race with another bulk action landing around the same time.
+        DataService.bulkUpsert("samples", result.updated).catch(err => {
           console.error("Failed to save released samples to backend:", err);
           notify?.(`Released in this session, but backend save failed — reload to re-check. (${err && err.message || err})`, "warn");
         });
@@ -545,12 +539,10 @@ function BatchStageTable({ rows, stage, testRecords, subBatches, testTypes, para
               if (updatedList.length) {
                 // Apply all updates to local state at once for instant UI feedback
                 updatedList.forEach(u => setSamples(prev => prev.map(s => s.id === u.id ? u : s), null));
-                // Persist in one bulkSet call to avoid concurrent write conflicts
-                DataService.list("samples").then(allSamples => {
-                  const idSet = new Set(updatedList.map(u => u.id));
-                  const merged = allSamples.map(s => idSet.has(s.id) ? updatedList.find(u => u.id === s.id) : s);
-                  return DataService.bulkSet("samples", merged);
-                }).catch(err => {
+                // Persist in one bulkUpsert call (changed rows only) —
+                // avoids both the full-table re-fetch/replace cost and the
+                // race it opened up against another bulk action.
+                DataService.bulkUpsert("samples", updatedList).catch(err => {
                   console.error("Failed to save approved samples to backend:", err);
                   notify?.(`Approval recorded in this session, but backend save failed — reload to re-check. (${err && err.message || err})`, "warn");
                 });

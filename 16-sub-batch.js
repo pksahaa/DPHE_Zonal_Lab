@@ -291,16 +291,24 @@ function reviewSubBatchApprove(sb, samples, setSamples, setSubBatches, session, 
     updatedList.forEach(updated => {
       setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), null);
     });
-    
-    DataService.list("samples").then(allSamples => {
-      const idSet = new Set(updatedList.map(u => u.id));
-      const merged = allSamples.map(s => idSet.has(s.id) ? updatedList.find(u => u.id === s.id) : s);
-      return DataService.bulkSet("samples", merged);
-    }).catch(err => {
+    // bulkUpsert only touches these rows — no re-fetching the whole
+    // samples table first (slow once it's huge) and no race if another
+    // bulk action lands on the backend around the same time (see
+    // bulkApproveSubBatch/bulkReleaseSubBatch below and setSamples() in
+    // 99-app.js for the full story on why the old list-then-replace
+    // pattern could silently drop a concurrent change).
+    DataService.bulkUpsert("samples", updatedList).catch(err => {
       console.error("Failed to persist samples to backend:", err);
       notify?.("Changes applied locally but backend save failed — reload to re-check.", "warn");
     });
-    DataService.appendAudit(session, "Bulk Sub-Batch Review", `Marked ${updatedList.length} sample(s) reviewed for ${sb.testTypeName}.`);
+    DataService.appendAudit({
+      entity: "subBatch",
+      entityId: sb.id,
+      action: "review",
+      user: session.username,
+      role: session.role,
+      note: `Marked ${updatedList.length} sample(s) reviewed for ${sb.testTypeName}.`
+    });
   }
 
   setSubBatches(prev => prev.map(x => x.id === sb.id ? {
@@ -326,16 +334,18 @@ function reviewSubBatchReturn(sb, samples, setSamples, setSubBatches, session, n
     updatedList.forEach(updated => {
       setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), null);
     });
-    
-    DataService.list("samples").then(allSamples => {
-      const idSet = new Set(updatedList.map(u => u.id));
-      const merged = allSamples.map(s => idSet.has(s.id) ? updatedList.find(u => u.id === s.id) : s);
-      return DataService.bulkSet("samples", merged);
-    }).catch(err => {
+    DataService.bulkUpsert("samples", updatedList).catch(err => {
       console.error("Failed to persist samples to backend:", err);
       notify?.("Changes applied locally but backend save failed — reload to re-check.", "warn");
     });
-    DataService.appendAudit(session, "Bulk Sub-Batch Return", `Returned ${updatedList.length} sample(s) to analyst for ${sb.testTypeName}.`);
+    DataService.appendAudit({
+      entity: "subBatch",
+      entityId: sb.id,
+      action: "return_to_analyst",
+      user: session.username,
+      role: session.role,
+      note: `Returned ${updatedList.length} sample(s) to analyst for ${sb.testTypeName}.`
+    });
   }
 
   setSubBatches(prev => prev.map(x => x.id === sb.id ? {
@@ -365,16 +375,19 @@ function bulkApproveSubBatch(sb, samples, setSamples, setSubBatches, session, no
       setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), null);
     });
 
-    DataService.list("samples").then(allSamples => {
-      const idSet = new Set(result.updated.map(u => u.id));
-      const merged = allSamples.map(s => idSet.has(s.id) ? result.updated.find(u => u.id === s.id) : s);
-      return DataService.bulkSet("samples", merged);
-    }).catch(err => {
+    DataService.bulkUpsert("samples", result.updated).catch(err => {
       console.error("Failed to persist samples to backend:", err);
       notify?.("Changes applied locally but backend save failed — reload to re-check.", "warn");
     });
     const actionDesc = signaturePayload.decision === "approved" ? "approved" : "sent back to analyst";
-    DataService.appendAudit(session, "Bulk Sub-Batch Approval", `${result.updated.length} sample(s) ${actionDesc} for ${sb.testTypeName}.`);
+    DataService.appendAudit({
+      entity: "subBatch",
+      entityId: sb.id,
+      action: signaturePayload.decision === "approved" ? "approve" : "reject",
+      user: session.username,
+      role: session.role,
+      note: `${result.updated.length} sample(s) ${actionDesc} for ${sb.testTypeName}.`
+    });
   }
   const allApproved = result.skipped === 0 && result.updated.length > 0;
   if (signaturePayload.decision === "approved") {
@@ -405,15 +418,18 @@ function bulkReleaseSubBatch(sb, samples, setSamples, setSubBatches, session, no
       setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), null);
     });
 
-    DataService.list("samples").then(allSamples => {
-      const idSet = new Set(result.updated.map(u => u.id));
-      const merged = allSamples.map(s => idSet.has(s.id) ? result.updated.find(u => u.id === s.id) : s);
-      return DataService.bulkSet("samples", merged);
-    }).catch(err => {
+    DataService.bulkUpsert("samples", result.updated).catch(err => {
       console.error("Failed to persist samples to backend:", err);
       notify?.("Changes applied locally but backend save failed — reload to re-check.", "warn");
     });
-    DataService.appendAudit(session, "Bulk Sub-Batch Release", `Released ${result.updated.length} sample(s) for ${sb.testTypeName}.`);
+    DataService.appendAudit({
+      entity: "subBatch",
+      entityId: sb.id,
+      action: "release",
+      user: session.username,
+      role: session.role,
+      note: `Released ${result.updated.length} sample(s) for ${sb.testTypeName}.`
+    });
   }
   if (result.skipped === 0 && result.updated.length > 0) {
     setSubBatches(prev => prev.map(x => x.id === sb.id ? {

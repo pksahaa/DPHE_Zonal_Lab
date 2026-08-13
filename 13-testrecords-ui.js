@@ -169,12 +169,18 @@ function AddTestTab({
       assignedTester: tester
     }, subBatches);
     setSubBatches(prev => [sb, ...prev]);
-    batchModeSamples.forEach(member => {
+    // Bulk mode (see setSamples() in 99-app.js / markMembersInProgress()
+    // in 21-sample-ui.js) — one pass + one persisted call instead of one
+    // setSamples() round trip per member sample.
+    const changed = [];
+    const nextSamples = batchModeSamples.reduce((acc, member) => {
       const rt = (member.requestedTests || []).find(r => r.testTypeId === batchModeTestId);
-      if (!rt || rt.status !== "pending") return;
+      if (!rt || rt.status !== "pending") return acc;
       const updated = setRequestedTestStatus(member, batchModeTestId, "in_progress", session);
-      setSamples(prev => prev.map(s => s.id === member.id ? updated : s), updated);
-    });
+      changed.push(updated);
+      return acc.map(s => s.id === member.id ? updated : s);
+    }, samples || []);
+    if (changed.length) setSamples(() => nextSamples, changed);
     setSelectedSubBatchId(sb.id);
     setSelectionMode("subbatch");
     notify?.(`Created ${sb.label} from this Reference — ${batchModeSamples.length} sample(s). Continue below.`, "ok");
@@ -1030,10 +1036,20 @@ function AddTestTab({
       } : null
     };
     if (editingRecord) {
-      setTestRecords(prev => prev.map(r => r.id === editingRecord.id ? {
-        ...r,
+      const updatedRecord = {
+        ...editingRecord,
         ...recordPayload
-      } : r));
+      };
+      // Optimistic local update first (UI reflects the edit immediately),
+      // then persist to the backend — mirrors the pattern used for samples
+      // (setSamples + DataService.bulkSet) below. Without this DataService
+      // call the edit only ever lived in React state and was lost on
+      // reload / never reached other devices.
+      setTestRecords(prev => prev.map(r => r.id === editingRecord.id ? updatedRecord : r));
+      DataService.save("testRecords", updatedRecord).catch(err => {
+        console.error("Failed to persist test record to backend:", err);
+        notify(`Test record updated locally, but the backend save failed: ${err.message}. Reload to confirm it persisted.`, "warn");
+      });
       DataService.appendAudit({
         entity: "testRecord",
         entityId: editingRecord.id,
@@ -1051,7 +1067,16 @@ function AddTestTab({
         id: newRecordId,
         ...recordPayload
       };
+      // Same story as the edit branch above: update local state
+      // optimistically, then actually write the new record to the
+      // backend. This was the missing piece — previously a brand-new
+      // Analytical Batch / Test Record never got saved to GAS at all,
+      // only its member samples did.
       setTestRecords(prev => [...prev, newRecord]);
+      DataService.save("testRecords", newRecord).catch(err => {
+        console.error("Failed to persist test record to backend:", err);
+        notify(`Test record saved locally, but the backend save failed: ${err.message}. Reload to confirm it persisted.`, "warn");
+      });
       DataService.appendAudit({
         entity: "testRecord",
         entityId: newRecordId,
@@ -2400,12 +2425,9 @@ function TestRecordsTab({
       updatedMembers.forEach(u => {
         setSamples(prev => prev.map(s => s.id === u.id ? u : s), null);
       });
-      // Persist all sample resets in one backend call
-      DataService.list("samples").then(allSamples => {
-        const idSet = new Set(updatedMembers.map(u => u.id));
-        const merged = allSamples.map(s => idSet.has(s.id) ? updatedMembers.find(u => u.id === s.id) : s);
-        return DataService.bulkSet("samples", merged);
-      }).catch(err => {
+      // Persist all sample resets in one backend call — bulkUpsert only
+      // touches these rows, no full-table re-fetch/replace first.
+      DataService.bulkUpsert("samples", updatedMembers).catch(err => {
         console.error("Failed to persist sample resets to backend:", err);
       });
     }

@@ -214,6 +214,20 @@ const DataService = (() => {
       payload: arr
     }) : localWriteAll(collection, arr);
   }
+  // Updates/inserts just the given records in one round trip, leaving
+  // everything else in the collection untouched — unlike bulkSet (a full
+  // replace), safe to use even when the caller doesn't hold the complete
+  // local copy of the collection. Used wherever one user action changes
+  // several records of a collection that's otherwise saved one at a time
+  // (see setSamples() in 99-app.js), so it doesn't cost N separate
+  // round trips through the backend's write lock.
+  async function bulkUpsert(collection, arr) {
+    if (!arr || !arr.length) return [];
+    return config.mode === "gas" ? gasCall("bulkUpsert", {
+      collection,
+      payload: arr
+    }) : arr.map(record => localSave(collection, record));
+  }
   async function appendAudit(entry) {
     const stamped = {
       id: uid("aud"),
@@ -224,6 +238,20 @@ const DataService = (() => {
       collection: "auditLog",
       payload: stamped
     }) : localSave("auditLog", stamped);
+  }
+  // Same as appendAudit, but for several entries from one user action in a
+  // single round trip (see bulkUpsert above for why that matters).
+  async function bulkAppendAudit(entries) {
+    if (!entries || !entries.length) return [];
+    const stamped = entries.map(entry => ({
+      id: uid("aud"),
+      ts: new Date().toISOString(),
+      ...entry
+    }));
+    return config.mode === "gas" ? gasCall("bulkAppendAudit", {
+      collection: "auditLog",
+      payload: stamped
+    }) : stamped.map(s => localSave("auditLog", s));
   }
   async function getAudit(filterFn) {
     const all = await list("auditLog");
@@ -364,9 +392,11 @@ const DataService = (() => {
     listActive,
     remove,
     bulkSet,
+    bulkUpsert,
     getSingleton,
     saveSingleton,
     appendAudit,
+    bulkAppendAudit,
     getAudit,
     ping,
     archiveTestRecord,
