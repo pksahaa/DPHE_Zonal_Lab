@@ -601,32 +601,80 @@ function LabApp({
     console.error(`Failed to save ${what} to backend:`, err);
     notify(`Could not save ${what} to the backend — your change may be lost on reload. (${err && err.message || err})`, "warn");
   }, [notify]);
+  // ---- Auto-save guard rails for the bulk (whole-array) collections below.
+  //
+  // Bug this fixes: right after the initial page load, `loaded` flips to
+  // true in the SAME batch that hydrates chemicals/glassware/.../subBatches
+  // from the backend (see the multiList().then() above). Each collection's
+  // save-effect depends on `[collection, loaded]`, so it fires immediately
+  // on that very first render too — sending the data straight back to the
+  // backend as a pointless "echo" write. That echo write is a real hazard,
+  // not just wasted bandwidth: bulkSet() REPLACES the whole collection, and
+  // if a genuine change (e.g. creating an Analytical Batch) happens while
+  // that echo write is still in flight, both requests are independent
+  // fetch() calls with no client-side ordering guarantee — if the stale
+  // echo happens to reach/finish on the backend after the real write, it
+  // silently overwrites (discards) the just-created record. hydrationGuard
+  // below skips exactly that first post-load save per collection.
+  //
+  // Second half of the same hazard: nothing stopped two bulkSet calls for
+  // the SAME collection from overlapping at any other time either (e.g.
+  // two quick edits in a row) — again, network timing rather than send
+  // order would decide which one wins. queuedBulkSet chains every
+  // bulkSet/saveSingleton call for a given collection onto one promise
+  // queue so they always land on the backend in the order they were sent.
+  function useHydrationGuard() {
+    const seen = useRef(false);
+    return () => {
+      if (!seen.current) {
+        seen.current = true;
+        return true; // first call since load — caller should skip saving
+      }
+      return false;
+    };
+  }
+  const saveQueueRef = useRef({});
+  const queuedSave = useCallback((collection, fn) => {
+    const prevInFlight = saveQueueRef.current[collection] || Promise.resolve();
+    const thisSave = prevInFlight.then(fn, fn); // run regardless of the previous save's outcome, but always after it
+    saveQueueRef.current[collection] = thisSave;
+    return thisSave;
+  }, []);
+  const isFirstChemicalsSave = useHydrationGuard();
   useEffect(() => {
-    if (loaded && !loadHadFailures) DataService.bulkSet("chemicals", chemicals).catch(err => notifyBackendSaveError("chemicals/inventory", err));
+    if (loaded && !loadHadFailures && !isFirstChemicalsSave()) queuedSave("chemicals", () => DataService.bulkSet("chemicals", chemicals)).catch(err => notifyBackendSaveError("chemicals/inventory", err));
   }, [chemicals, loaded]);
+  const isFirstMasterChemicalsSave = useHydrationGuard();
   useEffect(() => {
-    if (loaded && !loadHadFailures) DataService.saveSingleton("masterChemicals", { list: masterChemicals }).catch(err => notifyBackendSaveError("master chemical list", err));
+    if (loaded && !loadHadFailures && !isFirstMasterChemicalsSave()) queuedSave("masterChemicals", () => DataService.saveSingleton("masterChemicals", { list: masterChemicals })).catch(err => notifyBackendSaveError("master chemical list", err));
   }, [masterChemicals, loaded]);
+  const isFirstGlasswareSave = useHydrationGuard();
   useEffect(() => {
-    if (loaded && !loadHadFailures) DataService.bulkSet("glassware", glassware).catch(err => notifyBackendSaveError("glassware", err));
+    if (loaded && !loadHadFailures && !isFirstGlasswareSave()) queuedSave("glassware", () => DataService.bulkSet("glassware", glassware)).catch(err => notifyBackendSaveError("glassware", err));
   }, [glassware, loaded]);
+  const isFirstEquipmentSave = useHydrationGuard();
   useEffect(() => {
-    if (loaded && !loadHadFailures) DataService.bulkSet("equipment", equipment).catch(err => notifyBackendSaveError("equipment", err));
+    if (loaded && !loadHadFailures && !isFirstEquipmentSave()) queuedSave("equipment", () => DataService.bulkSet("equipment", equipment)).catch(err => notifyBackendSaveError("equipment", err));
   }, [equipment, loaded]);
+  const isFirstGasSave = useHydrationGuard();
   useEffect(() => {
-    if (loaded && !loadHadFailures) DataService.bulkSet("gas", gasList).catch(err => notifyBackendSaveError("gas cylinders", err));
+    if (loaded && !loadHadFailures && !isFirstGasSave()) queuedSave("gas", () => DataService.bulkSet("gas", gasList)).catch(err => notifyBackendSaveError("gas cylinders", err));
   }, [gasList, loaded]);
+  const isFirstParametersSave = useHydrationGuard();
   useEffect(() => {
-    if (loaded && !loadHadFailures) DataService.bulkSet("parameters", parameters).catch(err => notifyBackendSaveError("parameters", err));
+    if (loaded && !loadHadFailures && !isFirstParametersSave()) queuedSave("parameters", () => DataService.bulkSet("parameters", parameters)).catch(err => notifyBackendSaveError("parameters", err));
   }, [parameters, loaded]);
+  const isFirstTestTypesSave = useHydrationGuard();
   useEffect(() => {
-    if (loaded && !loadHadFailures) DataService.bulkSet("testTypes", testTypes).catch(err => notifyBackendSaveError("test types", err));
+    if (loaded && !loadHadFailures && !isFirstTestTypesSave()) queuedSave("testTypes", () => DataService.bulkSet("testTypes", testTypes)).catch(err => notifyBackendSaveError("test types", err));
   }, [testTypes, loaded]);
+  const isFirstTestRecordsSave = useHydrationGuard();
   useEffect(() => {
-    if (loaded && !loadHadFailures) DataService.bulkSet("testRecords", testRecords).catch(err => notifyBackendSaveError("test records", err));
+    if (loaded && !loadHadFailures && !isFirstTestRecordsSave()) queuedSave("testRecords", () => DataService.bulkSet("testRecords", testRecords)).catch(err => notifyBackendSaveError("test records", err));
   }, [testRecords, loaded]);
+  const isFirstSubBatchesSave = useHydrationGuard();
   useEffect(() => {
-    if (loaded && !loadHadFailures) DataService.bulkSet("subBatches", subBatches).catch(err => notifyBackendSaveError("sub-batches", err));
+    if (loaded && !loadHadFailures && !isFirstSubBatchesSave()) queuedSave("subBatches", () => DataService.bulkSet("subBatches", subBatches)).catch(err => notifyBackendSaveError("sub-batches", err));
   }, [subBatches, loaded]);
   if (!loaded) return /*#__PURE__*/React.createElement("div", {
     className: "p-8 text-sm",

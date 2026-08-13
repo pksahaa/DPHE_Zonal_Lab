@@ -3245,7 +3245,17 @@ function SubBatchBuilder({
     setSelectedSampleIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   }
   function toggleReferenceFilter(id) {
-    setSelectedReferenceIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+    setSelectedReferenceIds(prev => {
+      const willBeSelected = !prev.includes(id);
+      // Picking a Reference in the filter also queues its samples straight
+      // into the picker (auto-select) — checking a Reference means "give me
+      // these samples", not just "narrow the list and make me tick each one
+      // by hand". Individual samples can still be unchecked afterward.
+      // Unchecking a Reference un-queues just the samples that came from it.
+      const samplesForThisRef = eligibleForTest.filter(s => s.referenceId === id).map(s => s.id);
+      setSelectedSampleIds(prevIds => willBeSelected ? Array.from(new Set([...prevIds, ...samplesForThisRef])) : prevIds.filter(sid => !samplesForThisRef.includes(sid)));
+      return willBeSelected ? [...prev, id] : prev.filter(x => x !== id);
+    });
   }
   // "No. of samples" auto-pick — takes that many not-yet-selected eligible
   // samples (in list order). If fewer are available (odd/short batch), it
