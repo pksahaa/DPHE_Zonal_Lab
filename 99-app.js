@@ -17,9 +17,20 @@ function AppRoot() {
   const [users, setUsers] = useState([]);
   const [permissionMatrix, setPermissionMatrixState] = useState(() => DEFAULT_PERMISSION_MATRIX);
   const [usersLoaded, setUsersLoaded] = useState(false);
+  // Separate from usersLoaded: distinguishes "we asked the backend and it
+  // genuinely has zero users" (real first-run) from "the backend call
+  // itself failed" (network drop, GAS cold start, wrong URL, etc). Without
+  // this distinction, ANY failed load left `users` at its initial [] and
+  // was indistinguishable from a real empty database — showing the
+  // First-Time Admin Setup wizard again on a transient hiccup, and if
+  // submitted, DataService.bulkSet("users", [newAdmin]) would silently
+  // wipe out every real existing user account.
+  const [usersLoadFailed, setUsersLoadFailed] = useState(false);
+  const [usersLoadNonce, setUsersLoadNonce] = useState(0);
   const [session, setSession] = useState(() => loadKey("session", null));
 
   useEffect(() => {
+    setUsersLoadFailed(false);
     Promise.all([
       DataService.list("users"),
       DataService.getSingleton("permissionMatrix")
@@ -33,9 +44,10 @@ function AppRoot() {
       setUsersLoaded(true);
     }).catch(err => {
       console.error("Failed loading auth data via DataService:", err);
+      setUsersLoadFailed(true);
       setUsersLoaded(true);
     });
-  }, []);
+  }, [usersLoadNonce]);
 
   const handleUpdateUsers = useCallback((updater) => {
     setUsers(prev => {
@@ -96,6 +108,29 @@ function AppRoot() {
     return /*#__PURE__*/React.createElement("div", {
       className: "min-h-screen w-full flex items-center justify-center p-6 text-sm text-gray-500"
     }, "Initializing authentication...");
+  }
+
+  // Backend call failed — do NOT fall through to "no users found", since
+  // that's indistinguishable from a real first run and risks wiping every
+  // existing account. Show a retry screen instead until we get a real
+  // answer from the backend.
+  if (usersLoadFailed) {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "min-h-screen w-full flex flex-col items-center justify-center p-6 gap-3 text-center"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "text-sm font-medium",
+      style: { color: C.danger || "#b91c1c" }
+    }, "Could not reach the backend to check user accounts."), /*#__PURE__*/React.createElement("div", {
+      className: "text-xs",
+      style: { color: C.muted }
+    }, "This is usually a temporary network or Apps Script issue — not a sign your accounts were deleted. Check Settings ▸ Backend Settings if this keeps happening, then retry."), /*#__PURE__*/React.createElement("button", {
+      className: "px-4 py-2 rounded-lg text-sm font-medium",
+      style: { background: C.tealDark, color: "#fff" },
+      onClick: () => {
+        setUsersLoaded(false);
+        setUsersLoadNonce(n => n + 1);
+      }
+    }, "Retry Loading"));
   }
 
   if (users.length === 0) {
