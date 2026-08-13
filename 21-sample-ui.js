@@ -3281,18 +3281,34 @@ function SubBatchBuilder({
     }
     setAutoCount("");
   }
+  // Splits the samples currently checked in the picker — whether they got
+  // there via "Filter by Reference" auto-select or by hand-ticking rows,
+  // and regardless of whether they all share one Reference or come from
+  // several — into consecutively-numbered Analytical Batches of "No. of
+  // samples" each. "No. of Batches" is now optional: leave it blank to
+  // cover every selected sample; set it to cap how many batches get made
+  // (any selected samples left over stay selected for a next pass).
   function autoCreateMultipleBatches() {
     const perBatch = parseInt(autoCount, 10);
-    const numBatches = parseInt(autoBatchCount, 10);
-    if (!perBatch || perBatch <= 0 || !numBatches || numBatches <= 0) {
-      notify?.("Enter both No. of Samples (per batch) and No. of Batches first.", "warn");
+    const numBatchesRaw = parseInt(autoBatchCount, 10);
+    if (!perBatch || perBatch <= 0) {
+      notify?.("Enter No. of Samples (per batch) first.", "warn");
       return;
     }
     if (!selectedTestId) {
       notify?.("Pick a Test Type first.", "warn");
       return;
     }
-    const pool = eligibleSamples.filter(s => !selectedSampleIds.includes(s.id));
+    // Source pool = the samples actually selected right now (tick a
+    // Reference to auto-select all of it, and/or hand-pick individual
+    // samples in the grid below — both feed this same selection).
+    const pool = eligibleSamples.filter(s => selectedSampleIds.includes(s.id));
+    if (!pool.length) {
+      notify?.("Select samples first — tick a Reference above to auto-select all of it, or check samples individually — then Create Multiple Batches.", "warn");
+      return;
+    }
+    const maxPossibleBatches = Math.ceil(pool.length / perBatch);
+    const numBatches = numBatchesRaw && numBatchesRaw > 0 ? Math.min(numBatchesRaw, maxPossibleBatches) : maxPossibleBatches;
     const test = testTypes.find(t => t.id === selectedTestId);
     let cursor = 0;
     let runningSubBatches = subBatches;
@@ -3315,9 +3331,15 @@ function SubBatchBuilder({
       notify?.("No eligible samples were available to create any batch.", "warn");
       return;
     }
-    markMembersInProgress(pool.slice(0, cursor).map(s => s.id), selectedTestId);
-    const shortBy = numBatches - createdLabels.length;
-    notify?.(`Created ${createdLabels.length} sub-batch(es): ${createdLabels.join(", ")}.${shortBy > 0 ? ` Only enough samples for ${createdLabels.length} of the ${numBatches} requested — the last one may have fewer than ${perBatch}.` : ""}`, "ok");
+    const usedIds = pool.slice(0, cursor).map(s => s.id);
+    markMembersInProgress(usedIds, selectedTestId);
+    // Batched samples drop out of the selection; anything selected but left
+    // over (because "No. of Batches" was capped) stays checked so it can be
+    // sent through again.
+    const usedSet = new Set(usedIds);
+    setSelectedSampleIds(prev => prev.filter(id => !usedSet.has(id)));
+    const leftover = pool.length - cursor;
+    notify?.(`Created ${createdLabels.length} sub-batch(es) from ${cursor} selected sample(s): ${createdLabels.join(", ")}.${leftover > 0 ? ` ${leftover} selected sample(s) left over — still checked, run Create Multiple Batches again if needed.` : ""}`, "ok");
     setAutoCount("");
     setAutoBatchCount("");
   }
@@ -3574,7 +3596,7 @@ function SubBatchBuilder({
   }, "Auto-Select"), /*#__PURE__*/React.createElement("input", {
     type: "number",
     min: 1,
-    placeholder: "No. of batches",
+    placeholder: "No. of batches (optional)",
     value: autoBatchCount,
     onChange: e => setAutoBatchCount(e.target.value),
     className: "border rounded px-2 py-1 text-xs w-28",
@@ -3749,6 +3771,23 @@ function SubBatchBuilder({
   // up once applied. Any inline panel a row needs (delete confirm, return
   // note, signature capture) renders as a second, full-width <tr> directly
   // beneath it rather than breaking table alignment.
+  // Other parameters still genuinely pending (requested, not yet resulted,
+  // not already queued into any pending batch) for this batch's own member
+  // samples — e.g. a batch running Arsenic might have members that still
+  // need Iron and Manganese done separately. Lets the register answer
+  // "does anything from this batch still need another Analytical Batch?"
+  // at a glance, without opening each sample.
+  function pendingOtherTestsForBatch(sb) {
+    const memberSet = new Set(sb.memberSampleIds || []);
+    const members = samples.filter(s => memberSet.has(s.id));
+    const pendingIds = new Set();
+    members.forEach(s => {
+      pendingTestTypeIdsForSample(s, testRecords, subBatches).forEach(tid => {
+        if (tid !== sb.testTypeId) pendingIds.add(tid);
+      });
+    });
+    return Array.from(pendingIds).map(tid => testTypes.find(t => t.id === tid)?.name).filter(Boolean);
+  }
   function renderSubBatchRow(sb) {
     const testerControl = sb.status === "pending" && canEditSubBatch ? /*#__PURE__*/React.createElement("select", {
       className: "border rounded px-2 py-1 text-xs w-full",
@@ -3795,6 +3834,22 @@ function SubBatchBuilder({
     }, testerControl), /*#__PURE__*/React.createElement("td", {
       className: "px-3 py-2"
     }, SUB_BATCH_STATUS_BADGE(sb.status)), /*#__PURE__*/React.createElement("td", {
+      className: "px-3 py-2"
+    }, (() => {
+      const pendingNames = pendingOtherTestsForBatch(sb);
+      return pendingNames.length ? /*#__PURE__*/React.createElement("div", {
+        className: "flex flex-wrap gap-1",
+        title: `Still pending for this batch's samples: ${pendingNames.join(", ")}`
+      }, pendingNames.map(name => /*#__PURE__*/React.createElement(Badge, {
+        key: name,
+        tone: "warn"
+      }, name))) : /*#__PURE__*/React.createElement("span", {
+        className: "text-xs",
+        style: {
+          color: C.muted
+        }
+      }, "—");
+    })()), /*#__PURE__*/React.createElement("td", {
       className: "px-3 py-2 text-right"
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex items-center justify-end gap-1.5 flex-wrap"
@@ -3817,7 +3872,7 @@ function SubBatchBuilder({
       onClick: subBatchDeleteGate.guard(() => setDeleteSubBatchId(sb.id))
     }))));
     const panelRow = !hasPanel ? null : /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
-      colSpan: 5,
+      colSpan: 6,
       className: "px-3 pb-3"
     }, deleteSubBatchId === sb.id && /*#__PURE__*/React.createElement(ConfirmBar, {
       text: `Delete sub-batch "${sb.label}"? Its ${sb.memberSampleIds.length} member sample(s) become available for another sub-batch again.`,
@@ -3853,7 +3908,7 @@ function SubBatchBuilder({
     style: {
       background: C.bg
     }
-  }, ["Analytical Batch", "Samples", "Tester", "Status", ""].map(h => /*#__PURE__*/React.createElement("th", {
+  }, ["Analytical Batch", "Samples", "Tester", "Status", "Pending Tests", ""].map(h => /*#__PURE__*/React.createElement("th", {
     key: h,
     className: "text-left px-3 py-2 text-xs font-semibold",
     style: {
