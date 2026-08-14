@@ -124,10 +124,10 @@ function AuditLogTab({
       setHasSearched(true);
     }
   }, []);
-  React.useEffect(() => {
-    if (canView) runSearch(AUDIT_EMPTY_FILTERS);
-    // eslint-disable-next-line
-  }, []);
+  // Deliberately does NOT auto-search when this tab opens — same reasoning
+  // as Archive (18-archive-ui.js): searching immediately on mount defeats
+  // the whole point of keeping this on-demand as the log grows. Nothing is
+  // fetched until the tester clicks Search.
   function patchFilter(key, value) {
     setFilters(prev => ({
       ...prev,
@@ -136,7 +136,8 @@ function AuditLogTab({
   }
   function clearFilters() {
     setFilters(AUDIT_EMPTY_FILTERS);
-    runSearch(AUDIT_EMPTY_FILTERS);
+    setEntries([]);
+    setHasSearched(false);
   }
   if (!canView) {
     return React.createElement(SectionCard, {
@@ -281,8 +282,8 @@ function AuditLogTab({
     size: 14
   }), "Searching the audit log…"), !error && !loading && entries.length === 0 && React.createElement(EmptyState, {
     icon: "clipboard",
-    title: hasSearched ? "No audit entries match" : "No activity yet",
-    subtitle: hasSearched ? "Try a different entity, user, action, or widen the date range." : "Actions across the app will start showing up here as they happen."
+    title: hasSearched ? "No audit entries match" : "Enter a search above",
+    subtitle: hasSearched ? "Try a different entity, user, action, or widen the date range." : "Type any filter (or leave everything blank for all entries) and click Search — nothing loads automatically."
   }), !error && !loading && entries.length > 0 && React.createElement("div", {
     className: "overflow-x-auto"
   }, React.createElement("table", {

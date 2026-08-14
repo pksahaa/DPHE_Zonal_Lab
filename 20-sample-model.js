@@ -480,7 +480,13 @@ function createSample(fields, existingSamples, user) {
       notes: `Sample registered by ${user?.name || "Unknown"}.`
     }],
     createdAt: now,
-    createdBy: user?.name || "Unknown"
+    createdBy: user?.name || "Unknown",
+    // Hidden from the Sample Registration list once every requested test on
+    // this sample has been archived (see archiveReleasedMembers() in
+    // 13-testrecords-ui.js) — cleared again the moment any part of it is
+    // restored from the Archive tab (handleRestore() in 18-archive-ui.js).
+    archived: false,
+    archivedAt: null
   };
   return sample;
 }

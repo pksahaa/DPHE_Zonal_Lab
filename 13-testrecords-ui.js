@@ -2346,15 +2346,50 @@ function TestRecordsTab({
     // confirms the save. This prevents the record from disappearing from the
     // active list if the backend call fails, keeping the UI consistent.
     await DataService.save("archived_records", archivedRecord);
+    let nextTestRecords;
     if (fullyReleased) {
-      setTestRecords(prev => prev.filter(r => r.id !== rec.id));
+      nextTestRecords = testRecords.filter(r => r.id !== rec.id);
+      setTestRecords(nextTestRecords);
     } else {
       const trimmedRecord = {
         ...rec,
         memberSampleIds: remainingIds,
         memberResults: (rec.memberResults || []).filter(m => !releasedIds.includes(m.sampleId))
       };
-      setTestRecords(prev => prev.map(r => r.id === rec.id ? trimmedRecord : r));
+      nextTestRecords = testRecords.map(r => r.id === rec.id ? trimmedRecord : r);
+      setTestRecords(nextTestRecords);
+    }
+    // Mark a sample itself as archived — hiding it from the Sample
+    // Registration list — once nothing about it is active anymore. A sample
+    // can carry several requested tests (e.g. Iron AND Arsenic), so
+    // archiving away just one test's record shouldn't hide the sample while
+    // another test on it is still pending/in progress. Only once every
+    // requested test has either already been archived or has no remaining
+    // active test record referencing it does the sample disappear from the
+    // register — it reappears automatically the moment any of it is
+    // restored (see handleRestore in 18-archive-ui.js, which reverses this
+    // exact flag).
+    if (setSamples) {
+      const stillActiveSampleIds = new Set();
+      nextTestRecords.forEach(r => {
+        (r.memberSampleIds && r.memberSampleIds.length ? r.memberSampleIds : r.sampleId ? [r.sampleId] : []).forEach(sid => stillActiveSampleIds.add(sid));
+      });
+      const releasedIdSet = new Set(releasedIds);
+      const changedSamples = [];
+      const nextSamples = (samples || []).map(s => {
+        if (!releasedIdSet.has(s.id) || s.archived) return s;
+        if (stillActiveSampleIds.has(s.id)) return s;
+        const stillPending = (s.requestedTests || []).some(rt => rt.status === "pending" || rt.status === "in_progress");
+        if (stillPending) return s;
+        const updated = {
+          ...s,
+          archived: true,
+          archivedAt: new Date().toISOString()
+        };
+        changedSamples.push(updated);
+        return updated;
+      });
+      if (changedSamples.length) setSamples(() => nextSamples, changedSamples);
     }
     return {
       fullyReleased,

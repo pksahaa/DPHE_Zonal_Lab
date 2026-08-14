@@ -1060,6 +1060,7 @@ function LabApp({
   }), tab === "archive" && /*#__PURE__*/React.createElement(ArchiveTab, {
     testTypes: testTypes,
     samples: samples,
+    setSamples: setSamples,
     testRecords: testRecords,
     setTestRecords: setTestRecords,
     session: session,

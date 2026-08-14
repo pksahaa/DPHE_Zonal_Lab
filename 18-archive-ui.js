@@ -191,6 +191,7 @@ const ARCHIVE_EMPTY_FILTERS = {
 function ArchiveTab({
   testTypes,
   samples,
+  setSamples,
   testRecords,
   setTestRecords,
   session,
@@ -226,13 +227,13 @@ function ArchiveTab({
     }
   }, []);
 
-  // Fires once, when this tab is actually opened — NOT part of 99-app.js's
-  // initial app-load effects, which is what keeps archived data out of the
-  // default appState payload.
-  React.useEffect(() => {
-    runSearch(ARCHIVE_EMPTY_FILTERS);
-    // eslint-disable-next-line
-  }, []);
+  // Deliberately does NOT auto-search when this tab opens (previously it
+  // fired a search with empty filters on mount, which loaded the ENTIRE
+  // archive immediately — exactly the "growing archive slows things down"
+  // problem this on-demand design was meant to avoid, just deferred to tab
+  // -open instead of app-boot). Now nothing is fetched until the tester
+  // actually clicks Search — see the EmptyState below for the pre-search
+  // prompt.
   function patchFilter(key, value) {
     setFilters(prev => ({
       ...prev,
@@ -241,7 +242,12 @@ function ArchiveTab({
   }
   function clearFilters() {
     setFilters(ARCHIVE_EMPTY_FILTERS);
-    runSearch(ARCHIVE_EMPTY_FILTERS);
+    // Clearing just resets the filters and the currently-shown results — it
+    // does NOT re-run a search on its own; that would reintroduce the same
+    // unwanted auto-load this whole change removes. Click Search again for
+    // a fresh (unfiltered) look.
+    setResults([]);
+    setHasSearched(false);
   }
   function toggleBatchCollapsed(id) {
     setCollapsedBatches(prev => {
@@ -273,6 +279,28 @@ function ArchiveTab({
     const idsToRestore = sampleIds && sampleIds.length ? sampleIds : allMemberIds;
     const restoringAll = !isBatch || idsToRestore.length >= allMemberIds.length;
     setRestoringId(rec.id);
+    // Un-hide these samples from the Sample Registration list — the mirror
+    // image of what archiveReleasedMembers() (13-testrecords-ui.js) does
+    // when archiving. A sample marked archived only because THIS record's
+    // test was archived becomes visible again the moment any part of it is
+    // restored; nothing here needs to check whether other tests are still
+    // pending, since setting archived:false is only ever wrong if the
+    // sample was already active (in which case this is a harmless no-op).
+    if (setSamples) {
+      const idSet = new Set(idsToRestore);
+      const changedSamples = [];
+      const nextSamples = (samples || []).map(s => {
+        if (!idSet.has(s.id) || !s.archived) return s;
+        const updated = {
+          ...s,
+          archived: false,
+          archivedAt: null
+        };
+        changedSamples.push(updated);
+        return updated;
+      });
+      if (changedSamples.length) setSamples(() => nextSamples, changedSamples);
+    }
     try {
       if (restoringAll) {
         const restored = await DataService.restoreRecord(rec.id, rec);
@@ -464,8 +492,8 @@ function ArchiveTab({
     size: 14
   }), "Searching the archive…"), !error && !loading && totalCount === 0 && /*#__PURE__*/React.createElement(EmptyState, {
     icon: "archive",
-    title: hasSearched ? "No archived records match" : "Nothing archived yet",
-    subtitle: hasSearched ? "Try a different Sample ID, client name, parameter, or widen the date range." : "Once a test record is fully Released, you can archive it from the Test Records tab and it will show up here."
+    title: hasSearched ? "No archived records match" : "Enter a search above",
+    subtitle: hasSearched ? "Try a different Sample ID, client name, parameter, or widen the date range." : "Type any filter (or leave everything blank for all records) and click Search — nothing loads automatically."
   }), !error && !loading && totalCount > 0 && viewMode === "flat" && /*#__PURE__*/React.createElement(FlatArchiveTable, {
     rows: allRows,
     samples: samples,

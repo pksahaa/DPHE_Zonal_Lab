@@ -539,7 +539,7 @@ function SampleRegistrationForm({
     })
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "TW ID",
+    label: "Water Point ID",
     value: form.twId,
     onChange: v => setForm({
       ...form,
@@ -1498,7 +1498,7 @@ function SampleEntryCard({ index, row, updateRow, onDuplicate, onRemove, canRemo
     onChange: v => updateRow("waterPointTypeOther", v)
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "TW ID",
+    label: "Water Point ID",
     value: row.twId,
     onChange: v => updateRow("twId", v)
   })));
@@ -1940,7 +1940,7 @@ function ImportTestPickerModal({
 // there's always at least an identifier and a way to act on each row.
 const SAMPLE_TABLE_COLUMNS = [
   { key: "sampleCode", label: "Sample Code" },
-  { key: "twId", label: "TW ID" },
+  { key: "twId", label: "Water Point ID" },
   { key: "refNo", label: "Ref / Memo No." },
   { key: "trackingNo", label: "Tracking No.", locked: true },
   { key: "clientContact", label: "Client" },
@@ -2187,6 +2187,13 @@ function SamplesTab({
   };
   const openSample = samples.find(s => s.id === openId) || null;
   const filtered = samples.filter(s => {
+    // Archived samples (every requested test on them fully archived — see
+    // archiveReleasedMembers() in 13-testrecords-ui.js) are deliberately
+    // left out of the Sample Registration list entirely. They're still
+    // findable in the Archive tab, and restoring any part of one there
+    // brings it right back here automatically (handleRestore() in
+    // 18-archive-ui.js clears this same flag).
+    if (s.archived) return false;
     if (statusFilter && s.status !== statusFilter) return false;
     const ref = s.referenceId ? findReferenceById(references, s.referenceId) : null;
     const haystack = `${s.sampleCode} ${s.clientName} ${s.siteLocation} ${ref?.trackingNo || ""} ${ref?.refNo || ""} ${ref?.contactPerson || ""}`;
@@ -2309,6 +2316,16 @@ function SamplesTab({
         longitude: String(readSampleImportField(row, "longitude")).trim(),
         waterPointType: String(readSampleImportField(row, "waterPointType")).trim(),
         waterPointTypeOther: String(readSampleImportField(row, "waterPointTypeOther")).trim(),
+        // These two were previously missing from this mapping entirely —
+        // the manifest template and the per-row manual edit form both
+        // support them (SAMPLE_IMPORT_COLUMNS in 00-core.js, and the
+        // "Water Point ID" field a few lines up in this same file), but a
+        // bulk-imported row never actually picked the values up, so every
+        // bulk-imported sample showed "—" for Water Point ID no matter what
+        // was in the spreadsheet. Not a character-limit issue — the value
+        // was simply never read.
+        sampleSourceId: String(readSampleImportField(row, "sampleSourceId")).trim(),
+        twId: String(readSampleImportField(row, "twId")).trim(),
         referenceId: ref ? ref.id : "",
         batchRef: ref ? ref.refNo : "",
         sampleType: String(readSampleImportField(row, "sampleType") || "Drinking Water").trim(),

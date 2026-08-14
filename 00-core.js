@@ -581,8 +581,11 @@ const SAMPLE_IMPORT_COLUMNS = [{
   aliases: ["SampleSource", "Sample Source (e.g. STW-6)"]
 }, {
   key: "twId",
-  header: "TW ID",
-  aliases: ["TW_ID", "TWID"]
+  header: "Water Point ID",
+  // Old header names stay as aliases so manifests already circulating under
+  // the old "TW ID" naming still import correctly — see readSampleImportField
+  // below, which tries the canonical header first, then each alias in turn.
+  aliases: ["TW ID", "TW_ID", "TWID"]
 }, {
   key: "sampleType",
   header: "Sample Type",
