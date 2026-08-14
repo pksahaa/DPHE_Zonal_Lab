@@ -289,7 +289,18 @@ const DataService = (() => {
       archivedSampleSnapshots
     };
     await save("archived_records", archivedRecord);
-    await bulkSet("testRecords", testRecordsArr.filter(r => r.id !== recordId));
+    // Was: bulkSet("testRecords", testRecordsArr.filter(...)) — a bulkSet
+    // maps to replaceAllRows_ on the backend, which clears and rewrites the
+    // ENTIRE testRecords sheet just to drop one row. That's fine for
+    // genuinely bulk operations (see bulkUpsert usages elsewhere), but here
+    // it means every single archive action — and every record in a
+    // multi-select archive, one after another — pays for a full sheet
+    // rewrite, and holds the shared write lock (see WRITE_ACTIONS_ in
+    // Code.gs) for that whole rewrite, so back-to-back archives (or any
+    // other write firing around the same time, including a plain sample
+    // registration) queue up behind it. remove() -> removeRow_ only scans
+    // the id column and deletes the one matching row.
+    await remove("testRecords", recordId);
     return archivedRecord;
   }
   // Matches an archived record against optional search filters. All filters
@@ -362,7 +373,10 @@ const DataService = (() => {
     } = record;
     const testRecordsArr = await list("testRecords");
     if (!testRecordsArr.some(r => r.id === recordId)) {
-      await bulkSet("testRecords", [...testRecordsArr, restored]);
+      // Was: bulkSet("testRecords", [...testRecordsArr, restored]) — same
+      // full-sheet-rewrite cost as the archive path above, just to insert
+      // one row back. save() -> upsertRow_ appends/updates only that row.
+      await save("testRecords", restored);
     }
     await remove("archived_records", recordId);
     return restored;

@@ -2534,6 +2534,15 @@ function SamplesTab({
         longitude: row.longitude,
         waterPointType: row.waterPointType,
         waterPointTypeOther: row.waterPointTypeOther,
+        // twId ("Water Point ID") was missing from this mapping — the field
+        // is captured on every SampleEntryCard row (see row.twId a few
+        // hundred lines up) and the manifest-import path already picks it
+        // up (confirmImportSamples above), but this manual registration
+        // path never read it back off the row, so createSample() always
+        // fell back to "" here and the field displayed as "—" no matter
+        // what was typed in. Not a display bug — the value was simply
+        // never forwarded.
+        twId: row.twId,
         numberOfSamples: 1
       }, runningSamples, session);
       runningSamples = [...runningSamples, sample];
