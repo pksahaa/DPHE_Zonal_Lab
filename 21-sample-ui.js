@@ -3454,24 +3454,42 @@ function SubBatchBuilder({
       assignedTester: tester
     } : sb));
   }
+  // A "tested" sub-batch normally can only be deleted by first deleting its
+  // linked Test Record (13-testrecords-ui.js doDelete), which resets the
+  // sub-batch back to "pending" itself. But if the Test Record save to the
+  // backend failed part-way (e.g. a very large batch's memberResults JSON
+  // exceeding the ~50,000-character-per-cell limit Google Sheets enforces),
+  // the sub-batch can be left stuck at "tested"/testRecordId pointing at a
+  // record that was never actually persisted — nothing to click "delete" on
+  // in Test Records, and this button stays disabled forever. isOrphanedTested
+  // detects exactly that case so it can be unstuck directly.
+  function isOrphanedTestedSubBatch(sb) {
+    if (sb.status !== "tested") return false;
+    if (!sb.testRecordId) return true;
+    return !(testRecords || []).some(r => r.id === sb.testRecordId);
+  }
   function doDeleteSubBatch(sb) {
     if (!subBatchDeleteGate.allowed) return;
+    const orphaned = isOrphanedTestedSubBatch(sb);
     setSubBatches(prev => prev.filter(x => x.id !== sb.id));
     setDeleteSubBatchId(null);
     if (editingSubBatchId === sb.id) resetForm();
-    // The Delete button is only enabled while sb.status === "pending" (see
-    // the disabled check below — a tested batch must have its Test Record
-    // deleted first, which itself now reverts the samples — so nothing
-    // resulted here needs undoing). But markMembersInProgress() moved every
-    // member's rt.status to "in_progress" the moment this batch was
-    // created; removing the batch without resetting that back to "pending"
-    // would leave each sample LOOKING like it's still "In Progress" on
-    // Sample Detail even though no batch backs that anymore. Functionally
-    // the sample is already selectable again for a new batch either way —
-    // isTestQueuedForSample()/pendingTestTypeIdsForSample() (16-sub-batch.js)
-    // key off whether a *pending* sub-batch still references it, not off
-    // this stored field — but resetting it keeps what's displayed honest.
-    if (setSamples && sb.status === "pending") {
+    // The Delete button is only enabled while sb.status === "pending" OR the
+    // batch is an orphaned "tested" batch as detected above (see the
+    // disabled check below — a normal tested batch must have its Test
+    // Record deleted first, which itself now reverts the samples — so
+    // nothing resulted here needs undoing in that case). But
+    // markMembersInProgress() moved every member's rt.status to
+    // "in_progress" the moment this batch was created (and, for a genuinely
+    // tested batch, results entry moved it on to "results_entered"); removing
+    // the batch without resetting that back would leave each sample LOOKING
+    // like it's still busy on Sample Detail even though no batch/record
+    // backs that anymore. Functionally the sample is already selectable
+    // again for a new batch either way — isTestQueuedForSample()/
+    // pendingTestTypeIdsForSample() (16-sub-batch.js) key off whether a
+    // *pending* sub-batch still references it, not off this stored field —
+    // but resetting it keeps what's displayed honest.
+    if (setSamples && (sb.status === "pending" || orphaned)) {
       // Same fix as markMembersInProgress() above — one pure pass +
       // one bulk persisted call instead of one setSamples() round trip per
       // member sample.
@@ -3480,7 +3498,19 @@ function SubBatchBuilder({
       const nextSamples = (samples || []).map(member => {
         if (!idSet.has(member.id)) return member;
         const rt = (member.requestedTests || []).find(r => r.testTypeId === sb.testTypeId);
-        if (!rt || rt.status !== "in_progress") return member;
+        if (!rt) return member;
+        // Orphaned case: the member may be sitting at "results_entered"
+        // (Awaiting Review) with no real Test Record behind it — reset all
+        // the way back to "in_progress", same as deleting a real Test
+        // Record would. Normal pending case: only "in_progress" needs
+        // resetting, same as before.
+        if (orphaned) {
+          if (!["in_progress", "results_entered"].includes(rt.status)) return member;
+          const updated = setRequestedTestStatus(member, sb.testTypeId, "in_progress", session, `Analytical batch "${sb.label}" deleted (its test record was never actually saved) — back to in-progress testing.`);
+          changed.push(updated);
+          return updated;
+        }
+        if (rt.status !== "in_progress") return member;
         const updated = setRequestedTestStatus(member, sb.testTypeId, "pending", session, `Analytical batch "${sb.label}" deleted — back to pending testing.`);
         changed.push(updated);
         return updated;
@@ -3493,9 +3523,9 @@ function SubBatchBuilder({
       action: "delete",
       user: session.username,
       role: session.role,
-      note: `Deleted sub-batch "${sb.label}"`
+      note: orphaned ? `Deleted orphaned sub-batch "${sb.label}" (linked test record was never saved) — member samples returned to in-progress` : `Deleted sub-batch "${sb.label}"`
     });
-    notify?.(`${sb.label} deleted.`, "ok");
+    notify?.(orphaned ? `${sb.label} deleted — its test record had never actually been saved to the backend, so member samples were returned to in-progress.` : `${sb.label} deleted.`, "ok");
   }
   // ---- Review (Phase 3) — approving/returning a Sub-Batch only ever
   // touches the ONE parameter it represents (sb.testTypeId), for its member
@@ -3808,6 +3838,8 @@ function SubBatchBuilder({
       }
     }, sb.assignedTester || "—");
     const hasPanel = deleteSubBatchId === sb.id;
+    const sbOrphaned = isOrphanedTestedSubBatch(sb);
+    const sbDeletable = sb.status === "pending" || sbOrphaned;
     const mainRow = /*#__PURE__*/React.createElement("tr", {
       style: {
         borderTop: `1px solid ${C.border}`
@@ -3867,15 +3899,15 @@ function SubBatchBuilder({
     }), canDeleteSubBatch && /*#__PURE__*/React.createElement(IconButton, {
       name: "trash",
       color: C.warn,
-      title: sb.status === "pending" ? "Delete sub-batch" : "Delete the linked test record first to remove a tested sub-batch",
-      disabled: sb.status !== "pending",
+      title: sb.status === "pending" ? "Delete sub-batch" : sbOrphaned ? "This batch's test record was never actually saved to the backend — delete to unstick it" : "Delete the linked test record first to remove a tested sub-batch",
+      disabled: !sbDeletable,
       onClick: subBatchDeleteGate.guard(() => setDeleteSubBatchId(sb.id))
     }))));
     const panelRow = !hasPanel ? null : /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
       colSpan: 6,
       className: "px-3 pb-3"
     }, deleteSubBatchId === sb.id && /*#__PURE__*/React.createElement(ConfirmBar, {
-      text: `Delete sub-batch "${sb.label}"? Its ${sb.memberSampleIds.length} member sample(s) become available for another sub-batch again.`,
+      text: sbOrphaned ? `Delete sub-batch "${sb.label}"? Its test record was never actually saved to the backend (likely too large a batch) — its ${sb.memberSampleIds.length} member sample(s) will be returned to in-progress testing so you can re-enter results in a smaller batch.` : `Delete sub-batch "${sb.label}"? Its ${sb.memberSampleIds.length} member sample(s) become available for another sub-batch again.`,
       onConfirm: () => doDeleteSubBatch(sb),
       onCancel: () => setDeleteSubBatchId(null)
     })));

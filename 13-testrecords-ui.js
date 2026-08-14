@@ -1067,6 +1067,31 @@ function AddTestTab({
         id: newRecordId,
         ...recordPayload
       };
+      // Hard stop for oversized Analytical Batches. The backend stores this
+      // whole record as ONE JSON blob in a single Google Sheets cell (see
+      // upsertRow_ in Code.gs), and Sheets enforces a hard 50,000-character
+      // limit per cell. A batch with enough member samples × parameters
+      // eventually blows past that — the cell write throws on the backend
+      // and DataService.save() below rejects, but by then the member
+      // samples' status flip (via bulkSet, a separate call) has usually
+      // already gone through and succeeded. That leaves samples sitting in
+      // Awaiting Review with a linkedTestRecordIds entry pointing at a
+      // record that was never actually saved — nothing to delete it from in
+      // Test Records, and the sub-batch stuck unable to be resized/deleted.
+      // Catching it here, before any state changes at all, means the user
+      // gets a clear, specific number for THEIR data (it depends on how
+      // many parameters/inputs are recorded per sample, not just sample
+      // count) instead of a silent partial failure discovered later.
+      const SHEETS_CELL_CHAR_LIMIT = 50000;
+      const SAFETY_MARGIN = 5000; // headroom for updatedAt stamping, unicode escaping, future fields
+      const estimatedSize = JSON.stringify(Object.assign({}, newRecord, { updatedAt: new Date().toISOString() })).length;
+      if (estimatedSize > SHEETS_CELL_CHAR_LIMIT - SAFETY_MARGIN) {
+        const memberCount = selectedSubBatch ? selectedSubBatch.memberSampleIds.length : 1;
+        const perMember = Math.max(1, Math.round(estimatedSize / memberCount));
+        const safeMemberCount = Math.max(1, Math.floor((SHEETS_CELL_CHAR_LIMIT - SAFETY_MARGIN) / perMember));
+        notify(`This Analytical Batch is too large to save (~${estimatedSize.toLocaleString()} characters — the backend spreadsheet caps a single record at ${SHEETS_CELL_CHAR_LIMIT.toLocaleString()}). With this test's number of parameters, roughly ${safeMemberCount} sample(s) per batch is the safe limit — please split this batch into smaller ones (e.g. via Analytical Batch management) and save separately. Nothing has been changed yet.`, "warn");
+        return;
+      }
       // Same story as the edit branch above: update local state
       // optimistically, then actually write the new record to the
       // backend. This was the missing piece — previously a brand-new
