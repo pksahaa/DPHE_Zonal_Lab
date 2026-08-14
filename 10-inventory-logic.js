@@ -203,27 +203,49 @@ function fefoSuggestion(chemical) {
   active.sort((a, b) => a.expiryDate < b.expiryDate ? -1 : 1);
   return active[0] || null;
 }
-function deductFromChemical(chemical, amount, preferredBatchId) {
+// `selection` picks bottles to draw from, in order, before falling back to
+// automatic FEFO for anything left over:
+//  - undefined/null            → pure FEFO across all active batches (unchanged default behaviour)
+//  - a string batchId          → legacy single-preferred-bottle form, still supported: drain that
+//                                 bottle fully first, then FEFO for the remainder
+//  - [{batchId, amount}, ...]  → new ordered multi-bottle form. Drawn in the given order; `amount`
+//                                 is optional per entry — null/blank means "take everything this
+//                                 bottle has before moving to the next one in the list". Whatever
+//                                 the list doesn't cover (list too short, amounts too small, or no
+//                                 list at all) is filled automatically via FEFO from any active
+//                                 batch not already in the list — so specifying a list, or amounts
+//                                 within it, is never mandatory for the draw to succeed.
+function deductFromChemical(chemical, amount, selection) {
   let batches = chemical.batches.map(b => ({
     ...b
   }));
-  // Normally only "active" (non-expired) batches are eligible. An expired batch only enters the pool
-  // when explicitly hand-picked (preferredBatchId) — i.e. the tester consciously overrode the expiry warning.
-  const order = [...batches].filter(b => b.remaining > 0 && (b.status === "active" || preferredBatchId && b.id === preferredBatchId && b.status === "expired")).sort((a, b) => a.expiryDate < b.expiryDate ? -1 : 1);
-  if (preferredBatchId) {
-    const idx = order.findIndex(b => b.id === preferredBatchId);
-    if (idx > 0) {
-      const [chosen] = order.splice(idx, 1);
-      order.unshift(chosen);
-    }
+  let orderedSelection;
+  if (Array.isArray(selection)) {
+    orderedSelection = selection.filter(s => s && s.batchId);
+  } else if (selection) {
+    orderedSelection = [{
+      batchId: selection,
+      amount: null
+    }];
+  } else {
+    orderedSelection = [];
   }
+  const selectedIds = new Set(orderedSelection.map(s => s.batchId));
   let left = amount;
   const usedFrom = [];
-  for (const b of order) {
-    if (left <= 0) break;
-    const take = Math.min(b.remaining, left);
-    if (take <= 0) continue;
-    const target = batches.find(x => x.id === b.id);
+
+  // 1) Manually ordered bottles first, in the order given. A bottle only
+  // needs remaining stock to be eligible here — including expired ones,
+  // since being in this list at all is the explicit "conscious override"
+  // (same rule the old single-preferred-bottle behaviour already had).
+  orderedSelection.forEach(sel => {
+    if (left <= 0) return;
+    const target = batches.find(b => b.id === sel.batchId);
+    if (!target || target.remaining <= 0) return;
+    const hasCap = sel.amount !== null && sel.amount !== undefined && sel.amount !== "" && !isNaN(sel.amount);
+    const cap = hasCap ? Math.max(0, Number(sel.amount)) : Infinity;
+    const take = Math.min(target.remaining, left, cap);
+    if (take <= 0) return;
     target.remaining = +(target.remaining - take).toFixed(4);
     if (target.remaining <= 0) {
       target.remaining = 0;
@@ -231,9 +253,33 @@ function deductFromChemical(chemical, amount, preferredBatchId) {
     }
     left = +(left - take).toFixed(4);
     usedFrom.push({
-      batchId: b.id,
+      batchId: sel.batchId,
       amount: take
     });
+  });
+
+  // 2) Whatever's left (or everything, if no manual selection was given at
+  // all) falls through to plain FEFO across any remaining ACTIVE batch not
+  // already covered above — identical to the original single-bottle
+  // behaviour, just excluding bottles the manual list already drew from.
+  if (left > 0) {
+    const order = batches.filter(b => b.remaining > 0 && b.status === "active" && !selectedIds.has(b.id)).sort((a, b) => a.expiryDate < b.expiryDate ? -1 : 1);
+    for (const b of order) {
+      if (left <= 0) break;
+      const target = batches.find(x => x.id === b.id);
+      const take = Math.min(target.remaining, left);
+      if (take <= 0) continue;
+      target.remaining = +(target.remaining - take).toFixed(4);
+      if (target.remaining <= 0) {
+        target.remaining = 0;
+        target.status = "depleted";
+      }
+      left = +(left - take).toFixed(4);
+      usedFrom.push({
+        batchId: b.id,
+        amount: take
+      });
+    }
   }
   return {
     batches,

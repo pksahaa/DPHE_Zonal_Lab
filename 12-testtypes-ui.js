@@ -4,6 +4,12 @@
 // requirement builder, dilution rules, formula-driven default values.
 // This is the "Test Method Engine" module referenced in the LIMS spec.
 // ============================================================================
+// `value` is an ordered array [{batchId, amount}, ...] of manually-picked
+// bottles to draw from first, in that order — `amount` per entry is
+// optional (blank = take everything that bottle has before moving to the
+// next). Leave the list empty and it behaves exactly as before this
+// feature existed: fully automatic FEFO across every active batch. See
+// deductFromChemical() in 10-inventory-logic.js for the matching draw logic.
 function BottleSelector({
   chemical,
   needed,
@@ -16,41 +22,148 @@ function BottleSelector({
       color: C.warn
     }
   }, "Chemical not found in inventory");
+  const selection = Array.isArray(value) ? value : value ? [{
+    batchId: value,
+    amount: null
+  }] : [];
+  const selectedIds = new Set(selection.map(s => s.batchId));
   const suggestion = fefoSuggestion(chemical);
-  const activeBatches = chemical.batches.filter(b => b.status === "active");
+  const activeBatches = chemical.batches.filter(b => b.status === "active" && b.remaining > 0);
   const expiredBatches = chemical.batches.filter(b => b.status === "expired" && b.remaining > 0);
-  const selected = value || (suggestion ? suggestion.id : "");
-  return /*#__PURE__*/React.createElement("label", {
-    className: "flex items-center gap-2 text-xs ml-auto",
-    style: {
-      color: C.muted
+  const availableToAdd = [...activeBatches, ...expiredBatches].filter(b => !selectedIds.has(b.id));
+  function batchLabel(b) {
+    return `${b.batchName ? `[${b.batchName}] ` : ""}${b.status === "expired" ? "⚠ EXPIRED " : ""}Exp ${b.expiryDate} · ${fmtNum(b.remaining)} left`;
+  }
+  function addBatch(batchId) {
+    if (!batchId || selectedIds.has(batchId)) return;
+    onChange([...selection, {
+      batchId,
+      amount: null
+    }]);
+  }
+  function removeBatch(batchId) {
+    onChange(selection.filter(s => s.batchId !== batchId));
+  }
+  function moveBatch(idx, dir) {
+    const swap = idx + dir;
+    if (swap < 0 || swap >= selection.length) return;
+    const next = [...selection];
+    [next[idx], next[swap]] = [next[swap], next[idx]];
+    onChange(next);
+  }
+  function setAmount(batchId, raw) {
+    onChange(selection.map(s => s.batchId === batchId ? {
+      ...s,
+      amount: raw === "" ? null : raw
+    } : s));
+  }
+  // Live preview — mirrors deductFromChemical()'s own logic exactly, so
+  // what's shown here is exactly what saving will actually do, including
+  // any automatic FEFO fallback for whatever the manual list doesn't cover.
+  let left = needed || 0;
+  const plan = [];
+  selection.forEach(s => {
+    if (left <= 0) return;
+    const b = chemical.batches.find(x => x.id === s.batchId);
+    if (!b || b.remaining <= 0) return;
+    const hasCap = s.amount !== null && s.amount !== undefined && s.amount !== "" && !isNaN(s.amount);
+    const cap = hasCap ? Math.max(0, Number(s.amount)) : Infinity;
+    const take = Math.min(b.remaining, left, cap);
+    if (take <= 0) return;
+    plan.push({
+      label: b.batchName || `Exp ${b.expiryDate}`,
+      amount: take,
+      manual: true
+    });
+    left = +(left - take).toFixed(4);
+  });
+  if (left > 0) {
+    const rest = chemical.batches.filter(b => b.status === "active" && b.remaining > 0 && !selectedIds.has(b.id)).sort((a, b) => a.expiryDate < b.expiryDate ? -1 : 1);
+    for (const b of rest) {
+      if (left <= 0) break;
+      const take = Math.min(b.remaining, left);
+      if (take <= 0) continue;
+      plan.push({
+        label: b.batchName || `Exp ${b.expiryDate}`,
+        amount: take,
+        manual: false
+      });
+      left = +(left - take).toFixed(4);
     }
-  }, "Bottle:", /*#__PURE__*/React.createElement("select", {
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-1.5 ml-auto",
+    style: {
+      minWidth: 280
+    }
+  }, selection.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-1"
+  }, selection.map((s, idx) => {
+    const b = chemical.batches.find(x => x.id === s.batchId);
+    if (!b) return null;
+    return /*#__PURE__*/React.createElement("div", {
+      key: s.batchId,
+      className: "flex items-center gap-1 text-xs",
+      style: {
+        color: C.ink
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "flex flex-col leading-none",
+      style: {
+        color: C.muted
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      disabled: idx === 0,
+      onClick: () => moveBatch(idx, -1),
+      className: "disabled:opacity-20 leading-none",
+      title: "Move earlier in draw order"
+    }, "▲"), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      disabled: idx === selection.length - 1,
+      onClick: () => moveBatch(idx, 1),
+      className: "disabled:opacity-20 leading-none",
+      title: "Move later in draw order"
+    }, "▼")), /*#__PURE__*/React.createElement("span", {
+      className: "flex-1 truncate",
+      title: batchLabel(b)
+    }, idx + 1, ". ", batchLabel(b)), /*#__PURE__*/React.createElement("input", {
+      type: "number",
+      placeholder: "full",
+      title: "Amount to take from this bottle (optional — blank takes everything it has)",
+      className: "border rounded px-1.5 py-0.5 text-xs w-16",
+      style: {
+        borderColor: C.border
+      },
+      value: s.amount ?? "",
+      onChange: e => setAmount(s.batchId, e.target.value)
+    }), /*#__PURE__*/React.createElement(IconButton, {
+      name: "x",
+      color: C.warn,
+      title: "Remove from list",
+      onClick: () => removeBatch(s.batchId)
+    }));
+  })), /*#__PURE__*/React.createElement("select", {
     className: "border rounded px-2 py-1 text-xs",
     style: {
       borderColor: C.border
     },
-    value: selected,
-    onChange: e => onChange(e.target.value)
-  }, activeBatches.length === 0 && expiredBatches.length === 0 && /*#__PURE__*/React.createElement("option", {
+    value: "",
+    onChange: e => addBatch(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
     value: ""
-  }, "No stock"), activeBatches.map(b => /*#__PURE__*/React.createElement("option", {
+  }, selection.length ? "+ Add another bottle…" : "Auto (FEFO) — or pick bottle(s) manually"), availableToAdd.length === 0 && /*#__PURE__*/React.createElement("option", {
+    value: "",
+    disabled: true
+  }, "No other stock"), availableToAdd.map(b => /*#__PURE__*/React.createElement("option", {
     key: b.id,
     value: b.id
-  }, b.batchName ? `[${b.batchName}] ` : "", "Exp ", b.expiryDate, " · ", fmtNum(b.remaining), " left", suggestion && b.id === suggestion.id ? " (FEFO)" : "")), expiredBatches.length > 0 && /*#__PURE__*/React.createElement("optgroup", {
-    label: "Expired (override required)"
-  }, expiredBatches.map(b => /*#__PURE__*/React.createElement("option", {
-    key: b.id,
-    value: b.id
-  }, "⚠ ", b.batchName ? `[${b.batchName}] ` : "", "EXPIRED ", b.expiryDate, " · ", fmtNum(b.remaining), " left")))), needed > activeBatches.reduce((s, b) => s + b.remaining, 0) && /*#__PURE__*/React.createElement("span", {
+  }, batchLabel(b), suggestion && b.id === suggestion.id ? " (FEFO)" : ""))), needed > 0 && (plan.length > 0 || left > 0) && /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px]",
     style: {
-      color: C.warn
-    },
-    className: "flex items-center gap-1"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "warning",
-    size: 12
-  }), "low stock"));
+      color: left > 0 ? C.warn : C.muted
+    }
+  }, plan.length > 0 && `Will draw: ${plan.map(p => `${fmtNum(p.amount)} from ${p.label}${p.manual ? "" : " (auto)"}`).join(", ")}`, left > 0 && `${plan.length ? " — " : ""}short by ${fmtNum(left)} ${chemical.unit}`));
 }
 function RequirementEditor({
   title,

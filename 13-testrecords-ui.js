@@ -826,6 +826,55 @@ function AddTestTab({
       }
     }
 
+    // Hard stop for oversized Analytical Batches — computed and checked
+    // HERE, before any inventory is touched (setChemicals/setGasList below,
+    // and the stock-sufficiency checks that precede them still only read
+    // state, they don't commit it). Previously this check ran much later,
+    // right before the record was actually saved — by which point chemical
+    // and gas stock had ALREADY been deducted (setChemicals/setGasList), so
+    // a blocked save still silently consumed inventory for a batch that
+    // never actually got saved. Doing the size check first, before any of
+    // that, means a rejected save truly changes nothing.
+    //
+    // The backend stores a whole Test Record as ONE JSON blob in a single
+    // Google Sheets cell (see upsertRow_ in Code.gs), and Sheets enforces a
+    // hard 50,000-character limit per cell. memberResults — one entry per
+    // member sample, each with its own inputs/value/error per parameter —
+    // is by far the dominant contributor to that size, so it's computed
+    // here (once) both to check the size and to reuse below, instead of
+    // rebuilding it a second time when the record payload is assembled.
+    const computedMemberResults = selectedSubBatch ? selectedSubBatch.memberSampleIds.map(sampleId => {
+      const memberSample = (samples || []).find(s => s.id === sampleId);
+      return {
+        sampleId,
+        sampleCode: memberSample?.sampleCode || "",
+        results: resultParameters.map(p => {
+          const override = (resultOverridesBySample[sampleId] || []).find(r => r.paramId === p.id);
+          if (override) return override;
+          const res = computeMemberResult(sampleId, p);
+          return {
+            paramId: p.id,
+            name: p.name,
+            unit: p.unit,
+            inputs: memberInputs[sampleId]?.[p.id] || {},
+            ...(res.ok ? { value: res.value, error: null } : { value: null, error: res.error })
+          };
+        })
+      };
+    }) : null;
+    if (computedMemberResults) {
+      const SHEETS_CELL_CHAR_LIMIT = 50000;
+      const SAFETY_MARGIN = 5000; // headroom for the record's other fields (chemicals/gas/qc/etc), unicode escaping, updatedAt stamping
+      const memberResultsSize = JSON.stringify(computedMemberResults).length;
+      if (memberResultsSize > SHEETS_CELL_CHAR_LIMIT - SAFETY_MARGIN) {
+        const memberCount = selectedSubBatch.memberSampleIds.length;
+        const perMember = Math.max(1, Math.round(memberResultsSize / memberCount));
+        const safeMemberCount = Math.max(1, Math.floor((SHEETS_CELL_CHAR_LIMIT - SAFETY_MARGIN) / perMember));
+        notify(`This Analytical Batch is too large to save (~${memberResultsSize.toLocaleString()} characters of results — the backend spreadsheet caps a single record at ${SHEETS_CELL_CHAR_LIMIT.toLocaleString()}). With this test's number of parameters, roughly ${safeMemberCount} sample(s) per batch is the safe limit — please split this batch into smaller ones (e.g. via Analytical Batch management) and save separately. Nothing has been changed — chemical/gas inventory has NOT been touched.`, "warn");
+        return;
+      }
+    }
+
     // If editing an existing record, first restore its previous consumption so we validate against true available stock.
     let baseChemicals = chemicals;
     if (editingRecord) baseChemicals = restoreConsumption(chemicals, editingRecord.bottleLog || {});
@@ -844,19 +893,35 @@ function AddTestTab({
       if (amount <= 0) return;
       const chem = nextChemicals.find(c => c.id === chemId);
       if (!chem) return;
-      const preferred = bottleOverride[chemId];
-      const preferredBatch = preferred ? chem.batches.find(b => b.id === preferred) : null;
+      // bottleOverride[chemId] is an ORDERED LIST of manually-picked bottles
+      // (see BottleSelector) — [{batchId, amount}], amount optional (null =
+      // "take everything available from this bottle before moving to the
+      // next one in the list"). Empty/undefined list = fully automatic
+      // FEFO across every active batch, same as before this feature existed.
+      const selection = Array.isArray(bottleOverride[chemId]) ? bottleOverride[chemId] : bottleOverride[chemId] ? [{
+        batchId: bottleOverride[chemId],
+        amount: null
+      }] : [];
       let available = chem.batches.filter(b => b.status === "active").reduce((s, b) => s + b.remaining, 0);
-      if (preferredBatch && preferredBatch.status === "expired") {
-        available += preferredBatch.remaining;
-        if (!(expiredReason[chemId] || "").trim()) insufficient.push(`${chem.name}: please give a reason for using the expired batch (Exp ${preferredBatch.expiryDate})`);else expiredOverrides.push({
-          chemical: chem.name,
-          batchId: preferredBatch.id,
-          expiryDate: preferredBatch.expiryDate,
-          reason: expiredReason[chemId].trim(),
-          tester: tester.trim(),
-          date: `${testDate} ${new Date().toTimeString().slice(0, 5)}`
-        });
+      // Expired batches only ever enter the pool when explicitly hand-picked
+      // (same "conscious override" rule as before) — now potentially several
+      // at once if more than one expired bottle is in the manual list. One
+      // shared reason field still covers all of them for this chemical.
+      const expiredSelected = selection.map(s => chem.batches.find(b => b.id === s.batchId)).filter(b => b && b.status === "expired");
+      if (expiredSelected.length) {
+        available += expiredSelected.reduce((s, b) => s + b.remaining, 0);
+        if (!(expiredReason[chemId] || "").trim()) {
+          insufficient.push(`${chem.name}: please give a reason for using the expired batch(es) (${expiredSelected.map(b => `Exp ${b.expiryDate}`).join(", ")})`);
+        } else {
+          expiredSelected.forEach(b => expiredOverrides.push({
+            chemical: chem.name,
+            batchId: b.id,
+            expiryDate: b.expiryDate,
+            reason: expiredReason[chemId].trim(),
+            tester: tester.trim(),
+            date: `${testDate} ${new Date().toTimeString().slice(0, 5)}`
+          }));
+        }
       }
       if (amount > available) insufficient.push(`${chem.name} (need ${fmtNum(amount)}, have ${fmtNum(available)})`);
     });
@@ -933,11 +998,14 @@ function AddTestTab({
         anyMissing = true;
         return;
       }
-      const preferred = bottleOverride[chemId];
+      const selection = Array.isArray(bottleOverride[chemId]) ? bottleOverride[chemId] : bottleOverride[chemId] ? [{
+        batchId: bottleOverride[chemId],
+        amount: null
+      }] : [];
       const {
         batches,
         usedFrom
-      } = deductFromChemical(chem, amount, preferred);
+      } = deductFromChemical(chem, amount, selection);
       chem.batches = batches;
       consumption[chem.name] = amount;
       bottleLog[chem.name] = usedFrom;
@@ -984,31 +1052,10 @@ function AddTestTab({
       // memberResults[] below instead (kept in sync with editingRecord.results
       // when updating a pre-existing individual record).
       results: selectedSubBatch ? [] : editingRecord?.results || [],
-      memberResults: selectedSubBatch ? selectedSubBatch.memberSampleIds.map(sampleId => {
-        const memberSample = (samples || []).find(s => s.id === sampleId);
-        return {
-          sampleId,
-          sampleCode: memberSample?.sampleCode || "",
-          results: resultParameters.map(p => {
-            const override = (resultOverridesBySample[sampleId] || []).find(r => r.paramId === p.id);
-            if (override) return override;
-            const res = computeMemberResult(sampleId, p);
-            return {
-              paramId: p.id,
-              name: p.name,
-              unit: p.unit,
-              inputs: memberInputs[sampleId]?.[p.id] || {},
-              ...(res.ok ? {
-                value: res.value,
-                error: null
-              } : {
-                value: null,
-                error: res.error
-              })
-            };
-          })
-        };
-      }) : null,
+      // Reuses computedMemberResults built earlier (before the size guard /
+      // inventory deduction above) instead of recomputing it here — keeps
+      // this in sync with exactly what the size check actually measured.
+      memberResults: computedMemberResults,
       qcCheck: isBracketing ? bracketingEvaluated.length ? {
         ruleId: matchedQcRule.id,
         qcType: "bracketing",
@@ -1067,31 +1114,6 @@ function AddTestTab({
         id: newRecordId,
         ...recordPayload
       };
-      // Hard stop for oversized Analytical Batches. The backend stores this
-      // whole record as ONE JSON blob in a single Google Sheets cell (see
-      // upsertRow_ in Code.gs), and Sheets enforces a hard 50,000-character
-      // limit per cell. A batch with enough member samples × parameters
-      // eventually blows past that — the cell write throws on the backend
-      // and DataService.save() below rejects, but by then the member
-      // samples' status flip (via bulkSet, a separate call) has usually
-      // already gone through and succeeded. That leaves samples sitting in
-      // Awaiting Review with a linkedTestRecordIds entry pointing at a
-      // record that was never actually saved — nothing to delete it from in
-      // Test Records, and the sub-batch stuck unable to be resized/deleted.
-      // Catching it here, before any state changes at all, means the user
-      // gets a clear, specific number for THEIR data (it depends on how
-      // many parameters/inputs are recorded per sample, not just sample
-      // count) instead of a silent partial failure discovered later.
-      const SHEETS_CELL_CHAR_LIMIT = 50000;
-      const SAFETY_MARGIN = 5000; // headroom for updatedAt stamping, unicode escaping, future fields
-      const estimatedSize = JSON.stringify(Object.assign({}, newRecord, { updatedAt: new Date().toISOString() })).length;
-      if (estimatedSize > SHEETS_CELL_CHAR_LIMIT - SAFETY_MARGIN) {
-        const memberCount = selectedSubBatch ? selectedSubBatch.memberSampleIds.length : 1;
-        const perMember = Math.max(1, Math.round(estimatedSize / memberCount));
-        const safeMemberCount = Math.max(1, Math.floor((SHEETS_CELL_CHAR_LIMIT - SAFETY_MARGIN) / perMember));
-        notify(`This Analytical Batch is too large to save (~${estimatedSize.toLocaleString()} characters — the backend spreadsheet caps a single record at ${SHEETS_CELL_CHAR_LIMIT.toLocaleString()}). With this test's number of parameters, roughly ${safeMemberCount} sample(s) per batch is the safe limit — please split this batch into smaller ones (e.g. via Analytical Batch management) and save separately. Nothing has been changed yet.`, "warn");
-        return;
-      }
       // Same story as the edit branch above: update local state
       // optimistically, then actually write the new record to the
       // backend. This was the missing piece — previously a brand-new
@@ -1341,13 +1363,16 @@ function AddTestTab({
       chemical: chem,
       needed: totals[req.chemicalId] || 0,
       value: bottleOverride[req.chemicalId],
-      onChange: batchId => setBottleOverride(prev => ({
+      onChange: nextSelection => setBottleOverride(prev => ({
         ...prev,
-        [req.chemicalId]: batchId
+        [req.chemicalId]: nextSelection
       }))
     })), chem && (() => {
-      const selectedBatch = chem.batches.find(b => b.id === bottleOverride[req.chemicalId]);
-      if (!selectedBatch || selectedBatch.status !== "expired") return null;
+      const selection = Array.isArray(bottleOverride[req.chemicalId]) ? bottleOverride[req.chemicalId] : bottleOverride[req.chemicalId] ? [{
+        batchId: bottleOverride[req.chemicalId]
+      }] : [];
+      const expiredSelected = selection.map(s => chem.batches.find(b => b.id === s.batchId)).filter(b => b && b.status === "expired");
+      if (!expiredSelected.length) return null;
       return /*#__PURE__*/React.createElement("div", {
         className: "mt-2 p-2 rounded flex flex-col gap-1.5",
         style: {
@@ -1361,7 +1386,7 @@ function AddTestTab({
       }, /*#__PURE__*/React.createElement(Icon, {
         name: "warning",
         size: 13
-      }), "This bottle expired on ", selectedBatch.expiryDate, ". Using it will be logged in the Expired Chemical Usage Report."), /*#__PURE__*/React.createElement("input", {
+      }), expiredSelected.length === 1 ? `This bottle expired on ${expiredSelected[0].expiryDate}.` : `${expiredSelected.length} selected bottles are expired (${expiredSelected.map(b => b.expiryDate).join(", ")}).`, " Using it will be logged in the Expired Chemical Usage Report."), /*#__PURE__*/React.createElement("input", {
         className: "border rounded px-2 py-1 text-xs",
         style: {
           borderColor: C.border
