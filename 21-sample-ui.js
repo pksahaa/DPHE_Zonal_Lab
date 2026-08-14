@@ -3225,7 +3225,15 @@ function SubBatchBuilder({
   const creatingRef = React.useRef(false);
   const [assignedTester, setAssignedTester] = React.useState("");
   const [autoCount, setAutoCount] = React.useState("");
-  const [autoBatchCount, setAutoBatchCount] = React.useState("");
+  // Dedicated to the "split into multiple batches" action at the bottom of
+  // the form — deliberately a SEPARATE field from autoCount above (which
+  // only pre-picks N eligible samples into the pool and has nothing to do
+  // with batch size). Reusing one field for both was the root of the "select
+  // a Reference → hit Create → everything lands in one batch" complaint:
+  // the loud primary Create button at the bottom never looked at autoCount
+  // at all, so filling it in had no effect on that button.
+  const [splitSize, setSplitSize] = React.useState("");
+  const [splitBatchCount, setSplitBatchCount] = React.useState("");
   const [editingSubBatchId, setEditingSubBatchId] = React.useState(null);
   const [deleteSubBatchId, setDeleteSubBatchId] = React.useState(null);
 
@@ -3289,10 +3297,10 @@ function SubBatchBuilder({
   // cover every selected sample; set it to cap how many batches get made
   // (any selected samples left over stay selected for a next pass).
   function autoCreateMultipleBatches() {
-    const perBatch = parseInt(autoCount, 10);
-    const numBatchesRaw = parseInt(autoBatchCount, 10);
+    const perBatch = parseInt(splitSize, 10);
+    const numBatchesRaw = parseInt(splitBatchCount, 10);
     if (!perBatch || perBatch <= 0) {
-      notify?.("Enter No. of Samples (per batch) first.", "warn");
+      notify?.("Enter \"Samples per batch\" first.", "warn");
       return;
     }
     if (!selectedTestId) {
@@ -3340,8 +3348,8 @@ function SubBatchBuilder({
     setSelectedSampleIds(prev => prev.filter(id => !usedSet.has(id)));
     const leftover = pool.length - cursor;
     notify?.(`Created ${createdLabels.length} sub-batch(es) from ${cursor} selected sample(s): ${createdLabels.join(", ")}.${leftover > 0 ? ` ${leftover} selected sample(s) left over — still checked, run Create Multiple Batches again if needed.` : ""}`, "ok");
-    setAutoCount("");
-    setAutoBatchCount("");
+    setSplitSize("");
+    setSplitBatchCount("");
   }
   function resetForm() {
     setSelectedTestId("");
@@ -3350,6 +3358,8 @@ function SubBatchBuilder({
     setLabel("");
     setAssignedTester("");
     setAutoCount("");
+    setSplitSize("");
+    setSplitBatchCount("");
     setEditingSubBatchId(null);
   }
   function startEdit(sb) {
@@ -3623,21 +3633,7 @@ function SubBatchBuilder({
     variant: "outline",
     size: "sm",
     onClick: autoSelect
-  }, "Auto-Select"), /*#__PURE__*/React.createElement("input", {
-    type: "number",
-    min: 1,
-    placeholder: "No. of batches (optional)",
-    value: autoBatchCount,
-    onChange: e => setAutoBatchCount(e.target.value),
-    className: "border rounded px-2 py-1 text-xs w-28",
-    style: {
-      borderColor: C.border
-    }
-  }), /*#__PURE__*/React.createElement(Button, {
-    variant: "outline",
-    size: "sm",
-    onClick: autoCreateMultipleBatches
-  }, "Create Multiple Batches"), /*#__PURE__*/React.createElement(Button, {
+  }, "Auto-Select"), /*#__PURE__*/React.createElement(Button, {
     variant: "ghost",
     size: "sm",
     onClick: () => setSelectedSampleIds(eligibleSamples.map(s => s.id))
@@ -3735,6 +3731,56 @@ function SubBatchBuilder({
     }
   }, "Heads up: this sub-batch mixes samples from ", distinctReferences.length, " different References (", distinctReferences.map(r => r.refNo).join(", "), "). That's fine for testing — each sample keeps its own Reference for reporting.") : null;
 
+  // Splitting a selection into several Analytical Batches. Deliberately
+  // sits right next to the primary Create button rather than being a
+  // separate button buried above the grid — that separation used to be the
+  // whole problem: filling in a per-batch size did nothing to the loud,
+  // obvious Create button, so a Reference selection always ended up as one
+  // giant batch no matter what was typed elsewhere. Now there's exactly one
+  // Create action, and this field controls what it does. Leave "Samples per
+  // batch" blank → one batch with everything currently selected. Fill it
+  // in → that same click splits the selection into batches of that size
+  // instead (optionally capped by "No. of batches").
+  const splitSizeNum = parseInt(splitSize, 10);
+  const willSplit = !editingSubBatchId && splitSizeNum > 0 && splitSizeNum < selectedSampleIds.length;
+  const plannedBatchCount = willSplit ? Math.min(parseInt(splitBatchCount, 10) || Infinity, Math.ceil(selectedSampleIds.length / splitSizeNum)) : 0;
+  const splitRow = !editingSubBatchId && selectedSampleIds.length > 1 ? /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 flex-wrap mt-3 pt-3",
+    style: {
+      borderTop: `1px dashed ${C.border}`
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs",
+    style: {
+      color: C.muted
+    }
+  }, "Split into multiple batches:"), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: 1,
+    placeholder: "Samples per batch",
+    value: splitSize,
+    onChange: e => setSplitSize(e.target.value),
+    className: "border rounded px-2 py-1 text-xs w-32",
+    style: {
+      borderColor: C.border
+    }
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    min: 1,
+    placeholder: "No. of batches (optional)",
+    value: splitBatchCount,
+    onChange: e => setSplitBatchCount(e.target.value),
+    className: "border rounded px-2 py-1 text-xs w-36",
+    style: {
+      borderColor: C.border
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px]",
+    style: {
+      color: C.muted
+    }
+  }, "leave blank for one batch with all ", selectedSampleIds.length, " selected")) : null;
+
   const canSubmitSubBatchForm = editingSubBatchId ? canEditSubBatch : canCreateSubBatch;
   const actionRow = /*#__PURE__*/React.createElement("div", {
     className: "flex justify-end gap-2 mt-3"
@@ -3742,11 +3788,11 @@ function SubBatchBuilder({
     variant: "outline",
     onClick: resetForm
   }, "Cancel Edit"), canSubmitSubBatchForm && /*#__PURE__*/React.createElement(Button, {
-    onClick: createGroup
+    onClick: willSplit ? autoCreateMultipleBatches : createGroup
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "check",
     size: 13
-  }), editingSubBatchId ? "Save Changes" : `Create Analytical Batch (${selectedSampleIds.length})`));
+  }), editingSubBatchId ? "Save Changes" : willSplit ? `Create ${plannedBatchCount} Batches (${splitSizeNum} samples each)` : `Create Analytical Batch (${selectedSampleIds.length})`));
 
   const pickerBlock = !selectedTestId ? /*#__PURE__*/React.createElement("div", {
     className: "text-xs p-3 rounded mt-3",
@@ -3762,7 +3808,7 @@ function SubBatchBuilder({
       background: C.infoBg,
       color: C.info
     }
-  }, "No pending samples match this Test Type", selectedReferenceIds.length ? " + Reference filter" : "", " (or all are already in another pending sub-batch).") : /*#__PURE__*/React.createElement("div", null, pickerHeaderRow, pickerListBox, mixedBatchWarning, actionRow));
+  }, "No pending samples match this Test Type", selectedReferenceIds.length ? " + Reference filter" : "", " (or all are already in another pending sub-batch).") : /*#__PURE__*/React.createElement("div", null, pickerHeaderRow, pickerListBox, mixedBatchWarning, splitRow, actionRow));
 
   // ---- Two-Column Dashboard Layout ----
   // Left: the creation form (Test Type / Label / Tester). Right: the live,
