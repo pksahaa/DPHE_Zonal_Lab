@@ -2315,37 +2315,63 @@ function TestRecordsTab({
   // `rec` in the active testRecords list (or nothing, if every member was
   // released). Works the same for legacy single-sample records (releasedIds
   // is either [] or [rec.sampleId] there, never a partial split).
+  // Batches with many members (100+) were building ONE archived_records row
+  // holding every released member's snapshot + results in a single JSON
+  // blob written into a single spreadsheet cell. A 250-member batch lands
+  // well past 50,000 characters — Google Sheets' hard per-cell limit — and
+  // even short of that limit, one large POST is far more likely to get
+  // dropped by a slow/unstable connection mid-transfer than several small
+  // ones (this is almost certainly the "NetworkError when attempting to
+  // fetch resource" — the request never completing — on large batches).
+  // Chunking is safe here because the rest of the app (restore, the
+  // Archive tab, matchesArchiveQuery) already treats every archived_records
+  // row as independent and self-contained, keyed by originRecordId rather
+  // than assuming one row per release event — see 18-archive-ui.js.
+  const ARCHIVE_CHUNK_SIZE = 40;
   async function archiveReleasedMembers(rec, releasedIds) {
     const isBatch = !!(rec.memberSampleIds && rec.memberSampleIds.length);
     const allSampleIds = isBatch ? rec.memberSampleIds : rec.sampleId ? [rec.sampleId] : [];
     const remainingIds = allSampleIds.filter(sid => !releasedIds.includes(sid));
+    const fullyReleased = remainingIds.length === 0;
+    const idChunks = isBatch && releasedIds.length > ARCHIVE_CHUNK_SIZE ? Array.from({
+      length: Math.ceil(releasedIds.length / ARCHIVE_CHUNK_SIZE)
+    }, (_, i) => releasedIds.slice(i * ARCHIVE_CHUNK_SIZE, (i + 1) * ARCHIVE_CHUNK_SIZE)) : [releasedIds];
     // Limit snapshot to ID + sampleCode + clientName only — storing full sample
     // objects in each archived record bloated payloads and could hit GAS size
     // limits on large batches. The Archive tab fetches full sample detail via
     // the active samples list if needed.
-    const archivedSampleSnapshots = releasedIds.map(id => {
+    const buildSnapshots = ids => ids.map(id => {
       const s = (samples || []).find(x => x.id === id);
       return s ? { id: s.id, sampleCode: s.sampleCode, clientName: s.clientName } : { id };
     });
-    const fullyReleased = remainingIds.length === 0;
-    const archivedRecord = isBatch ? {
-      ...rec,
-      id: fullyReleased ? rec.id : uid("tr"),
-      originRecordId: rec.id,
-      memberSampleIds: releasedIds,
-      memberResults: (rec.memberResults || []).filter(m => releasedIds.includes(m.sampleId)),
-      archivedAt: new Date().toISOString(),
-      archivedSampleSnapshots
-    } : {
-      ...rec,
-      originRecordId: rec.id,
-      archivedAt: new Date().toISOString(),
-      archivedSampleSnapshots
-    };
-    // Save to backend FIRST — only update local state after the backend
-    // confirms the save. This prevents the record from disappearing from the
-    // active list if the backend call fails, keeping the UI consistent.
-    await DataService.save("archived_records", archivedRecord);
+    // Save to backend FIRST — only update local state after every chunk's
+    // backend call confirms the save. This prevents the record from
+    // disappearing from the active list if a backend call fails, keeping
+    // the UI consistent. Chunks are awaited sequentially (not in parallel)
+    // so they queue politely behind the shared write lock instead of all
+    // fighting over it at once.
+    for (let i = 0; i < idChunks.length; i++) {
+      const chunkIds = idChunks[i];
+      const archivedRecord = isBatch ? {
+        ...rec,
+        // Only the single-chunk, fully-released case reuses rec.id — once a
+        // release is split into chunks there's no one row left to inherit
+        // the original id, so every chunk gets its own, same as the
+        // partial-release case always did.
+        id: idChunks.length === 1 && fullyReleased ? rec.id : uid("tr"),
+        originRecordId: rec.id,
+        memberSampleIds: chunkIds,
+        memberResults: (rec.memberResults || []).filter(m => chunkIds.includes(m.sampleId)),
+        archivedAt: new Date().toISOString(),
+        archivedSampleSnapshots: buildSnapshots(chunkIds)
+      } : {
+        ...rec,
+        originRecordId: rec.id,
+        archivedAt: new Date().toISOString(),
+        archivedSampleSnapshots: buildSnapshots(chunkIds)
+      };
+      await DataService.save("archived_records", archivedRecord);
+    }
     let nextTestRecords;
     if (fullyReleased) {
       nextTestRecords = testRecords.filter(r => r.id !== rec.id);

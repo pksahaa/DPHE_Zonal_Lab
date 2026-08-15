@@ -724,8 +724,44 @@ function LabApp({
     if (loaded && !loadHadFailures && !isFirstTestTypesSave()) queuedSave("testTypes", () => DataService.bulkSet("testTypes", testTypes)).catch(err => notifyBackendSaveError("test types", err));
   }, [testTypes, loaded]);
   const isFirstTestRecordsSave = useHydrationGuard();
+  // Was: unconditional DataService.bulkSet("testRecords", testRecords) on
+  // every change — bulkSet -> replaceAllRows_ rewrites the ENTIRE
+  // testRecords sheet, so archiving/restoring/editing even one record
+  // (setTestRecords fires this effect on any array change) paid for a full
+  // sheet rewrite every single time — this is what was actually making
+  // single AND bulk archive/restore feel slow (the fix shipped for
+  // DataService.archiveTestRecord() doesn't touch this path — that
+  // function is only used by the automated age-based sweep in
+  // 23-data-backup.js, not the manual Archive/Restore buttons, which only
+  // ever go through this effect). Diffing against the previous array by id
+  // and sending just the records that actually changed — via the existing
+  // targeted bulkUpsert (changed/added) and remove (deleted) calls —
+  // turns a single archive into one small request instead of a full-sheet
+  // rewrite, and a multi-select archive into one bulkUpsert/remove batch
+  // instead of N full rewrites. Reference-inequality is enough to detect a
+  // changed record because every call site here builds new objects
+  // (spread/map/filter), never mutates in place.
+  const prevTestRecordsRef = useRef(testRecords);
   useEffect(() => {
-    if (loaded && !loadHadFailures && !isFirstTestRecordsSave()) queuedSave("testRecords", () => DataService.bulkSet("testRecords", testRecords)).catch(err => notifyBackendSaveError("test records", err));
+    const prev = prevTestRecordsRef.current;
+    prevTestRecordsRef.current = testRecords;
+    if (!(loaded && !loadHadFailures && !isFirstTestRecordsSave())) return;
+    const prevById = new Map(prev.map(r => [r.id, r]));
+    const nextIds = new Set();
+    const upserts = [];
+    testRecords.forEach(rec => {
+      nextIds.add(rec.id);
+      if (prevById.get(rec.id) !== rec) upserts.push(rec);
+    });
+    const removedIds = [];
+    prevById.forEach((_, id) => {
+      if (!nextIds.has(id)) removedIds.push(id);
+    });
+    if (!upserts.length && !removedIds.length) return;
+    queuedSave("testRecords", async () => {
+      if (upserts.length) await DataService.bulkUpsert("testRecords", upserts);
+      if (removedIds.length) await DataService.bulkRemove("testRecords", removedIds);
+    }).catch(err => notifyBackendSaveError("test records", err));
   }, [testRecords, loaded]);
   const isFirstSubBatchesSave = useHydrationGuard();
   useEffect(() => {
@@ -785,7 +821,7 @@ function LabApp({
   })), /*#__PURE__*/React.createElement("div", {
     className: "min-w-0"
   }, /*#__PURE__*/React.createElement("div", {
-    className: "text-white font-semibold text-lg leading-tight truncate"
+    className: "font-heading text-white font-semibold text-lg leading-tight tracking-tight truncate"
   }, t("appName")), /*#__PURE__*/React.createElement("div", {
     className: "text-xs truncate",
     style: {

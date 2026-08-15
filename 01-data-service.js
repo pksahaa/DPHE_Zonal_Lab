@@ -115,8 +115,18 @@ const DataService = (() => {
     try {
       return await gasCallOnce(action, opts);
     } catch (e) {
-      if (attempt >= 3) throw e;
-      await new Promise(r => setTimeout(r, 400 * attempt));
+      // A raw fetch()-level failure (connection dropped/reset mid-request —
+      // "NetworkError when attempting to fetch resource", "Failed to
+      // fetch") is inherently more likely on larger POST bodies over a
+      // weak connection, e.g. archiving a big batch. TypeError is what
+      // fetch() itself throws for that class of failure (as opposed to a
+      // clean {error: "..."} response from Apps Script, which is a
+      // regular Error, not a TypeError). Give those a bit more room —
+      // more attempts, longer backoff — since the fix is "try again",
+      // not "give up faster".
+      const maxAttempts = e instanceof TypeError ? 5 : 3;
+      if (attempt >= maxAttempts) throw e;
+      await new Promise(r => setTimeout(r, 500 * attempt));
       return gasCallWithRetry(action, opts, attempt + 1);
     }
   }
@@ -227,6 +237,15 @@ const DataService = (() => {
       collection,
       payload: arr
     }) : arr.map(record => localSave(collection, record));
+  }
+  // Removes several records in ONE round trip — see bulkUpsert above for
+  // the same reasoning, mirrored for deletes.
+  async function bulkRemove(collection, ids) {
+    if (!ids || !ids.length) return { ok: true };
+    return config.mode === "gas" ? gasCall("bulkRemove", {
+      collection,
+      payload: { ids }
+    }) : ids.map(id => localRemove(collection, id));
   }
   async function appendAudit(entry) {
     const stamped = {
@@ -407,6 +426,7 @@ const DataService = (() => {
     remove,
     bulkSet,
     bulkUpsert,
+    bulkRemove,
     getSingleton,
     saveSingleton,
     appendAudit,

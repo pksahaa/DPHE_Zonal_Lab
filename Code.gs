@@ -174,6 +174,27 @@ function removeRow_(collection, id) {
     }
   }
 }
+// Deletes several rows in ONE call — reads the id column once (like
+// bulkUpsertRows_ does for writes) instead of calling removeRow_ in a loop,
+// which would re-fetch and re-scan the whole id column from scratch for
+// every single id. Row indices are collected up front and deleted from the
+// bottom up so an earlier deletion never shifts the row number of one
+// still waiting to be deleted.
+function bulkRemoveRows_(collection, ids) {
+  const idSet = new Set(ids || []);
+  if (!idSet.size) return { ok: true };
+  const sheet = getSheet_(collection);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { ok: true };
+  const idCol = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  const rowsToDelete = [];
+  idCol.forEach(([id], i) => {
+    if (idSet.has(id)) rowsToDelete.push(i + 2);
+  });
+  rowsToDelete.sort((a, b) => b - a).forEach(rowIndex => sheet.deleteRow(rowIndex));
+  invalidateCache_(collection);
+  return { ok: true, removed: rowsToDelete.length };
+}
 function replaceAllRows_(collection, records) {
   const sheet = getSheet_(collection);
   const lastRow = sheet.getLastRow();
@@ -324,7 +345,7 @@ function doGet(e) {
 // genuinely do run concurrent executions. LockService serializes just the
 // write path (reads stay lock-free/fast) so one write always finishes
 // before the next one starts touching the same spreadsheet.
-const WRITE_ACTIONS_ = new Set(["save", "remove", "bulkSet", "bulkUpsert", "bulkAppendAudit", "appendAudit", "restoreRecord"]);
+const WRITE_ACTIONS_ = new Set(["save", "remove", "bulkSet", "bulkUpsert", "bulkRemove", "bulkAppendAudit", "appendAudit", "restoreRecord"]);
 function doPost(e) {
   try {
     const body = JSON.parse(e.postData.contents || "{}");
@@ -348,6 +369,8 @@ function doPost(e) {
           return jsonOut_({ data: replaceAllRows_(collection, payload) });
         case "bulkUpsert":
           return jsonOut_({ data: bulkUpsertRows_(collection, payload) });
+        case "bulkRemove":
+          return jsonOut_({ data: bulkRemoveRows_(collection, payload && payload.ids) });
         case "bulkAppendAudit":
           return jsonOut_({ data: bulkAppendAuditRows_(payload) });
         case "appendAudit":

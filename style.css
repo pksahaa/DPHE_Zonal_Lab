@@ -1,9 +1,42 @@
-body { margin: 0; font-family: Inter, system-ui, sans-serif; }
+/* ---- UI/UX refresh: type system ---------------------------------------
+   "Corporate Trust" pairing: Lexend for headings/labels/numerals (open,
+   geometric, built for reading-fluency), Source Sans 3 for body copy —
+   both are accessibility-oriented sans-serifs suited to a government/lab
+   data product. Loaded via <link> in index.html; system-font fallbacks
+   keep the app usable if the Google Fonts request is blocked/offline. */
+body {
+  margin: 0;
+  font-family: "Source Sans 3", Inter, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.font-heading {
+  font-family: "Lexend", "Source Sans 3", system-ui, sans-serif;
+}
 @media print {
   .no-print { display: none !important; }
   body { background: #fff !important; }
 }
 .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* Respect reduced-motion for the small hover/press affordances added to
+   Button/StatCard/IconButton in 02-ui-kit.js. */
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 0.001ms !important; }
+}
+
+/* Thin, low-contrast scrollbars app-wide (previously only the sidebar had
+   this treatment) so the dense data tables/panels feel considered rather
+   than left at the browser default. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(15, 43, 46, 0.22) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb {
+  background: rgba(15, 43, 46, 0.22);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover { background: rgba(15, 43, 46, 0.34); }
 
 /* ---- Add Test Record → Calculated Result panel ----------------------
    A fixed-height, vertically-scrolling container so a batch of dozens of
@@ -61,7 +94,7 @@ body { margin: 0; font-family: Inter, system-ui, sans-serif; }
 .col-toggle-row input[type="checkbox"] {
   width: 13px;
   height: 13px;
-  accent-color: var(--teal, #0f766e);
+  accent-color: var(--teal, #0B7285);
   cursor: pointer;
 }
 .col-toggle-row.locked {
@@ -123,7 +156,7 @@ body { margin: 0; font-family: Inter, system-ui, sans-serif; }
 }
 .sidebar-nav-item:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px #028090;
+  box-shadow: 0 0 0 2px #0B7285;
 }
 @media print {
   .sidebar-nav-rail, .sidebar-nav-flyout, .sidebar-nav-backdrop { display: none !important; }
