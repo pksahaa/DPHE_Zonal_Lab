@@ -785,7 +785,7 @@ function LabApp({
   })), /*#__PURE__*/React.createElement("div", {
     className: "min-w-0"
   }, /*#__PURE__*/React.createElement("div", {
-    className: "text-white font-semibold text-lg leading-tight truncate"
+    className: "font-heading text-white font-semibold text-lg leading-tight tracking-tight truncate"
   }, t("appName")), /*#__PURE__*/React.createElement("div", {
     className: "text-xs truncate",
     style: {

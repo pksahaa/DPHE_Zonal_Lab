@@ -12,56 +12,64 @@ const {
 } = React;
 
 // ---------------- Palette (light / dark) ----------------
+// UI/UX refresh (design-system pass): kept the lab's existing teal/water
+// brand hue — it's genuinely on-brand for a water quality lab, and a full
+// hue swap would be a rebrand, not a polish pass — but tightened it toward
+// a Swiss/minimalist, high-contrast "government dashboard" feel: a cooler,
+// less-minty neutral background instead of a tinted one, crisper borders
+// with actual definition, and status colors (ok/warn/danger/info) moved to
+// values that read as more standard/institutional and check out against
+// WCAG 4.5:1 body-text contrast on both `bg` and `card`.
 const LIGHT_PALETTE = {
-  ink: "#123437",
-  teal: "#028090",
-  tealDark: "#045C64",
-  seafoam: "#00A896",
-  mint: "#02C39A",
-  bg: "#F3FAF9",
+  ink: "#0F2B2E",
+  teal: "#0B7285",
+  tealDark: "#0A4A54",
+  seafoam: "#04998A",
+  mint: "#02B08A",
+  bg: "#F4F6F7",
   card: "#FFFFFF",
-  warn: "#C7511F",
-  warnBg: "#FDEDE6",
-  ok: "#0E7C56",
-  okBg: "#E6F6EF",
-  border: "#D6ECEA",
-  muted: "#5B7275",
-  info: "#1D5B7A",
-  infoBg: "#E7F1F7",
+  warn: "#B54708",
+  warnBg: "#FDF1E8",
+  ok: "#0F7A4E",
+  okBg: "#E7F6EE",
+  border: "#DDE3E4",
+  muted: "#516268",
+  info: "#0B5F8A",
+  infoBg: "#E8F2F8",
   // ---- Added during UI/UX audit: these hex values were previously
   // hardcoded ad-hoc throughout the app (outside this palette), so they
   // never re-themed in dark mode. Now named tokens like everything else.
-  danger: "#E63946",
-  dangerBg: "#FBE4E6",
-  headerText: "#DDF2F0",
-  headerTextMuted: "#BFE3E0",
-  mutedBg: "#EEF4F3",
-  subtle: "#FAFEFE"
+  danger: "#C81E3A",
+  dangerBg: "#FBE7EA",
+  headerText: "#EAF4F3",
+  headerTextMuted: "#BFDAD8",
+  mutedBg: "#EBEEEF",
+  subtle: "#FAFBFB"
 };
 const DARK_PALETTE = {
-  ink: "#EAF6F5",
-  teal: "#12A5A8",
-  tealDark: "#0C3B3D",
-  seafoam: "#00A896",
-  mint: "#02C39A",
-  bg: "#0E2325",
-  card: "#153436",
-  warn: "#FF8A65",
-  warnBg: "#3A2117",
-  ok: "#5FD8A8",
-  okBg: "#123A2E",
-  border: "#25494B",
-  muted: "#9BC4C2",
-  info: "#7FC4E8",
-  infoBg: "#123244",
-  danger: "#FF6B75",
-  dangerBg: "#3A1518",
+  ink: "#EAF1F0",
+  teal: "#3FB6C4",
+  tealDark: "#0A2E33",
+  seafoam: "#26C2AC",
+  mint: "#2AD1A8",
+  bg: "#111A1C",
+  card: "#182427",
+  warn: "#F0A25E",
+  warnBg: "#332012",
+  ok: "#5FD09A",
+  okBg: "#0F2E23",
+  border: "#2A3A3D",
+  muted: "#93A5A8",
+  info: "#7FC1E3",
+  infoBg: "#102A38",
+  danger: "#F0798A",
+  dangerBg: "#301218",
   // header bar background (C.tealDark) stays a dark teal in both themes, so
   // the light text sitting on it stays the same in both themes too.
-  headerText: "#DDF2F0",
-  headerTextMuted: "#BFE3E0",
-  mutedBg: "#1C3D3F",
-  subtle: "#173537"
+  headerText: "#EAF4F3",
+  headerTextMuted: "#BFDAD8",
+  mutedBg: "#1E2C2F",
+  subtle: "#152023"
 };
 // C is a mutable palette object — components read C.xxx at render time, so
 // re-assigning its keys (via applyTheme) and forcing a re-render is enough
@@ -78,7 +86,7 @@ function applyTheme(mode) {
 // in their browser are actually the updated ones, since local file:// pages
 // are notorious for silently serving a cached copy of the old JS after you
 // overwrite the files on disk.
-const APP_BUILD = "2026-08-04.8 (Guest permission fix + per-user permission overrides)";
+const APP_BUILD = "2026-08-15.1 (UI/UX refresh: Lexend/Source Sans 3 type system, refined palette + elevation)";
 
 const STRINGS = {
   en: {
