@@ -66,6 +66,7 @@ function InventoryTab({
   const [deleteGasFor, setDeleteGasFor] = useState(null);
   const [cylinderFormFor, setCylinderFormFor] = useState(null); // gasId — "Add New Cylinder"
   const [refillFormFor, setRefillFormFor] = useState(null); // { gasId, cylinder } — "Refill"
+  const [emptyFormFor, setEmptyFormFor] = useState(null); // { gasId, cylinder } — "Mark Empty"
   const [editCylinder, setEditCylinder] = useState(null); // { gasId, cylinder }
   const [deleteCylinder, setDeleteCylinder] = useState(null); // { gasId, cylinder }
   const [historyFor, setHistoryFor] = useState(null); // { gasId, cylinder } — "New vs Refill" log
@@ -1315,8 +1316,8 @@ function InventoryTab({
         }),
         className: "flex items-center gap-1 flex-wrap"
       }, /*#__PURE__*/React.createElement(Badge, {
-        tone: last?.type === "new" ? "info" : "ok"
-      }, last?.type === "refill" ? "Refilled" : "New Cylinder"), last && /*#__PURE__*/React.createElement("span", {
+        tone: last?.type === "new" ? "info" : last?.type === "empty" ? "warn" : "ok"
+      }, last?.type === "refill" ? "Refilled" : last?.type === "empty" ? "Marked Empty" : "New Cylinder"), last && /*#__PURE__*/React.createElement("span", {
         style: {
           color: C.muted
         }
@@ -1361,25 +1362,10 @@ function InventoryTab({
       }), "Refill"), canEditInv && c.status === "active" && /*#__PURE__*/React.createElement(Button, {
         size: "sm",
         variant: "ghost",
-        onClick: invEditGate.guard(() => {
-          setGasList(prev => prev.map(x => x.id === g.id ? {
-            ...x,
-            cylinders: x.cylinders.map(cy => cy.id === c.id ? {
-              ...cy,
-              remaining: 0,
-              status: "empty"
-            } : cy)
-          } : x));
-          DataService.appendAudit({
-            entity: "gas",
-            entityId: g.id,
-            action: "edit",
-            user: session.username,
-            role: session.role,
-            note: `Marked a "${g.name}" cylinder as empty`
-          });
-          notify(`Marked cylinder as empty — remember to refill or replace it.`, "warn");
-        })
+        onClick: invEditGate.guard(() => setEmptyFormFor({
+          gasId: g.id,
+          cylinder: c
+        }))
       }, "Mark Empty"), canEditInv && /*#__PURE__*/React.createElement(IconButton, {
         name: "edit",
         color: C.teal,
@@ -1566,6 +1552,47 @@ function InventoryTab({
       notify("Cylinder refilled");
     },
     onCancel: () => setRefillFormFor(null)
+  })), emptyFormFor && /*#__PURE__*/React.createElement(Modal, {
+    title: "Mark Cylinder Empty",
+    onClose: () => setEmptyFormFor(null)
+  }, /*#__PURE__*/React.createElement(MarkEmptyForm, {
+    cylinder: emptyFormFor.cylinder,
+    onSave: payload => {
+      const gasName = gasList.find(g => g.id === emptyFormFor.gasId)?.name || "gas";
+      setGasList(prev => prev.map(g => {
+        if (g.id !== emptyFormFor.gasId) return g;
+        return {
+          ...g,
+          cylinders: g.cylinders.map(c => {
+            if (c.id !== emptyFormFor.cylinder.id) return c;
+            return {
+              ...c,
+              remaining: 0,
+              status: "empty",
+              history: [...(c.history || []), {
+                id: uid("gevt"),
+                date: payload.date,
+                type: "empty",
+                amount: 0,
+                cost: 0,
+                note: payload.note || "Marked empty"
+              }]
+            };
+          })
+        };
+      }));
+      setEmptyFormFor(null);
+      DataService.appendAudit({
+        entity: "gas",
+        entityId: emptyFormFor.gasId,
+        action: "edit",
+        user: session.username,
+        role: session.role,
+        note: `Marked a "${gasName}" cylinder as empty (${payload.date})`
+      });
+      notify("Marked cylinder as empty — remember to refill or replace it.", "warn");
+    },
+    onCancel: () => setEmptyFormFor(null)
   })), historyFor && /*#__PURE__*/React.createElement(Modal, {
     title: `Cylinder History — received ${historyFor.cylinder.dateReceived}`,
     onClose: () => setHistoryFor(null)
@@ -1596,8 +1623,8 @@ function InventoryTab({
   }, h.date), /*#__PURE__*/React.createElement("td", {
     className: "py-1.5"
   }, /*#__PURE__*/React.createElement(Badge, {
-    tone: h.type === "new" ? "info" : "ok"
-  }, h.type === "new" ? "New Cylinder" : "Refill")), /*#__PURE__*/React.createElement("td", {
+    tone: h.type === "new" ? "info" : h.type === "empty" ? "warn" : "ok"
+  }, h.type === "new" ? "New Cylinder" : h.type === "empty" ? "Marked Empty" : "Refill")), /*#__PURE__*/React.createElement("td", {
     className: "py-1.5"
   }, fmtNum(h.amount), " ", gasList.find(g => g.id === historyFor.gasId)?.unit), /*#__PURE__*/React.createElement("td", {
     className: "py-1.5"
@@ -1791,7 +1818,12 @@ function AddBatchForm({
   const belowUsed = initial && amount !== "" && Number(amount) < usedAmount;
   const computedExpiry = expiryType === "shelf" ? addYears(manufacturingDate, shelfLifeYears) : expiryDate;
   const nameDupe = batchName.trim() && existingNames.some(n => n.toLowerCase() === batchName.trim().toLowerCase());
-  const canSave = computedExpiry && amount !== "" && !belowUsed && batchName.trim() && !nameDupe;
+  // Date of Receive and Expiry Date must each fall strictly AFTER the
+  // Manufacturing Date (not same-day) — only enforced once a Manufacturing
+  // Date is actually entered, since it's an optional field.
+  const receivedNotAfterMfg = manufacturingDate && dateReceived && dateReceived <= manufacturingDate;
+  const expiryNotAfterMfg = manufacturingDate && expiryType === "exact" && expiryDate && expiryDate <= manufacturingDate;
+  const canSave = computedExpiry && amount !== "" && !belowUsed && batchName.trim() && !nameDupe && !receivedNotAfterMfg && !expiryNotAfterMfg;
   return /*#__PURE__*/React.createElement("div", {
     className: "flex flex-col gap-3"
   }, /*#__PURE__*/React.createElement(TextField, {
@@ -1811,7 +1843,8 @@ function AddBatchForm({
     label: "Date of Receive",
     type: "date",
     value: dateReceived,
-    onChange: e => setDateReceived(e.target.value)
+    onChange: e => setDateReceived(e.target.value),
+    error: receivedNotAfterMfg ? "Must be after the Manufacturing Date." : undefined
   }), /*#__PURE__*/React.createElement(TextField, {
     label: "Manufacturing Date",
     type: "date",
@@ -1837,7 +1870,8 @@ function AddBatchForm({
     label: "Expiry Date",
     type: "date",
     value: expiryDate,
-    onChange: e => setExpiryDate(e.target.value)
+    onChange: e => setExpiryDate(e.target.value),
+    error: expiryNotAfterMfg ? "Must be after the Manufacturing Date." : undefined
   }) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TextField, {
     label: "Shelf Life (Years)",
     type: "number",
@@ -2060,6 +2094,12 @@ function RefillCylinderForm({
   const [cost, setCost] = useState("");
   const [note, setNote] = useState("");
   const room = cylinder ? +(cylinder.capacity - cylinder.remaining).toFixed(4) : 0;
+  // Each refill must land strictly after the cylinder's last recorded event
+  // (received / a prior refill / a prior empty) — see latestCylinderEventDate
+  // (10-inventory-logic.js). Keeps the received -> empty -> refill -> empty
+  // -> refill... chain always moving forward, cycle after cycle.
+  const lastEventDate = latestCylinderEventDate(cylinder);
+  const dateNotAfterLast = lastEventDate && date && date <= lastEventDate;
   return /*#__PURE__*/React.createElement("div", {
     className: "flex flex-col gap-3"
   }, cylinder && /*#__PURE__*/React.createElement("div", {
@@ -2071,7 +2111,8 @@ function RefillCylinderForm({
     label: "Refill Date",
     type: "date",
     value: date,
-    onChange: e => setDate(e.target.value)
+    onChange: e => setDate(e.target.value),
+    error: dateNotAfterLast ? `Must be after the last recorded date (${lastEventDate}).` : undefined
   }), /*#__PURE__*/React.createElement(TextField, {
     label: `Amount Refilled (${unit})`,
     type: "number",
@@ -2098,12 +2139,59 @@ function RefillCylinderForm({
     variant: "outline",
     onClick: onCancel
   }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
+    disabled: dateNotAfterLast,
     onClick: () => {
       const n = Number(amount);
-      if (n > 0) onSave({
+      if (n > 0 && !dateNotAfterLast) onSave({
         date,
         amount: n,
         cost: Number(cost) || 0,
+        note: note.trim()
+      });
+    }
+  }, "Save")));
+}
+// Prompts for the date a cylinder actually ran out. That date must fall
+// strictly after the cylinder's last recorded event (received, or its last
+// refill) — see latestCylinderEventDate (10-inventory-logic.js) — the same
+// forward-only rule Refill enforces, just for the other half of the cycle.
+function MarkEmptyForm({
+  cylinder,
+  onSave,
+  onCancel
+}) {
+  const [date, setDate] = useState(todayStr());
+  const [note, setNote] = useState("");
+  const lastEventDate = latestCylinderEventDate(cylinder);
+  const dateNotAfterLast = lastEventDate && date && date <= lastEventDate;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-3"
+  }, cylinder && lastEventDate && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs",
+    style: {
+      color: C.muted
+    }
+  }, "Last recorded on ", lastEventDate, "."), /*#__PURE__*/React.createElement(TextField, {
+    label: "Date Emptied",
+    type: "date",
+    value: date,
+    onChange: e => setDate(e.target.value),
+    error: dateNotAfterLast ? `Must be after the last recorded date (${lastEventDate}).` : undefined
+  }), /*#__PURE__*/React.createElement(TextField, {
+    label: "Note (optional)",
+    value: note,
+    onChange: e => setNote(e.target.value),
+    placeholder: "e.g. Ran out mid-test"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end gap-2 mt-2"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "outline",
+    onClick: onCancel
+  }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
+    disabled: dateNotAfterLast,
+    onClick: () => {
+      if (!dateNotAfterLast) onSave({
+        date,
         note: note.trim()
       });
     }

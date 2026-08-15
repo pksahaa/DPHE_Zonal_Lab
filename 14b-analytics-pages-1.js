@@ -644,7 +644,7 @@ function TestAnalyticsPage({
       }
     }
   })), /*#__PURE__*/React.createElement(ChartCard, {
-    title: "Sample Source Breakdown",
+    title: "Client Breakdown",
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "beaker",
       size: 16,
@@ -735,7 +735,7 @@ function TestAnalyticsPage({
       label: "Test"
     }, {
       key: "source",
-      label: "Sample Source"
+      label: "Client"
     }, {
       key: "std",
       label: "Std."

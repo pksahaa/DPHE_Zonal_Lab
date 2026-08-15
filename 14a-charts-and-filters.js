@@ -1179,12 +1179,12 @@ function FilterPanel({
       batches: v
     })
   }), /*#__PURE__*/React.createElement(TextField, {
-    label: "Sample Source",
+    label: "Client",
     value: filters.sampleSource,
     onChange: e => patch({
       sampleSource: e.target.value
     }),
-    placeholder: "Search source..."
+    placeholder: "Search client..."
   }), /*#__PURE__*/React.createElement(SelectField, {
     label: "Dilution",
     value: filters.dilution,

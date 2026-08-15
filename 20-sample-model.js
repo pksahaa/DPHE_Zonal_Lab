@@ -433,7 +433,6 @@ function createSample(fields, existingSamples, user) {
     longitude: fields.longitude || "",
     waterPointType: fields.waterPointType || "",
     waterPointTypeOther: fields.waterPointTypeOther || "",
-    sampleSourceId: fields.sampleSourceId || "",
     twId: fields.twId || "",
     // e.g. "STW-6"
     batchRef: fields.batchRef || "",
@@ -535,7 +534,7 @@ function transitionSample(sample, newStatus, meta, user) {
 // only the registration fields are editable, never status/results/custody
 // history itself; every edit is logged as its own custody event so the
 // correction is auditable rather than silently overwritten.
-const SAMPLE_EDITABLE_FIELDS = ["clientName", "siteLocation", "district", "upazila", "union", "village", "caretakerName", "fatherHusbandName", "latitude", "longitude", "waterPointType", "waterPointTypeOther", "sampleSourceId", "batchRef", "referenceId", "sampleType", "collectionDate", "collectedBy", "receivedDate", "priority", "numberOfSamples", "requestedTests"];
+const SAMPLE_EDITABLE_FIELDS = ["clientName", "siteLocation", "district", "upazila", "union", "village", "caretakerName", "fatherHusbandName", "latitude", "longitude", "waterPointType", "waterPointTypeOther", "batchRef", "referenceId", "sampleType", "collectionDate", "collectedBy", "receivedDate", "priority", "numberOfSamples", "requestedTests"];
 function editSample(sample, patch, user) {
   const changes = [];
   const cleanPatch = {};

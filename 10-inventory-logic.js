@@ -78,6 +78,17 @@ function normalizeGas(gasList) {
     }))
   }));
 }
+// Date of the most recent lifecycle event recorded against a cylinder (new /
+// refill / empty), falling back to Date Received when there's no history
+// yet. Every subsequent Mark Empty / Refill on this cylinder must land on a
+// date strictly AFTER this one — that's what keeps the
+// received -> empty -> refill -> empty -> refill ... chain always moving
+// forward, cycle after cycle, without hard-coding "next calendar day".
+function latestCylinderEventDate(cylinder) {
+  const hist = (cylinder && cylinder.history) || [];
+  if (!hist.length) return (cylinder && cylinder.dateReceived) || "";
+  return hist.reduce((latest, h) => h.date > latest ? h.date : latest, hist[0].date);
+}
 // Migrates old test-type records to the current schema:
 //  - chemicalRequirements: "sampleAmount" items now carry a sampleSource ("field" | "standard" | "both")
 //    so each item can be tied to either the No. of Field Samples or No. of Standard Samples entered in

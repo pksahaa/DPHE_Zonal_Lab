@@ -423,6 +423,26 @@ function submitClientPart(form, references, session) {
   };
 }
 
+// Cross-field date-order checks shared by every Register Sample entry point
+// (manual Batch form + bulk-upload popup). "next/previous date" here means
+// "on or after / on or before" for the Ref-Memo <-> Collection pair (same
+// day is fine), and "on or after both" for Received Date — NOT "the very
+// next calendar day". Plain ISO yyyy-mm-dd strings compare correctly with
+// normal string operators, so no Date parsing is needed. Any blank date is
+// skipped (not everything is required at every entry point).
+function validateRegistrationDates({ letterDate, collectionDate, receivedDate }) {
+  if (letterDate && collectionDate && letterDate > collectionDate) {
+    return "Date of Ref / Memo No. can't be after the Collection Date.";
+  }
+  if (receivedDate && letterDate && receivedDate < letterDate) {
+    return "Received Date can't be before the Date of Ref / Memo No.";
+  }
+  if (receivedDate && collectionDate && receivedDate < collectionDate) {
+    return "Received Date can't be before the Collection Date.";
+  }
+  return "";
+}
+
 function SampleRegistrationForm({
   testTypes,
   onCreate,
@@ -436,7 +456,6 @@ function SampleRegistrationForm({
     union: "",
     village: "",
     caretakerName: "",
-    sampleSourceId: "",
     twId: "",
     sampleType: "Drinking Water",
     collectionDate: todayStr(),
@@ -528,14 +547,6 @@ function SampleRegistrationForm({
     onChange: v => setForm({
       ...form,
       caretakerName: v
-    })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Sample Source (e.g. STW-6)",
-    value: form.sampleSourceId,
-    onChange: v => setForm({
-      ...form,
-      sampleSourceId: v
     })
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
@@ -1584,6 +1595,18 @@ function BatchRegistrationForm({
     if (shared.collectionDateFrom && shared.collectionDateTo && shared.collectionDateTo < shared.collectionDateFrom) {
       return "Collection Date \u2014 To can't be before Collection Date \u2014 From.";
     }
+    // Ref/Memo Date is checked against the earliest Collection Date in the
+    // range; Received Date is checked against the latest — so both hold for
+    // every individual sample row, whatever date each one ends up with.
+    const dateErr = validateRegistrationDates({
+      letterDate: clientPart.letterDate,
+      collectionDate: shared.collectionDateFrom
+    }) || validateRegistrationDates({
+      receivedDate: shared.receivedDate,
+      collectionDate: shared.collectionDateTo,
+      letterDate: clientPart.letterDate
+    });
+    if (dateErr) return dateErr;
     return "";
   }
   function goToStep2() {
@@ -1838,6 +1861,14 @@ function ImportTestPickerModal({
     }
     if (collectionDateTo < collectionDateFrom) {
       setErr("Collection Date \u2014 To can't be before Collection Date \u2014 From.");
+      return;
+    }
+    const dateErr = validateRegistrationDates({
+      letterDate: clientPart.letterDate,
+      collectionDate: collectionDateFrom
+    });
+    if (dateErr) {
+      setErr(dateErr);
       return;
     }
     const result = submitClientPart(clientPart, references, session);
@@ -2316,15 +2347,9 @@ function SamplesTab({
         longitude: String(readSampleImportField(row, "longitude")).trim(),
         waterPointType: String(readSampleImportField(row, "waterPointType")).trim(),
         waterPointTypeOther: String(readSampleImportField(row, "waterPointTypeOther")).trim(),
-        // These two were previously missing from this mapping entirely —
-        // the manifest template and the per-row manual edit form both
-        // support them (SAMPLE_IMPORT_COLUMNS in 00-core.js, and the
-        // "Water Point ID" field a few lines up in this same file), but a
-        // bulk-imported row never actually picked the values up, so every
-        // bulk-imported sample showed "—" for Water Point ID no matter what
-        // was in the spreadsheet. Not a character-limit issue — the value
-        // was simply never read.
-        sampleSourceId: String(readSampleImportField(row, "sampleSourceId")).trim(),
+        // Water Point ID — the manifest template and the per-row manual
+        // edit form both support it (SAMPLE_IMPORT_COLUMNS in 00-core.js,
+        // and the "Water Point ID" field a few lines up in this same file).
         twId: String(readSampleImportField(row, "twId")).trim(),
         referenceId: ref ? ref.id : "",
         batchRef: ref ? ref.refNo : "",

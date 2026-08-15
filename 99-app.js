@@ -1038,6 +1038,7 @@ function LabApp({
     subBatches: subBatches,
     setSubBatches: setSubBatches,
     session: session,
+    users: users,
     permissionMatrix: permissionMatrix,
     notify: notify,
     goToSample: goToSample,

@@ -584,10 +584,6 @@ const SAMPLE_IMPORT_COLUMNS = [{
   header: "Type of Water Point - Other",
   aliases: ["WaterPointTypeOther"]
 }, {
-  key: "sampleSourceId",
-  header: "Sample Source",
-  aliases: ["SampleSource", "Sample Source (e.g. STW-6)"]
-}, {
   key: "twId",
   header: "Water Point ID",
   // Old header names stay as aliases so manifests already circulating under

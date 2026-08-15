@@ -51,6 +51,7 @@ function AddTestTab({
   subBatches,
   setSubBatches,
   session,
+  users,
   permissionMatrix,
   notify,
   goToSample,
@@ -186,6 +187,20 @@ function AddTestTab({
     notify?.(`Created ${sb.label} from this Reference — ${batchModeSamples.length} sample(s). Continue below.`, "ok");
   }
   const subBatchMembers = selectedSubBatch ? selectedSubBatch.memberSampleIds.map(id => (samples || []).find(s => s.id === id)).filter(Boolean) : [];
+  // Client auto-populates from the Reference(s) behind the selected batch/
+  // sub-batch — same source (Reference.contactPerson — the Client Name from
+  // the Client Part paperwork) and the same "recompute on selection change"
+  // behaviour as the Custom Report's "Sent by" field (17-report-generator.js).
+  // Still a plain editable field afterwards, same as that one.
+  React.useEffect(() => {
+    if (editingRecord) return;
+    const memberSamples = selectionMode === "subbatch" ? subBatchMembers : selectionMode === "batch" ? batchModeSamples : [];
+    const linkedRefs = Array.from(new Set(memberSamples.map(s => s.referenceId).filter(Boolean))).map(id => findReferenceById(references, id)).filter(Boolean);
+    if (!linkedRefs.length) return;
+    const clientNames = Array.from(new Set(linkedRefs.map(r => r.contactPerson).filter(Boolean)));
+    if (clientNames.length) setSampleSource(clientNames.join("; "));
+    // eslint-disable-next-line
+  }, [selectionMode, selectedSubBatchId, selectedReferenceId, batchModeTestId]);
   // Once a sample or sub-batch is picked, only show the test type(s) it
   // actually still needs — a parameter that's already Done (has a result)
   // or already Queued (committed to a different pending sub-batch) is left
@@ -198,6 +213,10 @@ function AddTestTab({
   const matchedQcRule = qcSampleType ? qcRules.find(r => r.qcType === qcSampleType) : null;
   const qcEvaluation = matchedQcRule && qcMeasuredValue !== "" ? evaluateQcRule(matchedQcRule, qcMeasuredValue) : null;
   const isBracketing = matchedQcRule?.qcType === "bracketing";
+  // Tester Name: dropdown of active users, but still free-typed for anyone
+  // not (yet) in the user list — a native <input list> + <datalist> gives
+  // both in one field without a custom combobox component.
+  const testerNameOptions = Array.from(new Set((users || []).filter(u => u.active !== false).map(u => u.username).filter(Boolean))).sort();
   function addBracketingPoint(label) {
     setBracketingPoints(prev => [...prev, {
       id: uid("bkt"),
@@ -1691,9 +1710,16 @@ function AddTestTab({
     label: "Tester Name",
     value: tester,
     onChange: e => setTester(e.target.value),
-    placeholder: "e.g. M. Rahman",
+    placeholder: "Select or type a name",
+    list: "testerNameOptions",
+    autoComplete: "off",
     error: submitAttempted && !tester.trim() ? "Tester Name is required." : undefined
-  }), /*#__PURE__*/React.createElement(SelectField, {
+  }), /*#__PURE__*/React.createElement("datalist", {
+    id: "testerNameOptions"
+  }, testerNameOptions.map(name => /*#__PURE__*/React.createElement("option", {
+    key: name,
+    value: name
+  }))), /*#__PURE__*/React.createElement(SelectField, {
     label: "Equipment Used",
     value: equipmentId,
     onChange: e => setEquipmentId(e.target.value),
@@ -1720,10 +1746,10 @@ function AddTestTab({
     placeholder: "e.g. 4 or 5",
     error: submitAttempted && numberOfStandardSamples === "" && numberOfFieldSamples === "" ? "Enter 0 if none." : undefined
   }), /*#__PURE__*/React.createElement(TextField, {
-    label: "Sample Source / Client",
+    label: "Client",
     value: sampleSource,
     onChange: e => setSampleSource(e.target.value),
-    placeholder: "e.g. Ward-4 Tubewell / Client name"
+    placeholder: "Auto-fills from the selected batch's Client"
   }), /*#__PURE__*/React.createElement("label", {
     className: "flex items-center gap-1.5 text-xs self-end pb-1.5",
     style: {
@@ -2580,7 +2606,7 @@ function TestRecordsTab({
       Date: r.date,
       Tester: r.tester,
       Test: r.testTypeName,
-      SampleSource: r.sampleSource || "",
+      Client: r.sampleSource || "",
       Equipment: r.equipmentName || "",
       Standard_Samples: r.numberOfStandardSamples ?? 0,
       Field_Samples: r.numberOfFieldSamples ?? r.numberOfSamples ?? 0,
@@ -2619,7 +2645,7 @@ function TestRecordsTab({
         setSearch(e.target.value);
         setPage(1);
       },
-      placeholder: "Search tester, test, sample source...",
+      placeholder: "Search tester, test, client...",
       className: "border rounded px-2 py-1 text-xs w-56",
       style: {
         borderColor: C.border
@@ -2784,7 +2810,7 @@ function TestRecordsTab({
       style: {
         color: C.muted
       }
-    }, "Sample Source"), /*#__PURE__*/React.createElement("div", {
+    }, "Client"), /*#__PURE__*/React.createElement("div", {
       className: "font-medium",
       style: {
         color: C.ink
