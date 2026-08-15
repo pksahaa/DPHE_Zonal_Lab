@@ -216,11 +216,10 @@ function SectionCard({
   children
 }) {
   return /*#__PURE__*/React.createElement("div", {
-    className: "rounded-xl mb-5",
+    className: "rounded-lg mb-5",
     style: {
       background: C.card,
-      border: `1px solid ${C.border}`,
-      boxShadow: "0 1px 2px rgba(15,43,46,0.04)"
+      border: `1px solid ${C.border}`
     }
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between px-4 py-3 flex-wrap gap-2",
@@ -230,7 +229,7 @@ function SectionCard({
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center gap-2"
   }, icon, /*#__PURE__*/React.createElement("h3", {
-    className: "font-heading font-semibold text-sm tracking-tight",
+    className: "font-semibold text-sm",
     style: {
       color: C.ink
     }
@@ -353,12 +352,11 @@ function Button({
   title,
   loading
 }) {
-  const base = "inline-flex items-center gap-1.5 rounded-md font-medium transition duration-150 ease-out disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer hover:-translate-y-px active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 motion-reduce:transition-none motion-reduce:hover:translate-y-0";
+  const base = "inline-flex items-center gap-1.5 rounded font-medium transition-colors disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1";
   const sizes = size === "sm" ? "px-2.5 py-1 text-xs" : "px-3.5 py-2 text-sm";
   const styles = variant === "primary" ? {
     background: C.teal,
     color: "#fff",
-    boxShadow: "0 1px 2px rgba(15,43,46,0.16)",
     "--tw-ring-color": C.teal
   } : variant === "outline" ? {
     background: "transparent",
@@ -373,7 +371,6 @@ function Button({
   } : variant === "danger" ? {
     background: C.danger,
     color: "#fff",
-    boxShadow: "0 1px 2px rgba(15,43,46,0.16)",
     "--tw-ring-color": C.danger
   } : {
     background: "transparent",
@@ -406,7 +403,7 @@ function IconButton({
     "aria-label": title || name,
     onClick: onClick,
     disabled: disabled,
-    className: "p-1 rounded-md cursor-pointer transition-colors duration-150 hover:bg-black/5 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1",
+    className: "p-1 rounded disabled:opacity-30 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1",
     style: {
       color: color || C.muted,
       "--tw-ring-color": color || C.teal
@@ -427,20 +424,18 @@ function Modal({
     className: "fixed inset-0 flex items-center justify-center p-4 z-50",
     role: "presentation",
     style: {
-      background: "rgba(9,22,24,0.55)",
-      backdropFilter: "blur(1.5px)"
+      background: "rgba(10,30,32,0.45)"
     },
     onClick: e => {
       if (e.target === e.currentTarget) onClose?.();
     }
   }, /*#__PURE__*/React.createElement("div", {
-    className: `rounded-xl w-full ${wide ? "max-w-2xl" : "max-w-lg"} max-h-[85vh] overflow-y-auto`,
+    className: `rounded-lg w-full ${wide ? "max-w-2xl" : "max-w-lg"} max-h-[85vh] overflow-y-auto`,
     role: "dialog",
     "aria-modal": "true",
     "aria-labelledby": titleId,
     style: {
-      background: C.card,
-      boxShadow: "0 12px 32px rgba(9,22,24,0.28)"
+      background: C.card
     }
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between px-4 py-3",
@@ -449,14 +444,14 @@ function Modal({
     }
   }, /*#__PURE__*/React.createElement("h3", {
     id: titleId,
-    className: "font-heading font-semibold text-sm tracking-tight",
+    className: "font-semibold text-sm",
     style: {
       color: C.ink
     }
   }, title), /*#__PURE__*/React.createElement("button", {
     onClick: onClose,
     "aria-label": "Close dialog",
-    className: "p-1 rounded-md cursor-pointer transition-colors duration-150 hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1",
+    className: "p-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1",
     style: {
       "--tw-ring-color": C.teal
     }
@@ -506,12 +501,11 @@ function StatCard({
 }) {
   return /*#__PURE__*/React.createElement("button", {
     onClick: onClick,
-    className: `text-left rounded-xl p-4 flex flex-col gap-1 w-full transition duration-150 ease-out motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 ${onClick ? "cursor-pointer hover:-translate-y-0.5" : ""}`,
+    className: "text-left rounded-lg p-4 flex flex-col gap-1 w-full",
     style: {
       background: C.card,
       border: `1px solid ${C.border}`,
-      boxShadow: "0 1px 2px rgba(15,43,46,0.04)",
-      "--tw-ring-color": C.teal
+      cursor: onClick ? "pointer" : "default"
     }
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between"
@@ -525,7 +519,7 @@ function StatCard({
     size: 15,
     color: C.teal
   })), /*#__PURE__*/React.createElement("div", {
-    className: "font-heading text-2xl font-bold tracking-tight",
+    className: "text-2xl font-bold",
     style: {
       color: tone === "warn" ? C.warn : C.ink
     }
