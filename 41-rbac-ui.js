@@ -35,7 +35,25 @@
 // necessary foundation for server-side checks later.
 // ============================================================================
 
-const ALL_ROLES = ["Administrator", "Technician", "Reviewer", "QA Manager", "Guest"];
+// ALL_ROLES is the seed list only — the live set of roles is dynamic (see
+// "Add Role" / "Delete Role" in PermissionMatrixPanel below, and
+// rolesFromMatrix() / PermissionMatrixPanel's editableRoles). Anyone with Users & Permissions access
+// can create a brand-new role from scratch (starts with everything
+// unchecked) or remove a custom one that's no longer in use. This array
+// only supplies the DEFAULT_PERMISSION_MATRIX's starting set on a fresh
+// install / first backfill.
+const ALL_ROLES = ["Administrator", "Sample Analyzer", "Reviewer", "QA Manager", "Junior Chemist", "Senior Chemist", "Chief Chemist", "Executive Engineer", "Superintendent Engineer", "Guest"];
+// The live, current role list — every place that used to read the fixed
+// ALL_ROLES constant for "what roles exist" (role dropdowns, the
+// Permission Matrix's role tabs) now reads this instead, so a role created
+// or deleted at runtime (see PermissionMatrixPanel's Add Role / Delete Role
+// below) shows up everywhere immediately. Administrator is always pinned
+// first since it's the one role that's never shown as editable/deletable.
+function rolesFromMatrix(matrix) {
+  const keys = Object.keys(matrix || {});
+  const rest = keys.filter(k => k !== "Administrator").sort((a, b) => a.localeCompare(b));
+  return keys.includes("Administrator") ? ["Administrator", ...rest] : rest;
+}
 const PERMISSION_MODULES = [{
   key: "testRecords",
   label: "Test Records",
@@ -136,7 +154,7 @@ function viewOnlyOverrides() {
 }
 const DEFAULT_PERMISSION_MATRIX = {
   Administrator: buildRolePerms(allTrueOverrides()),
-  Technician: buildRolePerms({
+  "Sample Analyzer": buildRolePerms({
     testRecords: {
       view: true,
       create: true,
@@ -247,6 +265,269 @@ const DEFAULT_PERMISSION_MATRIX = {
       view: true
     }
   }),
+  // ---- DPHE lab hierarchy roles (added alongside the generic RBAC
+  // roles above) ----
+  // Junior Chemist — works under the Senior Chemist; day-to-day bench work
+  // much like Sample Analyzer, but is sometimes put in charge of a District
+  // Laboratory, so also gets Assign on the Samples grid below.
+  "Junior Chemist": buildRolePerms({
+    testRecords: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: false
+    },
+    testTypes: {
+      view: true,
+      create: false,
+      edit: false,
+      delete: false
+    },
+    inventory: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: false
+    },
+    references: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: false
+    },
+    subBatches: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: false
+    },
+    qc: {
+      view: true,
+      create: true,
+      edit: false
+    },
+    reports: {
+      view: true,
+      create: true
+    },
+    archive: {
+      view: true,
+      edit: false
+    }
+  }),
+  // Senior Chemist — head of a Zonal Laboratory: full operational control
+  // of that lab's day-to-day modules, plus the whole Sample Lifecycle
+  // (register through release), but not Users/Settings (that's reserved
+  // for the Chief Chemist / Administrator above them).
+  "Senior Chemist": buildRolePerms({
+    testRecords: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: true
+    },
+    testTypes: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: false
+    },
+    inventory: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: false
+    },
+    references: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: true
+    },
+    subBatches: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: true
+    },
+    qc: {
+      view: true,
+      create: true,
+      edit: true
+    },
+    reports: {
+      view: true,
+      create: true
+    },
+    archive: {
+      view: true,
+      edit: true
+    },
+    users: {
+      view: true
+    },
+    auditLog: {
+      view: true
+    }
+  }),
+  // Chief Chemist — superior of the Senior Chemist, so gets everything a
+  // Senior Chemist has plus delete rights on Test Types/Inventory and
+  // oversight (view+edit) on Users, matching a chemist-side counterpart
+  // to QA Manager/Administrator without touching Backend Settings.
+  "Chief Chemist": buildRolePerms({
+    testRecords: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: true
+    },
+    testTypes: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: true
+    },
+    inventory: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: true
+    },
+    references: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: true
+    },
+    subBatches: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: true
+    },
+    qc: {
+      view: true,
+      create: true,
+      edit: true
+    },
+    reports: {
+      view: true,
+      create: true
+    },
+    archive: {
+      view: true,
+      edit: true
+    },
+    users: {
+      view: true,
+      create: false,
+      edit: true,
+      delete: false
+    },
+    auditLog: {
+      view: true
+    },
+    settings: {
+      view: true
+    }
+  }),
+  // Executive Engineer — responsible for purchasing everything the
+  // laboratory needs, so full control of Inventory (Chemicals/Equipment/
+  // Gas/Glassware) and its reports, but no role in running the Sample
+  // Lifecycle itself (see the "samples" seed just below).
+  "Executive Engineer": buildRolePerms({
+    testRecords: {
+      view: true
+    },
+    testTypes: {
+      view: true
+    },
+    inventory: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: true
+    },
+    references: {
+      view: true
+    },
+    subBatches: {
+      view: true
+    },
+    qc: {
+      view: true
+    },
+    reports: {
+      view: true,
+      create: true
+    },
+    archive: {
+      view: true
+    }
+  }),
+  // Superintendent Engineer — head of the whole DPHE Laboratory (above
+  // every Zonal Lab), so gets broad cross-module authority including
+  // Users/Audit Log/Settings oversight, on par with Administrator for
+  // day-to-day purposes even though Administrator remains the only role
+  // that's always-fully-trusted by can()/permissionsFor() below.
+  "Superintendent Engineer": buildRolePerms({
+    testRecords: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: true
+    },
+    testTypes: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: true
+    },
+    inventory: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: true
+    },
+    references: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: true
+    },
+    subBatches: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: true
+    },
+    qc: {
+      view: true,
+      create: true,
+      edit: true
+    },
+    reports: {
+      view: true,
+      create: true
+    },
+    archive: {
+      view: true,
+      edit: true
+    },
+    users: {
+      view: true,
+      create: true,
+      edit: true,
+      delete: false
+    },
+    auditLog: {
+      view: true
+    },
+    settings: {
+      view: true,
+      edit: false
+    }
+  }),
   Guest: buildRolePerms({
     ...viewOnlyOverrides(),
     users: emptyModulePerms(["view", "create", "edit", "delete"], false),
@@ -277,7 +558,14 @@ ALL_ROLES.forEach(role => {
 function backfillSamplePermissions(matrix) {
   const next = { ...(matrix || {}) };
   ALL_ROLES.forEach(role => {
-    const existingRole = next[role] || buildRolePerms({});
+    // A role entirely missing from a matrix saved before this role existed
+    // (e.g. an install made before Senior Chemist/Chief Chemist/Executive
+    // Engineer/Superintendent Engineer/Junior Chemist were added) seeds from
+    // DEFAULT_PERMISSION_MATRIX's full, hand-picked defaults for that role —
+    // not a blank buildRolePerms({}) — so it shows up with its intended
+    // starting permissions instead of silently losing every module
+    // permission except Samples the first time an existing install loads.
+    const existingRole = next[role] || DEFAULT_PERMISSION_MATRIX[role] || buildRolePerms({});
     if (existingRole.samples) {
       next[role] = existingRole;
       return;
@@ -324,7 +612,7 @@ function roleModulePerms(matrix, role, moduleKey) {
 //     on something it isn't permitted for is blocked with a message instead
 //     of running. This is the "admin-like read-only demo" persona pks asked
 //     for: nothing hidden, nothing silently broken.
-//   - Every other role (Technician / Reviewer / QA Manager, or any role with
+//   - Every other role (Sample Analyzer / Reviewer / QA Manager, or any role with
 //     a tightened per-user override) keeps the existing convention: a
 //     control it has no permission for is hidden entirely, same as it's
 //     always been elsewhere in this app.
@@ -499,6 +787,46 @@ function UsersAdminTab({
     });
     notify(`Saved permissions for ${role}.`, "ok");
   }
+  // A brand-new role starts with everything unchecked — the same blank
+  // slate buildRolePerms({}) already gives every module, plus NO_SAMPLE_
+  // PERMISSIONS for the Samples grid — so it can't accidentally grant
+  // access to anything until an Administrator explicitly turns permissions
+  // on and saves. See rolesFromMatrix() above for how this shows up
+  // everywhere (role dropdowns, matrix tabs) the moment it's added.
+  function handleAddRole(name) {
+    setPermissionMatrix(prev => ({
+      ...prev,
+      [name]: {
+        ...buildRolePerms({}),
+        samples: { ...NO_SAMPLE_PERMISSIONS }
+      }
+    }));
+    DataService.appendAudit({
+      entity: "permissionMatrix",
+      entityId: name,
+      action: "create",
+      user: session.username,
+      role: session.role,
+      note: `Created role "${name}"`
+    });
+    notify(`Created role "${name}" — set its permissions below, then Save.`, "ok");
+  }
+  function handleDeleteRole(role) {
+    setPermissionMatrix(prev => {
+      const next = { ...prev };
+      delete next[role];
+      return next;
+    });
+    DataService.appendAudit({
+      entity: "permissionMatrix",
+      entityId: role,
+      action: "delete",
+      user: session.username,
+      role: session.role,
+      note: `Deleted role "${role}"`
+    });
+    notify(`Deleted role "${role}".`, "ok");
+  }
   const toggleBar = React.createElement("div", {
     className: "inline-flex rounded-lg p-0.5 mb-3",
     style: {
@@ -543,7 +871,11 @@ function UsersAdminTab({
   }) : React.createElement(PermissionMatrixPanel, {
     permissionMatrix: permissionMatrix,
     canEdit: canEdit,
-    onSaveRole: saveMatrixForRole
+    onSaveRole: saveMatrixForRole,
+    onAddRole: handleAddRole,
+    onDeleteRole: handleDeleteRole,
+    users: users,
+    notify: notify
   }), formUser && React.createElement(UserFormModal, {
     initial: formUser,
     existingUsernames: users.filter(u => u.id !== formUser.id).map(u => u.username.toLowerCase()),
@@ -849,7 +1181,7 @@ function UserFormModal({
   const [username, setUsername] = React.useState(initial.username || "");
   const [name, setName] = React.useState(initial.name || "");
   const [designation, setDesignation] = React.useState(initial.designation || "");
-  const [role, setRole] = React.useState(initial.role || "Technician");
+  const [role, setRole] = React.useState(initial.role || "Sample Analyzer");
   const [password, setPassword] = React.useState("");
   const [confirmPassword, setConfirmPassword] = React.useState("");
   const [overrides, setOverrides] = React.useState(initial.permissionOverrides || {});
@@ -893,7 +1225,7 @@ function UserFormModal({
     });
     setSaving(false);
   }
-  const roleOptions = ALL_ROLES.map(r => ({
+  const roleOptions = rolesFromMatrix(permissionMatrix).map(r => ({
     value: r,
     label: r
   }));
@@ -1026,14 +1358,34 @@ function ResetPasswordModal({
 }
 
 // ---- Permission Matrix editor (per-role Module × Action grid) ----
-const EDITABLE_ROLES = ALL_ROLES.filter(r => r !== "Administrator");
+// Roles are dynamic now — this panel can create a brand-new role (starts
+// with everything unchecked, exactly like any other blank slate) or delete
+// a custom one that's no longer assigned to any active user. Administrator
+// is never shown here; it's always fully trusted (see can()/permissionsFor()
+// above) and isn't part of the editable set.
 function PermissionMatrixPanel({
   permissionMatrix,
   canEdit,
-  onSaveRole
+  onSaveRole,
+  onAddRole,
+  onDeleteRole,
+  users,
+  notify
 }) {
-  const [selectedRole, setSelectedRole] = React.useState(EDITABLE_ROLES[0]);
+  const editableRoles = rolesFromMatrix(permissionMatrix).filter(r => r !== "Administrator");
+  const [selectedRole, setSelectedRole] = React.useState(editableRoles[0] || null);
   const [draft, setDraft] = React.useState(() => permissionMatrix[selectedRole] || buildRolePerms({}));
+  const [newRoleName, setNewRoleName] = React.useState("");
+  const [addError, setAddError] = React.useState("");
+  const [deleteConfirmRole, setDeleteConfirmRole] = React.useState(null);
+  // Keeps selectedRole valid if the role it pointed at was just deleted
+  // (by this admin, or — in a multi-tab session — from another tab).
+  React.useEffect(() => {
+    if (selectedRole && !editableRoles.includes(selectedRole)) {
+      setSelectedRole(editableRoles[0] || null);
+    }
+    // eslint-disable-next-line
+  }, [permissionMatrix]);
   React.useEffect(() => {
     setDraft(permissionMatrix[selectedRole] || buildRolePerms({}));
     // eslint-disable-next-line
@@ -1048,19 +1400,99 @@ function PermissionMatrixPanel({
       }
     }));
   }
+  function usersInRole(role) {
+    return (users || []).filter(u => u.role === role && u.active !== false).length;
+  }
+  function handleAddRole() {
+    const name = newRoleName.trim();
+    if (!name) {
+      setAddError("Enter a role name.");
+      return;
+    }
+    if (name.length > 40) {
+      setAddError("Keep the role name under 40 characters.");
+      return;
+    }
+    if (name === "Administrator" || rolesFromMatrix(permissionMatrix).some(r => r.toLowerCase() === name.toLowerCase())) {
+      setAddError(`A role named "${name}" already exists.`);
+      return;
+    }
+    setAddError("");
+    onAddRole(name);
+    setSelectedRole(name);
+    setNewRoleName("");
+  }
+  function requestDeleteRole(role) {
+    const inUse = usersInRole(role);
+    if (inUse > 0) {
+      notify?.(`Can't delete "${role}" — ${inUse} active user(s) still have this role. Reassign them first.`, "warn");
+      return;
+    }
+    setDeleteConfirmRole(role);
+  }
+  function confirmDeleteRole() {
+    onDeleteRole(deleteConfirmRole);
+    setDeleteConfirmRole(null);
+  }
   const roleTabs = React.createElement("div", {
-    className: "flex flex-wrap gap-1.5 mb-3"
-  }, EDITABLE_ROLES.map(r => React.createElement("button", {
+    className: "flex flex-wrap items-center gap-1.5 mb-2"
+  }, editableRoles.map(r => React.createElement("div", {
     key: r,
+    className: "inline-flex items-stretch"
+  }, React.createElement("button", {
     type: "button",
     onClick: () => setSelectedRole(r),
-    className: "px-3 py-1.5 rounded-md text-xs font-medium",
+    className: "px-3 py-1.5 rounded-l-md text-xs font-medium",
     style: {
       background: selectedRole === r ? C.teal : C.bg,
       color: selectedRole === r ? "#fff" : C.muted,
-      border: `1px solid ${selectedRole === r ? C.teal : C.border}`
+      border: `1px solid ${selectedRole === r ? C.teal : C.border}`,
+      borderRight: "none"
     }
-  }, r)));
+  }, r), canEdit && React.createElement("button", {
+    type: "button",
+    title: `Delete role "${r}"`,
+    onClick: () => requestDeleteRole(r),
+    className: "px-1.5 rounded-r-md text-xs font-semibold",
+    style: {
+      background: selectedRole === r ? C.teal : C.bg,
+      color: selectedRole === r ? "#fff" : C.muted,
+      border: `1px solid ${selectedRole === r ? C.teal : C.border}`,
+      borderLeft: `1px solid ${selectedRole === r ? "rgba(255,255,255,0.45)" : C.border}`
+    }
+  }, "\u00D7"))));
+  const addRoleRow = canEdit && React.createElement("div", {
+    className: "flex flex-wrap items-center gap-2 mb-3"
+  }, React.createElement("input", {
+    type: "text",
+    placeholder: "New role name…",
+    value: newRoleName,
+    onChange: e => {
+      setNewRoleName(e.target.value);
+      setAddError("");
+    },
+    onKeyDown: e => {
+      if (e.key === "Enter") handleAddRole();
+    },
+    className: "border rounded px-2 py-1.5 text-xs",
+    style: {
+      borderColor: C.border,
+      width: 220
+    }
+  }), React.createElement(Button, {
+    variant: "outline",
+    onClick: handleAddRole
+  }, "+ Add Role"), addError && React.createElement("span", {
+    className: "text-xs",
+    style: {
+      color: C.warn
+    }
+  }, addError));
+  const deleteConfirmBar = deleteConfirmRole && React.createElement(ConfirmBar, {
+    text: `Delete role "${deleteConfirmRole}"? This can't be undone — you'll need to recreate and reconfigure it from scratch if you want it back.`,
+    onConfirm: confirmDeleteRole,
+    onCancel: () => setDeleteConfirmRole(null)
+  });
   const ALL_ACTIONS = ["view", "create", "edit", "delete"];
   const headerCells = ["Module", ...ALL_ACTIONS.map(a => a[0].toUpperCase() + a.slice(1))].map(h => React.createElement("th", {
     key: h,
@@ -1143,8 +1575,14 @@ function PermissionMatrixPanel({
     variant: "outline",
     onClick: () => setDraft(permissionMatrix[selectedRole] || buildRolePerms({}))
   }, "Reset"), canEdit && React.createElement(Button, {
-    onClick: () => onSaveRole(selectedRole, draft)
+    disabled: !selectedRole,
+    onClick: () => selectedRole && onSaveRole(selectedRole, draft)
   }, "Save Permissions"));
+  const body = !selectedRole ? React.createElement(EmptyState, {
+    icon: "shield",
+    title: "No custom roles yet",
+    subtitle: "Use \"+ Add Role\" above to create one — it starts with everything unchecked."
+  }) : React.createElement(React.Fragment, null, table, sampleTable, footer);
   return React.createElement(SectionCard, {
     title: "Permission Matrix",
     icon: React.createElement(Icon, {
@@ -1155,5 +1593,5 @@ function PermissionMatrixPanel({
   }, React.createElement(Banner, {
     tone: "info",
     storageKey: "permission-matrix-intro"
-  }, "Administrator always has full access everywhere and isn't shown here. Guest can be given \"View\" wherever you like but should stay unchecked on Create/Edit/Delete — that's what makes it a safe read-only account. The second table below (Register/Assign/Enter Results/Review/Approve/Release) sets the same defaults for the Samples workflow — register/assign/review/approve/release."), roleTabs, table, sampleTable, footer);
+  }, "Administrator always has full access everywhere and isn't shown here. Guest can be given \"View\" wherever you like but should stay unchecked on Create/Edit/Delete — that's what makes it a safe read-only account. The second table below (Register/Assign/Enter Results/Review/Approve/Release) sets the same defaults for the Samples workflow — register/assign/review/approve/release. Use \"+ Add Role\" to create a brand-new role with its own permissions, or the × on a role's tab to delete a custom one that's no longer in use."), roleTabs, addRoleRow, deleteConfirmBar, body);
 }

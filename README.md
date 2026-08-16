@@ -52,7 +52,7 @@ status + a deep-link** — the actions themselves live in one place: Samples →
   individual entry — one queue per step, not per grouping mechanism.
 - Role-gated using the existing `permissionsFor()` (`20-sample-model.js`):
   a stage is hidden entirely (not just disabled) unless the signed-in role
-  has that permission. Technician (the "Analyzer" role) has
+  has that permission. Sample Analyzer has
   `canEnterResults` only, so it sees **only** Pending Upload.
 - No new decision logic — every action calls the same
   `bulkDecideParameter` / `bulkReleaseParameter` / `setRequestedTestStatus`
@@ -656,9 +656,9 @@ different role.
   it in from the same `ROLE_PERMISSIONS` defaults the first time the app
   loads after updating — a no-op if it's already been through this once,
   same idempotent-migration pattern used elsewhere in this app.
-- Verified end-to-end: created a Technician user with an explicit
+- Verified end-to-end: created a Sample Analyzer user with an explicit
   per-user "Approve" override — Results Workflow correctly shows them the
-  "Awaiting Approval" queue (which a stock Technician never sees), while
+  "Awaiting Approval" queue (which a stock Sample Analyzer never sees), while
   Review/Release stayed hidden since those weren't overridden.
 
 
@@ -728,7 +728,7 @@ Both encode the same rule, which is also this round's UX decision:
   can't … — this login is view-only for this action.") and does nothing.
   So `visible = allowed || role === "Guest"`, while the click itself
   always checks `allowed`, never `visible`.
-- **Every other role** (Technician, Reviewer, QA Manager, or anyone with
+- **Every other role** (Sample Analyzer, Reviewer, QA Manager, or anyone with
   a tightened per-user override) keeps the pre-existing convention: a
   control it has no permission for is hidden entirely, same as it's
   always been in this app.

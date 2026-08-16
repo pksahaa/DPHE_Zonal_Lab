@@ -241,6 +241,52 @@ function testStageChipStyle(stage) {
   };
 }
 
+// ---- effectiveSubBatchStatus(): sb.status (pending/tested/reviewed/
+// approved/released) is only ever "purely a display convenience" — the
+// real state lives per-member on each sample's requestedTests[] (see
+// testStageForSample() above). bulkApproveSubBatch/bulkReleaseSubBatch
+// below only ever WROTE sb.status forward when every single member moved
+// together in that one action; any member decided a different way — a
+// per-row Approve/Release button in Results Workflow (see StageRow's
+// doRelease() in 22-results-workflow-ui.js, which updates the sample but
+// never touches subBatches at all), a partially-skipped bulk action, or a
+// member returned/re-queued out of step with its batch-mates — left
+// sb.status stuck at whatever it was, so a fully-released batch could go
+// on showing "Awaiting Review" (or an earlier stage) forever in the "All
+// Analytical Batches" table. This recomputes the batch's DISPLAY status
+// from its members' real, current per-parameter stage every time it's
+// shown, so the badge can never drift out of sync with reality — sb.status
+// itself is left alone (it's still used elsewhere to gate Edit/Delete on
+// "still pending", which is a different, narrower question this doesn't
+// touch).
+function effectiveSubBatchStatus(sb, samples, testRecords, subBatches) {
+  if (!sb || sb.status === "pending") return sb ? sb.status : "pending";
+  const members = (sb.memberSampleIds || []).map(id => (samples || []).find(s => s.id === id)).filter(Boolean);
+  if (!members.length) return sb.status;
+  const stages = members.map(s => testStageForSample(s, sb.testTypeId, testRecords, subBatches));
+  // A member currently "On Hold" (blocked) doesn't represent real forward
+  // progress on this parameter, so it's ignored for the aggregate unless
+  // EVERY member is on hold (then there's nothing else to go on).
+  const usable = stages.filter(st => st !== "blocked");
+  const pool = usable.length ? usable : stages;
+  const idxOf = st => {
+    const i = TEST_STAGE_ORDER.indexOf(st);
+    return i === -1 ? 0 : i;
+  };
+  // The batch as a whole is only as far along as its LEAST advanced member
+  // — one sample still awaiting review means the batch isn't "Released" yet.
+  const leastAdvanced = pool.reduce((min, st) => idxOf(st) < idxOf(min) ? st : min, pool[0]);
+  const STAGE_TO_BATCH_STATUS = {
+    pending: "tested",
+    in_progress: "tested",
+    results_entered: "tested",
+    under_review: "reviewed",
+    approved: "approved",
+    released: "released"
+  };
+  return STAGE_TO_BATCH_STATUS[leastAdvanced] || sb.status;
+}
+
 // ---- migration: samples registered before Phase 3 have requestedTests
 // with no `status` field. Backfill it once from the same derivation logic
 // testStageForSample() used to fall back on, so every sample ends up with
@@ -389,12 +435,18 @@ function bulkApproveSubBatch(sb, samples, setSamples, setSubBatches, session, no
       note: `${result.updated.length} sample(s) ${actionDesc} for ${sb.testTypeName}.`
     });
   }
-  const allApproved = result.skipped === 0 && result.updated.length > 0;
   if (signaturePayload.decision === "approved") {
-    if (allApproved) {
+    if (result.updated.length > 0) {
+      // Recompute from the members' real post-update stage rather than only
+      // flipping to "approved" when every member moved together — a batch
+      // with even one member still skipped (already decided some other way)
+      // used to leave sb.status frozen at its old value forever. See
+      // effectiveSubBatchStatus() above for why this is the source of truth.
+      const mergedSamples = samples.map(s => result.updated.find(u => u.id === s.id) || s);
+      const nextStatus = effectiveSubBatchStatus(sb, mergedSamples, [], []);
       setSubBatches(prev => prev.map(x => x.id === sb.id ? {
         ...x,
-        status: "approved"
+        status: nextStatus
       } : x));
     }
     notify?.(`${result.updated.length} sample(s) approved for ${sb.testTypeName}${result.skipped ? ` (${result.skipped} skipped — not awaiting approval)` : ""}.`, "ok");
@@ -431,10 +483,17 @@ function bulkReleaseSubBatch(sb, samples, setSamples, setSubBatches, session, no
       note: `Released ${result.updated.length} sample(s) for ${sb.testTypeName}.`
     });
   }
-  if (result.skipped === 0 && result.updated.length > 0) {
+  if (result.updated.length > 0) {
+    // Same recompute-from-reality fix as bulkApproveSubBatch above — only
+    // marking "released" when result.skipped === 0 left sb.status stuck
+    // (e.g. at "reviewed"/"Awaiting Review") any time a member had already
+    // been released some other way (a per-row Release in Results Workflow)
+    // before this batch-level action ran.
+    const mergedSamples = samples.map(s => result.updated.find(u => u.id === s.id) || s);
+    const nextStatus = effectiveSubBatchStatus(sb, mergedSamples, [], []);
     setSubBatches(prev => prev.map(x => x.id === sb.id ? {
       ...x,
-      status: "released"
+      status: nextStatus
     } : x));
   }
   notify?.(`${result.updated.length} sample(s) released for ${sb.testTypeName}${result.skipped ? ` (${result.skipped} skipped — not approved yet)` : ""}.`, "ok");

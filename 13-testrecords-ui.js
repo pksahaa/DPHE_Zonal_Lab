@@ -1121,7 +1121,7 @@ function AddTestTab({
         entityId: editingRecord.id,
         action: "edit",
         user: session?.username || tester || "System",
-        role: session?.role || "Technician",
+        role: session?.role || "Sample Analyzer",
         note: `Updated test record "${recordPayload.testTypeName}" (${recordPayload.date})`
       });
       notify(anyMissing ? "Test record updated, but one or more linked chemicals no longer exist in inventory." : "Test record updated. Inventory adjusted accordingly.", anyMissing ? "warn" : "ok");
@@ -1148,12 +1148,12 @@ function AddTestTab({
         entityId: newRecordId,
         action: "create",
         user: session?.username || tester || "System",
-        role: session?.role || "Technician",
+        role: session?.role || "Sample Analyzer",
         note: `Created test record "${recordPayload.testTypeName}" (${recordPayload.date})`
       });
       const actingUser = session || {
         name: tester || "System",
-        role: "Technician"
+        role: "Sample Analyzer"
       };
       // The specific parameter this record is FOR — only that parameter's
       // status moves to results_entered (== "Awaiting Review" everywhere

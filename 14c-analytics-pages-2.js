@@ -1820,7 +1820,7 @@ const REPORT_GROUPS = [{
     icon: "clipboard"
   }, {
     k: "technician",
-    label: "Technician Performance",
+    label: "Sample Analyzer Performance",
     icon: "user"
   }, {
     k: "revenue",

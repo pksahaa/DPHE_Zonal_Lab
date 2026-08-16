@@ -278,7 +278,7 @@ function returnRequestedTestToAnalyst(sample, testTypeId, testTypeName, user, no
 }
 
 
-// ---- roles / permissions (additive — existing Administrator/Technician
+// ---- roles / permissions (additive — existing Administrator/Sample Analyzer
 // users keep working unchanged; these two roles are optional extras a lab
 // can create for approval segregation-of-duties) ----
 const ROLE_PERMISSIONS = {
@@ -290,7 +290,7 @@ const ROLE_PERMISSIONS = {
     canApprove: true,
     canRelease: true
   },
-  Technician: {
+  "Sample Analyzer": {
     canRegister: true,
     canAssign: false,
     canEnterResults: true,
@@ -315,7 +315,7 @@ const ROLE_PERMISSIONS = {
     canRelease: true
   },
   // Explicit entry required — without it, permissionsFor("Guest") falls
-  // through to the Technician default below and Guest silently inherits
+  // through to the Sample Analyzer default below and Guest silently inherits
   // full register/assign/enter/delete rights on samples. Never rely on the
   // fallback for a role that's supposed to be locked down.
   Guest: {
@@ -325,6 +325,55 @@ const ROLE_PERMISSIONS = {
     canReview: false,
     canApprove: false,
     canRelease: false
+  },
+  // ---- DPHE lab hierarchy — samples-workflow defaults (module/action
+  // grid for every other permission lives in 41-rbac-ui.js's
+  // DEFAULT_PERMISSION_MATRIX; this is just the "samples" column) ----
+  "Junior Chemist": {
+    canRegister: true,
+    // Sometimes put in charge of a District Laboratory, so — unlike Sample
+    // Analyzer — also gets to assign work to others.
+    canAssign: true,
+    canEnterResults: true,
+    canReview: false,
+    canApprove: false,
+    canRelease: false
+  },
+  // Head of a Zonal Laboratory — full run of the sample lifecycle there.
+  "Senior Chemist": {
+    canRegister: true,
+    canAssign: true,
+    canEnterResults: true,
+    canReview: true,
+    canApprove: true,
+    canRelease: true
+  },
+  // Superior of the Senior Chemist — same full sample-lifecycle authority.
+  "Chief Chemist": {
+    canRegister: true,
+    canAssign: true,
+    canEnterResults: true,
+    canReview: true,
+    canApprove: true,
+    canRelease: true
+  },
+  // Purchasing/procurement only — no part in the sample testing workflow.
+  "Executive Engineer": {
+    canRegister: false,
+    canAssign: false,
+    canEnterResults: false,
+    canReview: false,
+    canApprove: false,
+    canRelease: false
+  },
+  // Head of the whole DPHE Laboratory — full sample-lifecycle authority.
+  "Superintendent Engineer": {
+    canRegister: true,
+    canAssign: true,
+    canEnterResults: true,
+    canReview: true,
+    canApprove: true,
+    canRelease: true
   }
 };
 const NO_SAMPLE_PERMISSIONS = {
@@ -370,10 +419,10 @@ function permissionsFor(matrix, session) {
       perms[action] = override;
       return;
     }
-    // Defaulting an unrecognized role to Technician's access was the bug
+    // Defaulting an unrecognized role to Sample Analyzer's access was the bug
     // that let Guest inherit register/delete rights before "Guest" was
     // added above — any future unlisted or misspelled role still safely
-    // gets NO access instead of quietly inheriting Technician's.
+    // gets NO access instead of quietly inheriting Sample Analyzer's.
     const roleDefaults = matrix?.[role]?.samples || ROLE_PERMISSIONS[role] || NO_SAMPLE_PERMISSIONS;
     perms[action] = !!roleDefaults[action];
   });

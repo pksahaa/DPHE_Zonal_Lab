@@ -28,7 +28,7 @@
 // user is permissioned for it (permissionsFor(permissionMatrix, session) in
 // 20-sample-model.js — role default from the "samples" module of the shared
 // permission matrix, per-user override wins if set):
-//   - Technician (the "Analyzer" role) → canEnterResults only → sees ONLY
+//   - Sample Analyzer → canEnterResults only → sees ONLY
 //     "Pending Upload". Nothing else from this tab is even reachable.
 //   - Reviewer → canReview only → sees ONLY "Awaiting Review".
 //   - QA Manager / Administrator → canReview + canApprove + canRelease (and

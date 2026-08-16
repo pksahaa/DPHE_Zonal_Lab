@@ -1,7 +1,7 @@
 // ===== 40-auth-ui.js =====
 // ============================================================================
 // AUTH — login screen. Role model kept backward compatible: existing
-// "Administrator" / "Technician" users still work unchanged. Phase 1 adds
+// "Administrator" / "Sample Analyzer" users still work unchanged. Phase 1 adds
 // two optional roles used by the Sample approval workflow (see 20-sample-
 // model.js ROLE_PERMISSIONS) — "Reviewer" and "QA Manager" — but nothing
 // breaks if you never create users with those roles.

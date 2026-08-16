@@ -2,7 +2,7 @@
 // ===== 14-reports-ui.js =====
 // ============================================================================
 // REPORTS & ANALYTICS — BI helpers, chart primitives, DataTable/FilterPanel,
-// and every analytics page (Executive, Insights, Technician, Revenue,
+// and every analytics page (Executive, Insights, Sample Analyzer, Revenue,
 // Chemical/Inventory/Glassware/Gas/Equipment analytics, Trends, Forecast).
 // ============================================================================
 // ---------------- BI date helpers ----------------
@@ -1137,7 +1137,7 @@ function FilterPanel({
       quickRange: "custom"
     })
   }), /*#__PURE__*/React.createElement(MultiSelect, {
-    label: "Technician",
+    label: "Sample Analyzer",
     options: facets.technicians,
     selected: filters.technicians,
     onChange: v => patch({

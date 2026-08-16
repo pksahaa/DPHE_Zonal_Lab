@@ -360,7 +360,7 @@ function ExecutiveDashboardPage({
   }))), /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-1 lg:grid-cols-3 gap-0 lg:gap-5"
   }, /*#__PURE__*/React.createElement(ChartCard, {
-    title: "Top Technicians",
+    title: "Top Sample Analyzers",
     subtitle: "By test volume",
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "user",
@@ -369,7 +369,7 @@ function ExecutiveDashboardPage({
     }),
     chartRef: chart3Ref,
     exportRows: techEntries.map(([k, v]) => ({
-      Technician: k,
+      "Sample Analyzer": k,
       Tests: v
     })),
     filename: "top_technicians"
@@ -677,7 +677,7 @@ function TestAnalyticsPage({
       }
     }
   }))), /*#__PURE__*/React.createElement(ChartCard, {
-    title: "Test Volume by Technician & Type",
+    title: "Test Volume by Sample Analyzer & Type",
     subtitle: "Stacked comparison (top 6 test types)",
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "user",
@@ -686,7 +686,7 @@ function TestAnalyticsPage({
     }),
     chartRef: c3,
     exportRows: techs.map(t => ({
-      Technician: t,
+      "Sample Analyzer": t,
       ...Object.fromEntries(types.map(ty => [ty, filteredRecords.filter(r => r.tester === t && r.testTypeName === ty).length]))
     })),
     filename: "tests_by_technician_type"
@@ -786,21 +786,21 @@ function TechnicianPerformancePage({
       name: "user",
       size: 12
     }),
-    label: "Active Technicians",
+    label: "Active Sample Analyzers",
     value: fmtNum(techs.length)
   }), /*#__PURE__*/React.createElement(KpiCard, {
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "clipboard",
       size: 12
     }),
-    label: "Avg Tests / Technician",
+    label: "Avg Tests / Sample Analyzer",
     value: techs.length ? (filteredRecords.length / techs.length).toFixed(1) : "0"
   }), /*#__PURE__*/React.createElement(KpiCard, {
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "coins",
       size: 12
     }),
-    label: "Avg Revenue / Technician",
+    label: "Avg Revenue / Sample Analyzer",
     value: fmtMoney(techs.length ? sum(rows.map(r => r.revenue)) / techs.length : 0)
   }), /*#__PURE__*/React.createElement(KpiCard, {
     icon: /*#__PURE__*/React.createElement(Icon, {
@@ -820,7 +820,7 @@ function TechnicianPerformancePage({
     }),
     chartRef: c1,
     exportRows: top.map(r => ({
-      Technician: r.tester,
+      "Sample Analyzer": r.tester,
       Tests: r.tests
     })),
     filename: "technician_ranking_tests"
@@ -861,7 +861,7 @@ function TechnicianPerformancePage({
     }),
     chartRef: c2,
     exportRows: top.map(r => ({
-      Technician: r.tester,
+      "Sample Analyzer": r.tester,
       Revenue: r.revenue
     })),
     filename: "technician_ranking_revenue"
@@ -894,7 +894,7 @@ function TechnicianPerformancePage({
       }
     }
   }))), /*#__PURE__*/React.createElement(SectionCard, {
-    title: "Technician Leaderboard",
+    title: "Sample Analyzer Leaderboard",
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "user",
       size: 16,
@@ -905,7 +905,7 @@ function TechnicianPerformancePage({
     defaultSortKey: "tests",
     columns: [{
       key: "tester",
-      label: "Technician"
+      label: "Sample Analyzer"
     }, {
       key: "tests",
       label: "Tests"
@@ -1091,7 +1091,7 @@ function RevenueAnalyticsPage({
       }
     }
   })), /*#__PURE__*/React.createElement(ChartCard, {
-    title: "Revenue by Technician",
+    title: "Revenue by Sample Analyzer",
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "user",
       size: 16,
@@ -1099,7 +1099,7 @@ function RevenueAnalyticsPage({
     }),
     chartRef: c3,
     exportRows: techEntries.map(([k, v]) => ({
-      Technician: k,
+      "Sample Analyzer": k,
       Revenue: v
     })),
     filename: "revenue_by_technician"

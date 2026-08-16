@@ -805,7 +805,12 @@ function SampleDetail({
   // flow) — the plain "Move Status" buttons only ever offer genuine
   // whole-sample custody moves (on_hold/cancelled/rejected/starting testing).
   const manualAllowedNext = allowedNext.filter(s => !["results_entered", "under_review", "approved", "released"].includes(s));
-  const technicians = users.filter(u => u.role === "Technician" || u.role === "Administrator");
+  // Anyone who can actually enter results should be assignable as a
+  // tester — driven by the live permission matrix (permissionsFor()) so
+  // it automatically includes every role with that permission, including
+  // custom roles created later, instead of a fixed list of role names that
+  // would silently miss e.g. Junior/Senior/Chief Chemist.
+  const technicians = users.filter(u => u.role === "Administrator" || permissionsFor(permissionMatrix, u).canEnterResults);
   const [assignee, setAssignee] = React.useState(sample.assignedTo || "");
   const [editing, setEditing] = React.useState(false);
   const [editForm, setEditForm] = React.useState(null);
@@ -1281,7 +1286,7 @@ function SampleDetail({
     style: {
       color: C.ink
     }
-  }, "Assign Technician"), /*#__PURE__*/React.createElement(SelectField, {
+  }, "Assign Sample Analyzer"), /*#__PURE__*/React.createElement(SelectField, {
     simple: true,
     value: assignee,
     onChange: setAssignee,
@@ -3529,6 +3534,22 @@ function SubBatchBuilder({
     if (!sb.testRecordId) return true;
     return !(testRecords || []).some(r => r.id === sb.testRecordId);
   }
+  // A batch whose linked Test Record has been archived (see
+  // archiveReleasedMembers() in 13-testrecords-ui.js — archiving removes the
+  // record from the active testRecords list entirely) used to just sit here
+  // forever: this table only ever rendered every entry in subBatches with no
+  // check for whether its record was still active. Only treat it as
+  // archived once it's genuinely done (fully released — see
+  // effectiveSubBatchStatus()) AND its Test Record is gone from the active
+  // list; a batch that's released but not yet archived, or whose record was
+  // removed for some other reason (e.g. deleted — which resets it to
+  // "pending", already excluded below), stays visible as normal.
+  function isSubBatchArchived(sb) {
+    if (sb.status === "pending" || !sb.testRecordId) return false;
+    const recordStillActive = (testRecords || []).some(r => r.id === sb.testRecordId);
+    if (recordStillActive) return false;
+    return effectiveSubBatchStatus(sb, samples, testRecords, subBatches) === "released";
+  }
   function doDeleteSubBatch(sb) {
     if (!subBatchDeleteGate.allowed) return;
     const orphaned = isOrphanedTestedSubBatch(sb);
@@ -3937,6 +3958,11 @@ function SubBatchBuilder({
     const hasPanel = deleteSubBatchId === sb.id;
     const sbOrphaned = isOrphanedTestedSubBatch(sb);
     const sbDeletable = sb.status === "pending" || sbOrphaned;
+    // Recomputed from the members' real current stage, not read straight
+    // off sb.status — see effectiveSubBatchStatus() in 16-sub-batch.js for
+    // why sb.status alone can lag behind (e.g. showing "Awaiting Review"
+    // for a batch that's actually fully released).
+    const displayStatus = effectiveSubBatchStatus(sb, samples, testRecords, subBatches);
     const mainRow = /*#__PURE__*/React.createElement("tr", {
       style: {
         borderTop: `1px solid ${C.border}`
@@ -3962,7 +3988,7 @@ function SubBatchBuilder({
       className: "px-3 py-2"
     }, testerControl), /*#__PURE__*/React.createElement("td", {
       className: "px-3 py-2"
-    }, SUB_BATCH_STATUS_BADGE(sb.status)), /*#__PURE__*/React.createElement("td", {
+    }, SUB_BATCH_STATUS_BADGE(displayStatus)), /*#__PURE__*/React.createElement("td", {
       className: "px-3 py-2"
     }, (() => {
       const pendingNames = pendingOtherTestsForBatch(sb);
@@ -3982,7 +4008,7 @@ function SubBatchBuilder({
       className: "px-3 py-2 text-right"
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex items-center justify-end gap-1.5 flex-wrap"
-    }, ["tested", "reviewed", "approved"].includes(sb.status) && /*#__PURE__*/React.createElement("span", {
+    }, ["tested", "reviewed", "approved"].includes(displayStatus) && /*#__PURE__*/React.createElement("span", {
       className: "text-[11px]",
       style: {
         color: C.muted
@@ -4013,17 +4039,22 @@ function SubBatchBuilder({
     }, mainRow, panelRow);
   }
 
+  // Archived batches (fully released AND their Test Record moved to the
+  // Archive) are excluded here — they now live in the Archive tab instead.
+  // See isSubBatchArchived() above.
+  const visibleSubBatches = subBatches.filter(sb => !isSubBatchArchived(sb));
+  const archivedCount = subBatches.length - visibleSubBatches.length;
   const listCard = /*#__PURE__*/React.createElement(SectionCard, {
     title: "All Analytical Batches",
-    subtitle: "Creation and membership only — review, approve, and release now happen in the Results Workflow tab.",
+    subtitle: "Creation and membership only — review, approve, and release now happen in the Results Workflow tab." + (archivedCount ? ` ${archivedCount} archived batch${archivedCount === 1 ? "" : "es"} hidden — see the Archive tab.` : ""),
     icon: /*#__PURE__*/React.createElement(Icon, {
       name: "clipboard",
       size: 15
     })
-  }, subBatches.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
+  }, visibleSubBatches.length === 0 ? /*#__PURE__*/React.createElement(EmptyState, {
     icon: "layers",
-    title: "No sub-batches yet",
-    subtitle: "Group pending samples by test type above to create one."
+    title: subBatches.length === 0 ? "No sub-batches yet" : "No active sub-batches",
+    subtitle: subBatches.length === 0 ? "Group pending samples by test type above to create one." : "Every batch here has been released and archived — see the Archive tab."
   }) : /*#__PURE__*/React.createElement("div", {
     className: "rounded-lg overflow-hidden",
     style: {
@@ -4043,7 +4074,7 @@ function SubBatchBuilder({
     style: {
       color: C.muted
     }
-  }, h)))), /*#__PURE__*/React.createElement("tbody", null, subBatches.map(sb => renderSubBatchRow(sb)))))));
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, visibleSubBatches.map(sb => renderSubBatchRow(sb)))))));
 
   return /*#__PURE__*/React.createElement("div", {
     className: "grid gap-4"
