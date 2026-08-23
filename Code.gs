@@ -127,6 +127,7 @@ function safeUserProjection_(u) {
     username: u.username,
     role: u.role,
     designation: u.designation || "",
+    email: u.email || "", // recovery email only — used for the self-service "Forgot password" flow
     active: u.active !== false,
     status: u.status || (u.active === false ? "Disabled" : "Active"),
     permissionOverrides: u.permissionOverrides || {},
@@ -180,14 +181,23 @@ function requireSession_(sessionToken) {
   if (sess.expiresAt && new Date(sess.expiresAt).getTime() < Date.now()) {
     throw new Error("UNAUTHORIZED: Session expired. Please log in again.");
   }
-  const user = readAllRows_("users").find(u => u.id === sess.userId);
+  // Read once and keep it — every "users" write (add/edit) used to trigger
+  // its OWN full re-read of this exact same sheet later on (once in
+  // sanitizeUserWrite_ to preserve the target's password fields, and again
+  // inside upsertRow_'s own row-index scan), stacking multiple full-sheet
+  // reads of Users into a single request and making user add/edit feel
+  // noticeably slower than every other save in the app. Handing this
+  // already-fetched list back to the caller lets those spots reuse it
+  // instead of asking Sheets for the same data twice more.
+  const allUsers = readAllRows_("users");
+  const user = allUsers.find(u => u.id === sess.userId);
   if (!user || user.active === false || user.status === "Disabled" || user.status === "Locked") {
     throw new Error("UNAUTHORIZED: Account is no longer active.");
   }
   // Best-effort activity touch — a failure here must never block the
   // caller's actual request.
   try { upsertRow_("sessions", Object.assign({}, sess, { lastActivityAt: new Date().toISOString() })); } catch (e) {}
-  return { session: sess, user: user };
+  return { session: sess, user: user, allUsers: allUsers };
 }
 // Collections that must never be exposed through the generic list/write
 // actions — they only move through the dedicated, purpose-built paths
@@ -612,6 +622,131 @@ function handleBootstrapAdmin_(payload) {
     upsertRow_("users", admin);
     logSecurityEvent_("USER_CREATED", { username: admin.username, userId: admin.id, reason: "first_admin_bootstrap" });
     return { ok: true, user: safeUserProjection_(admin) };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Self-service "Forgot password" — two steps, no session required (nothing
+// here is possible without already knowing your own username, and a code
+// only proves control of the recovery email on file — it can't be used to
+// log in directly, only to set a brand-new password the normal way).
+//
+//   1. requestPasswordReset: emails a 6-digit code (GmailApp — the same
+//      mechanism already used for the automatic data-backup emails) to the
+//      account's recovery email, IF one is configured (Users ▸ Edit User ▸
+//      Recovery Email — an Administrator sets this, same as any other
+//      profile field). The response is deliberately identical whether the
+//      username doesn't exist, is inactive, or simply has no recovery email
+//      on file — this endpoint must never be usable to find out which
+//      usernames are valid.
+//   2. resetPasswordWithCode: verifies that code (hashed, salted, never
+//      stored or transmitted in the clear) against a 15-minute expiry and a
+//      5-attempt limit, then sets the new password through the exact same
+//      hmacSha256Hex_(password, salt) scheme every other password uses.
+// ---------------------------------------------------------------------------
+const RESET_CODE_TTL_MS_ = 15 * 60 * 1000; // 15 minutes
+const RESET_CODE_MAX_ATTEMPTS_ = 5;
+const RESET_GENERIC_MESSAGE_ = "If that account exists and has a recovery email on file, a reset code has been sent to it.";
+
+function generateResetCode_() {
+  return String(Math.floor(100000 + Math.random() * 900000)); // 6 digits, zero-padded by construction
+}
+
+function handlePasswordResetRequest_(payload) {
+  const { username } = payload || {};
+  const uname = String(username || "").trim();
+  if (!uname) return { ok: false, error: "Username is required." };
+  // Reuses the same failed-attempt counter/lockout window as handleLogin_
+  // so this endpoint can't be hammered any faster than the login form
+  // itself already allows.
+  if (isLockedOut_(uname)) {
+    logSecurityEvent_("PASSWORD_RESET_REQUEST_BLOCKED", { username: uname, reason: "locked_out" });
+    return { ok: false, error: "Too many attempts. Try again in a few minutes." };
+  }
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const user = readAllRows_("users").find(u => (u.username || "").toLowerCase() === uname.toLowerCase());
+    const eligible = user && user.active !== false && user.status !== "Disabled" && user.status !== "Locked" && user.email;
+    if (!eligible) {
+      recordFailedLogin_(uname);
+      logSecurityEvent_("PASSWORD_RESET_REQUESTED", { username: uname, reason: user ? "not_eligible" : "unknown_username" });
+      return { ok: true, message: RESET_GENERIC_MESSAGE_ }; // same message either way — no username enumeration
+    }
+    const code = generateResetCode_();
+    const salt = Utilities.getUuid();
+    const patched = Object.assign({}, user, {
+      passwordResetCodeHash: hmacSha256Hex_(code, salt),
+      passwordResetSalt: salt,
+      passwordResetExpiresAt: new Date(Date.now() + RESET_CODE_TTL_MS_).toISOString(),
+      passwordResetAttempts: 0
+    });
+    try {
+      GmailApp.sendEmail(
+        user.email,
+        "DPHE Zonal Lab LIMS — Password Reset Code",
+        `A password reset was requested for the account "${user.username}".\n\n` +
+        `Your reset code is: ${code}\n\n` +
+        `This code expires in 15 minutes. Enter it on the "Reset Password" screen in the LIMS app to choose a new password.\n\n` +
+        `If you did not request this, you can safely ignore this email — your password will not be changed.`,
+        { name: "DPHE LIMS" }
+      );
+    } catch (mailErr) {
+      logSecurityEvent_("PASSWORD_RESET_EMAIL_FAILED", { username: uname, userId: user.id, reason: String(mailErr && mailErr.message || mailErr) });
+      return { ok: false, error: "Could not send the reset email. Contact your Administrator." };
+    }
+    upsertRow_("users", patched); // only persist the reset token after the email actually sent
+    logSecurityEvent_("PASSWORD_RESET_REQUESTED", { username: uname, userId: user.id });
+    return { ok: true, message: RESET_GENERIC_MESSAGE_ };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function handlePasswordResetConfirm_(payload) {
+  const { username, code, newPassword } = payload || {};
+  const uname = String(username || "").trim();
+  const codeStr = String(code || "").trim();
+  if (!uname || !codeStr) return { ok: false, error: "Username and code are required." };
+  if (!newPassword || newPassword.length < 8) return { ok: false, error: "Password must be at least 8 characters long." };
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const user = readAllRows_("users").find(u => (u.username || "").toLowerCase() === uname.toLowerCase());
+    if (!user || !user.passwordResetCodeHash || !user.passwordResetSalt) {
+      logSecurityEvent_("PASSWORD_RESET_FAILED", { username: uname, reason: "no_pending_reset" });
+      return { ok: false, error: "That code is invalid or has expired. Request a new one." };
+    }
+    if (!user.passwordResetExpiresAt || new Date(user.passwordResetExpiresAt).getTime() < Date.now()) {
+      logSecurityEvent_("PASSWORD_RESET_FAILED", { username: uname, userId: user.id, reason: "expired" });
+      return { ok: false, error: "That code has expired. Request a new one." };
+    }
+    const attempts = Number(user.passwordResetAttempts || 0);
+    if (attempts >= RESET_CODE_MAX_ATTEMPTS_) {
+      logSecurityEvent_("PASSWORD_RESET_FAILED", { username: uname, userId: user.id, reason: "too_many_attempts" });
+      return { ok: false, error: "Too many incorrect attempts. Request a new code." };
+    }
+    if (hmacSha256Hex_(codeStr, user.passwordResetSalt) !== user.passwordResetCodeHash) {
+      upsertRow_("users", Object.assign({}, user, { passwordResetAttempts: attempts + 1 }));
+      logSecurityEvent_("PASSWORD_RESET_FAILED", { username: uname, userId: user.id, reason: "bad_code" });
+      return { ok: false, error: "That code is incorrect." };
+    }
+    const salt = Utilities.getUuid();
+    const patched = Object.assign({}, user, {
+      passwordHash: hmacSha256Hex_(newPassword, salt),
+      passwordSalt: salt,
+      passwordResetCodeHash: null,
+      passwordResetSalt: null,
+      passwordResetExpiresAt: null,
+      passwordResetAttempts: 0
+    });
+    delete patched.password; // clear out any legacy plaintext field too, same as a normal password change
+    upsertRow_("users", patched);
+    clearFailedLogin_(uname);
+    logSecurityEvent_("PASSWORD_RESET_SUCCESS", { username: uname, userId: user.id });
+    return { ok: true };
   } finally {
     lock.releaseLock();
   }
@@ -1078,6 +1213,8 @@ function doPost(e) {
     if (action === "login") return jsonOut_({ data: handleLogin_(payload) });
     if (action === "logout") return jsonOut_({ data: handleLogout_(payload) });
     if (action === "bootstrapAdmin") return jsonOut_({ data: handleBootstrapAdmin_(payload) });
+    if (action === "requestPasswordReset") return jsonOut_({ data: handlePasswordResetRequest_(payload) });
+    if (action === "resetPasswordWithCode") return jsonOut_({ data: handlePasswordResetConfirm_(payload) });
 
     let auth = null;
     if (SESSION_REQUIRED_ACTIONS_.has(action)) {
@@ -1128,7 +1265,7 @@ function doPost(e) {
       switch (action) {
         case "save": {
           if (collection === "samples" && auth) enforceSamplesWritePolicy_(payload, auth);
-          const safePayload = collection === "users" ? sanitizeUserWrite_(payload, auth) : payload;
+          const safePayload = collection === "users" ? sanitizeUserWrite_(payload, auth, auth && auth.allUsers) : payload;
           const saved = upsertRow_(collection, safePayload);
           return jsonOut_({ data: collection === "users" ? safeUserProjection_(saved) : saved });
         }
@@ -1137,13 +1274,13 @@ function doPost(e) {
           return jsonOut_({ data: { ok: true } });
         case "bulkSet": {
           if (collection === "samples" && auth) enforceSamplesWritePolicy_(payload, auth);
-          const safePayload = collection === "users" ? (payload || []).map(p => sanitizeUserWrite_(p, auth)) : payload;
+          const safePayload = collection === "users" ? (payload || []).map(p => sanitizeUserWrite_(p, auth, auth && auth.allUsers)) : payload;
           const saved = replaceAllRows_(collection, safePayload);
           return jsonOut_({ data: collection === "users" ? saved.map(safeUserProjection_) : saved });
         }
         case "bulkUpsert": {
           if (collection === "samples" && auth) enforceSamplesWritePolicy_(payload, auth);
-          const safePayload = collection === "users" ? (payload || []).map(p => sanitizeUserWrite_(p, auth)) : payload;
+          const safePayload = collection === "users" ? (payload || []).map(p => sanitizeUserWrite_(p, auth, auth && auth.allUsers)) : payload;
           const saved = bulkUpsertRows_(collection, safePayload);
           return jsonOut_({ data: collection === "users" ? saved.map(safeUserProjection_) : saved });
         }
@@ -1176,19 +1313,32 @@ function doPost(e) {
           if (!userId || !newPassword || newPassword.length < 8) {
             return jsonOut_({ error: "A user id and a password of at least 8 characters are required." });
           }
-          let existing = readAllRows_("users").find(u => u.id === userId);
-          if (user) {
-             const safeUser = sanitizeUserWrite_(user, auth);
-             upsertRow_("users", safeUser);
-             existing = readAllRows_("users").find(u => u.id === userId);
-          }
-          if (!existing) return jsonOut_({ error: "User not found." });
           const salt = Utilities.getUuid();
-          existing.passwordSalt = salt;
-          existing.passwordHash = hmacSha256Hex_(newPassword, salt);
-          upsertRow_("users", existing);
-          logSecurityEvent_("PASSWORD_RESET", { targetUser: existing.username, byUser: auth.user.username });
-          return jsonOut_({ data: safeUserProjection_(existing) });
+          const passwordHash = hmacSha256Hex_(newPassword, salt);
+          let record;
+          if (user) {
+            // Creating a brand-new user (Users Admin ▸ Add User): build the
+            // full record with the password already baked in and write it
+            // ONCE. This used to write the new user row, then re-read the
+            // WHOLE Users sheet just to fetch back the row it had just
+            // written, then write that same row a second time to attach the
+            // password — three separate Sheets round trips (2 writes + a
+            // read, each with its own full-column scan) for one new user.
+            // That doubling is exactly what made "Add User" feel slow.
+            record = sanitizeUserWrite_(user, auth, auth && auth.allUsers);
+          } else {
+            // Resetting an EXISTING user's password: their current record
+            // isn't in the payload, so one read here is unavoidable — but
+            // reuse the Users list requireSession_ already fetched for this
+            // request instead of asking Sheets for it again.
+            record = (auth && auth.allUsers || readAllRows_("users")).find(u => u.id === userId);
+            if (!record) return jsonOut_({ error: "User not found." });
+          }
+          record.passwordSalt = salt;
+          record.passwordHash = passwordHash;
+          const saved = upsertRow_("users", record);
+          logSecurityEvent_("PASSWORD_RESET", { targetUser: saved.username, byUser: auth.user.username });
+          return jsonOut_({ data: safeUserProjection_(saved) });
         }
         case "bulkRemove":
           return jsonOut_({ data: bulkRemoveRows_(collection, payload && payload.ids) });
@@ -1245,14 +1395,22 @@ function doPost(e) {
 // including someone else's, bypassing verifyAndMaybeMigratePassword_
 // entirely), and an existing user's stored hash/salt must survive a
 // metadata-only edit (e.g. changing a designation) untouched.
-function sanitizeUserWrite_(record, auth) {
+// preloadedUsers: the Users sheet, already read once this request (e.g. by
+// requireSession_, which every authenticated write already has to do to
+// validate the caller). Reuses that instead of paying for another full
+// sheet read just to look up one record's existing password fields —
+// previously this always re-read the entire Users sheet from scratch on
+// every single user add/edit, on top of the read requireSession_ already
+// did and the one upsertRow_ was about to do, which is what made saving a
+// user noticeably slower than saving anything else in the app.
+function sanitizeUserWrite_(record, auth, preloadedUsers) {
   if (!record || typeof record !== "object") return record;
   const clean = Object.assign({}, record);
   delete clean.passwordHash;
   delete clean.passwordSalt;
   delete clean.password;
   if (record.id) {
-    const existing = readAllRows_("users").find(u => u.id === record.id);
+    const existing = (preloadedUsers || readAllRows_("users")).find(u => u.id === record.id);
     if (existing) {
       clean.passwordHash = existing.passwordHash;
       clean.passwordSalt = existing.passwordSalt;

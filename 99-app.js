@@ -13,8 +13,35 @@
 //      Lifecycle KPI strip above its original content.
 // Everything else below is byte-for-byte the original V14 behaviour.
 // ============================================================================
+// Idle auto-logout — signs the person out after IDLE_LOGOUT_MS of no
+// keyboard/mouse/touch/scroll activity, regardless of which tab of the app
+// they're on. Protects a lab workstation left unattended while still
+// logged in. Purely a client-side convenience: the server-side session
+// still has its own independent 48h expiry (see handleLogin_ in Code.gs)
+// as the real backstop.
+const IDLE_LOGOUT_MS = 20 * 60 * 1000; // 20 minutes
+const IDLE_ACTIVITY_EVENTS = ["mousedown", "mousemove", "keydown", "scroll", "touchstart", "wheel"];
+function useIdleLogout(active, onIdle) {
+  useEffect(() => {
+    if (!active) return;
+    let timer = setTimeout(onIdle, IDLE_LOGOUT_MS);
+    function resetTimer() {
+      clearTimeout(timer);
+      timer = setTimeout(onIdle, IDLE_LOGOUT_MS);
+    }
+    IDLE_ACTIVITY_EVENTS.forEach(evt => window.addEventListener(evt, resetTimer, { passive: true }));
+    return () => {
+      clearTimeout(timer);
+      IDLE_ACTIVITY_EVENTS.forEach(evt => window.removeEventListener(evt, resetTimer));
+    };
+  }, [active, onIdle]);
+}
+
 function AppRoot() {
   const [users, setUsers] = useState([]);
+  // "login" | "forgot" — which screen to show when there's no session.
+  const [authView, setAuthView] = useState("login");
+  const [authNotice, setAuthNotice] = useState("");
   const [permissionMatrix, setPermissionMatrixState] = useState(() => DEFAULT_PERMISSION_MATRIX);
   const [usersLoaded, setUsersLoaded] = useState(false);
   // Separate from usersLoaded: distinguishes "we asked the backend and it
@@ -116,12 +143,23 @@ function AppRoot() {
     };
     setSession(sess);
     saveKey("session", sess);
+    setAuthView("login");
+    setAuthNotice("");
   }
-  function handleLogout() {
+  function handleLogout(notice) {
     DataService.logout(); // best-effort server-side session revoke
     setSession(null);
     saveKey("session", null);
+    setAuthView("login");
+    if (notice) setAuthNotice(notice);
   }
+
+  // 20-minutes-idle → auto logout (see useIdleLogout above). Only armed
+  // while a session actually exists.
+  const handleIdleLogout = useCallback(() => {
+    handleLogout("You were logged out after a period of inactivity. Please log in again.");
+  }, []);
+  useIdleLogout(!!session, handleIdleLogout);
 
   if (!usersLoaded) {
     return /*#__PURE__*/React.createElement("div", {
@@ -166,10 +204,20 @@ function AppRoot() {
     });
   }
 
-  if (!session) return /*#__PURE__*/React.createElement(LoginPage, {
-    users: users,
-    onLogin: handleLogin
-  });
+  if (!session) {
+    if (authView === "forgot") {
+      return /*#__PURE__*/React.createElement(ForgotPasswordPage, {
+        onDone: (msg) => { setAuthView("login"); setAuthNotice(msg); },
+        onBackToLogin: () => { setAuthView("login"); setAuthNotice(""); }
+      });
+    }
+    return /*#__PURE__*/React.createElement(LoginPage, {
+      users: users,
+      onLogin: handleLogin,
+      onForgotPassword: () => { setAuthNotice(""); setAuthView("forgot"); },
+      noticeMessage: authNotice
+    });
+  }
 
   return /*#__PURE__*/React.createElement(LabApp, {
     session: session,

@@ -672,6 +672,7 @@ function UsersAdminTab({
         username: payload.username.trim(),
         name: payload.name.trim(),
         designation: payload.designation.trim(),
+        email: (payload.email || "").trim(),
         role: payload.role,
         permissionOverrides: payload.permissionOverrides || {}
       };
@@ -693,6 +694,7 @@ function UsersAdminTab({
         username: payload.username.trim(),
         name: payload.name.trim(),
         designation: payload.designation.trim(),
+        email: (payload.email || "").trim(),
         role: payload.role,
         permissionOverrides: payload.permissionOverrides || {},
         active: true,
@@ -1247,6 +1249,7 @@ function UserFormModal({
   const [username, setUsername] = React.useState(initial.username || "");
   const [name, setName] = React.useState(initial.name || "");
   const [designation, setDesignation] = React.useState(initial.designation || "");
+  const [email, setEmail] = React.useState(initial.email || "");
   const [role, setRole] = React.useState(initial.role || "Sample Analyzer");
   const [password, setPassword] = React.useState("");
   const [confirmPassword, setConfirmPassword] = React.useState("");
@@ -1285,6 +1288,7 @@ function UserFormModal({
       username: cleanUsername,
       name,
       designation,
+      email: email.trim(),
       role,
       password,
       permissionOverrides: cleanOverrides(overrides)
@@ -1344,6 +1348,12 @@ function UserFormModal({
     value: designation,
     onChange: e => setDesignation(e.target.value),
     placeholder: "e.g. Senior Chemist"
+  }), React.createElement(TextField, {
+    label: "Recovery Email (for \"Forgot password\" — optional)",
+    type: "email",
+    value: email,
+    onChange: e => setEmail(e.target.value),
+    placeholder: "e.g. name@dphe.gov.bd"
   }), React.createElement(SelectField, {
     label: "Role",
     value: role,

@@ -256,29 +256,51 @@ function TextField({
   const Tag = textarea ? "textarea" : "input";
   const fieldId = id || props.name || `f_${React.useId ? React.useId() : Math.random().toString(36).slice(2)}`;
   const errorId = `${fieldId}_err`;
+  // Password fields get a show/hide toggle so the person can check what
+  // they actually typed before submitting — plain type="password" never
+  // lets you see it, which is the #1 source of "wrong password" typos.
+  const isPasswordField = !textarea && props.type === "password";
+  const [revealed, setRevealed] = useState(false);
+  const inputEl = /*#__PURE__*/React.createElement(Tag, {
+    ...props,
+    type: isPasswordField ? (revealed ? "text" : "password") : props.type,
+    id: fieldId,
+    rows: textarea ? rows || 3 : undefined,
+    onChange: handleChange,
+    "aria-invalid": !!error,
+    "aria-describedby": error ? errorId : undefined,
+    className: "border rounded px-2 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 w-full",
+    style: {
+      borderColor: error ? C.warn : C.border,
+      borderWidth: error ? 1.5 : 1,
+      color: C.ink,
+      resize: textarea ? "vertical" : undefined,
+      paddingRight: isPasswordField ? 30 : undefined,
+      "--tw-ring-color": C.teal,
+      ...(props.style || {})
+    }
+  });
+  const fieldBody = isPasswordField ? /*#__PURE__*/React.createElement("div", {
+    className: "relative"
+  }, inputEl, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    tabIndex: -1,
+    onClick: () => setRevealed(v => !v),
+    "aria-label": revealed ? "Hide password" : "Show password",
+    title: revealed ? "Hide password" : "Show password",
+    className: "absolute inset-y-0 right-0 flex items-center px-2 cursor-pointer",
+    style: { color: C.muted, background: "transparent", border: "none" }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: revealed ? "eyeOff" : "eye",
+    size: 15
+  }))) : inputEl;
   return /*#__PURE__*/React.createElement("label", {
     className: "flex flex-col gap-1 text-xs",
     htmlFor: fieldId,
     style: {
       color: C.muted
     }
-  }, label, /*#__PURE__*/React.createElement(Tag, {
-    ...props,
-    id: fieldId,
-    rows: textarea ? rows || 3 : undefined,
-    onChange: handleChange,
-    "aria-invalid": !!error,
-    "aria-describedby": error ? errorId : undefined,
-    className: "border rounded px-2 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1",
-    style: {
-      borderColor: error ? C.warn : C.border,
-      borderWidth: error ? 1.5 : 1,
-      color: C.ink,
-      resize: textarea ? "vertical" : undefined,
-      "--tw-ring-color": C.teal,
-      ...(props.style || {})
-    }
-  }), error && /*#__PURE__*/React.createElement("span", {
+  }, label, fieldBody, error && /*#__PURE__*/React.createElement("span", {
     id: errorId,
     role: "alert",
     className: "text-xs flex items-center gap-1",

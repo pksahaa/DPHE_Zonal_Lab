@@ -346,6 +346,44 @@ function Icon({
       }), /*#__PURE__*/React.createElement("path", {
         d: "M8 10V7a4 4 0 0 1 8 0v3"
       }));
+    case "eye":
+      return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("path", {
+        d: "M1 12s4-7.5 11-7.5S23 12 23 12s-4 7.5-11 7.5S1 12 1 12z"
+      }), /*#__PURE__*/React.createElement("circle", {
+        cx: "12",
+        cy: "12",
+        r: "3"
+      }));
+    case "eyeOff":
+      return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("path", {
+        d: "M17.94 17.94A10.94 10.94 0 0 1 12 19.5C5 19.5 1 12 1 12a20.6 20.6 0 0 1 5.06-5.94M9.9 4.68A10.6 10.6 0 0 1 12 4.5c7 0 11 7.5 11 7.5a20.6 20.6 0 0 1-2.87 4.05M14.12 14.12a3 3 0 1 1-4.24-4.24"
+      }), /*#__PURE__*/React.createElement("path", {
+        d: "M1 1l22 22"
+      }));
+    case "mail":
+      return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("rect", {
+        x: "2",
+        y: "4",
+        width: "20",
+        height: "16",
+        rx: "2"
+      }), /*#__PURE__*/React.createElement("path", {
+        d: "M2 6l10 7 10-7"
+      }));
+    case "clock":
+      return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("circle", {
+        cx: "12",
+        cy: "12",
+        r: "10"
+      }), /*#__PURE__*/React.createElement("path", {
+        d: "M12 6v6l4 2"
+      }));
+    case "arrowLeft":
+      return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("path", {
+        d: "M19 12H5"
+      }), /*#__PURE__*/React.createElement("path", {
+        d: "M12 19l-7-7 7-7"
+      }));
     case "user":
       return /*#__PURE__*/React.createElement("svg", common, /*#__PURE__*/React.createElement("circle", {
         cx: "12",

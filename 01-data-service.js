@@ -465,6 +465,18 @@ const DataService = (() => {
     if (config.mode !== "gas") return { ok: false, error: "Only available in Google Apps Script (shared) mode." };
     return gasCall("setUserPassword", { collection: "users", payload: { userId, newPassword, user } });
   }
+  // ---- Self-service "Forgot password" (mirrors Code.gs: handlePasswordResetRequest_ / handlePasswordResetConfirm_) ----
+  // Neither of these needs a session token — they exist precisely because
+  // the caller is NOT logged in — so they're plain unauthenticated calls,
+  // same as login()/bootstrapAdmin() above.
+  async function requestPasswordReset(username) {
+    if (config.mode !== "gas") return { ok: false, error: "Self-service password reset is only available in Google Apps Script (shared) mode." };
+    return gasCall("requestPasswordReset", { payload: { username } });
+  }
+  async function resetPasswordWithCode(username, code, newPassword) {
+    if (config.mode !== "gas") return { ok: false, error: "Self-service password reset is only available in Google Apps Script (shared) mode." };
+    return gasCall("resetPasswordWithCode", { payload: { username, code, newPassword } });
+  }
   // Dedicated endpoint for the Review / Approve-Reject decision on one or
   // more samples (Code.gs: handleSubmitApprovalDecision_) — replaces a
   // plain bulkUpsert("samples", ...) so the backend can verify this is
@@ -528,6 +540,8 @@ const DataService = (() => {
     logout,
     bootstrapAdmin,
     setUserPassword,
+    requestPasswordReset,
+    resetPasswordWithCode,
     submitApprovalDecision,
     assignSamples,
     returnToAnalyst,
