@@ -144,6 +144,14 @@ const PARAMETER_CATEGORY_TONE = {
   Others: "muted"
 };
 const todayStr = () => new Date().toISOString().slice(0, 10);
+// True if dateStr (plain "YYYY-MM-DD") is strictly after today. Used to keep
+// operational dates — Test Date, Collection/Received Date, etc. — from ever
+// being entered in the future, which used to let a mistyped year (e.g.
+// "2026" instead of "2025") silently create records that then vanish from
+// month-based reports/filters that cap at the real current month. Plain ISO
+// string comparison, same convention validateRegistrationDates() already
+// relies on (see 21-sample-ui.js).
+const isFutureDate = dateStr => !!dateStr && dateStr > todayStr();
 const uid = (p = "id") => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 const fmtNum = n => (Math.round((n + Number.EPSILON) * 1000) / 1000).toString();
 const daysUntil = dateStr => Math.round((new Date(dateStr) - new Date(todayStr())) / (1000 * 60 * 60 * 24));

@@ -1095,3 +1095,128 @@ produced the wrong fix in the first place. Also fixed along the way:
     enforces; deleting it removes the Reference and every one of its member
     samples, so they no longer appear in Register Sample — closing the
     cascade exactly as described.
+
+## 2026-08-18 — Security & RBAC hardening (Phase 2, part 1)
+
+Phase 1 (`DPHE_ZONAL_LAB_LIMS_Workflow_Data_Integrity.md`) covered workflow
+correctness. This round covers the security architecture described in
+`DPHE_Zonal_Lab_LIMS_RBAC_Prompt.md` — not a rewrite, a hardening pass on
+top of the existing static-frontend + shared-Apps-Script-backend
+architecture. **Read this before deploying** if you're updating an existing
+installation — a couple of things change shape.
+
+**The core problem being fixed:** every account's password hash used to
+ship to the browser (even before login, since the login screen compared
+hashes client-side), the `sessions` sheet was written but never actually
+checked by anything, and role/permission was resolved entirely client-side
+— a tampered browser could claim to be an Administrator and the backend had
+no way to know better.
+
+- **Login moved server-side** (`Code.gs`: `handleLogin_`). The browser now
+  sends the raw password over HTTPS to a `login` action; the server
+  verifies it against a per-user salted hash (`HMAC-SHA256(password, salt)`
+  via `Utilities.computeHmacSha256Signature`) and returns a session token.
+  Existing accounts (unsalted `SHA-256(password)`, the old scheme) are
+  verified against that once and silently upgraded to the salted scheme on
+  their next successful login — no forced password reset needed.
+- **`users` never leaves the server with password fields attached**, full
+  stop — every read path (`list`/`listActive`/`multiList`/`listSince`)
+  strips `passwordHash`/`passwordSalt` before responding, regardless of
+  whether the caller is logged in.
+- **Sessions are real now.** Every protected write (`save`, `bulkSet`,
+  `bulkUpsert`, `bulkRemove`, `appendAudit`, etc.) requires a valid,
+  non-expired session token (`requireSession_`), not just the shared deploy
+  token. The `sessions` collection itself can't be read or written through
+  the generic list/save/remove paths at all — only through
+  `login`/`logout`.
+- **First-admin setup is now atomic and server-controlled**
+  (`handleBootstrapAdmin_`, `LockService`-guarded) instead of a client-side
+  `users.length === 0` check, which could let two near-simultaneous first
+  visitors (or one bad reload) create duplicate or overwritten admin
+  accounts.
+- **`users` and `permissionMatrix` writes are Administrator-only**,
+  enforced backend-side — and a client can never plant an arbitrary
+  password on an account by including `passwordHash` in a `users` write;
+  the server strips it and requires the dedicated `setUserPassword` action
+  instead (also Administrator-only for now — self-service password change
+  is a follow-up).
+- **`auditLog` is append-only** (remove/bulkSet/bulkRemove rejected) and
+  **read-gated**: viewing it now requires a valid session whose role has
+  `auditLog.view` in the Roles & Permissions matrix (or the built-in
+  default for a role that's never been customized). No other collection's
+  reads are gated yet — see Known Limitations.
+- **Segregation of duties on sample approvals** (`enforceSamplesWritePolicy_`
+  in `Code.gs`, mirroring `20-sample-model.js`'s `addApproval`/
+  `bulkDecideParameter`): a new approval/review entry on a sample is
+  rejected if its signed name/role doesn't match the actual logged-in
+  session, if that role isn't allowed to review/approve, or — where the
+  underlying test record's `tester` field makes it possible to tell — if
+  the approver is the same person who entered the result being approved.
+- **Failed-login lockout**: 5 failed attempts locks that username out for 5
+  minutes (`CacheService`-backed, resets on a successful login).
+- **New security audit events** appended to the same audit log as
+  everything else: `LOGIN_SUCCESS`, `LOGIN_FAILED`, `LOGOUT`,
+  `UNAUTHORIZED_ACCESS_ATTEMPT`, `USER_CREATED`, `PASSWORD_RESET`.
+
+**What callers need to know:** `DataService` (`01-data-service.js`) now
+holds a session token in memory and attaches it to every write
+automatically (`setSessionToken()`), plus new `login()`, `logout()`,
+`bootstrapAdmin()`, and `setUserPassword()` methods. Nothing that already
+calls `DataService.save`/`bulkSet`/etc. needs to change. `AppRoot`
+(`99-app.js`) restores the token from the persisted session on every reload
+and calls it again after a fresh login — if you're embedding `DataService`
+somewhere outside the normal app shell, you need to do the same or writes
+will start failing with "Missing session" after the first page load.
+
+**Honest note on the shared token:** `token` (`Dphe_Zonal_Lab` by default)
+still ships in the frontend source, because this is a static GitHub Pages
+site talking to one shared Apps Script backend — there's nowhere to keep it
+truly secret in that architecture. It was never a real authorization
+boundary and still isn't; everything above is what actually authorizes a
+specific user to do something now, not the token.
+
+**Known limitations / not done in this pass** (candidates for the next
+round):
+1. Reads other than `auditLog` (samples, testRecords, inventory, reports,
+   etc.) aren't role-gated yet — any valid token can still read them. The
+   app's own permission model doesn't define a `view` flag for every one of
+   these modules cleanly (`samples` in particular), so gating them needs a
+   bit more design work to avoid breaking a legitimate role's workflow.
+2. Generic `save`/`bulkSet`/`bulkUpsert` are still the transport for almost
+   everything, including sensitive state changes — a full move to
+   dedicated, single-purpose operations (`approveResult()`,
+   `releaseResult()`, `changeUserRole()`, ...) would close the remaining
+   mass-assignment surface but is a much larger refactor across both
+   `Code.gs` and every UI module that currently calls `save`/`bulkSet`
+   directly.
+3. Self-service password change (a user resetting their own password) isn't
+   built — only an Administrator can call `setUserPassword` today.
+4. Session tokens are UUIDs stored in a Sheet with an 8-hour expiry; there's
+   no "log out everywhere" / revoke-all-sessions-for-user action yet beyond
+   disabling the account outright.
+5. GAS's `Utilities` has no slow/memory-hard KDF (bcrypt/scrypt/Argon2) —
+   the salted HMAC-SHA256 scheme here is a real improvement over the old
+   unsalted hash, not a modern password-hashing standard.
+
+Automated coverage: `tests/test-gas-security.js` (mocks just enough of the
+Apps Script runtime — `PropertiesService`, `CacheService`, `LockService`,
+an in-memory "sheet" — to load `Code.gs` unmodified in Node and exercise it
+end to end: bootstrap atomicity, login success/failure/lockout, password
+migration, safe projections, session-gated writes, privilege-escalation and
+hash-smuggling attempts, append-only enforcement, and the segregation-of-
+duties checks above). All 9 pre-existing Phase 1 test files continue to
+pass unchanged.
+
+## Anti-Pattern Warning: Avoid bulkSet for Mass Data
+**CRITICAL:** Never use DataService.bulkSet() to update individual records in large collections (like samples, users, eferences).
+ulkSet replaces the **entire** Google Sheet, which takes a very long time and often fails when dealing with mass data. It also creates a severe race condition if multiple users or asynchronous functions try to save at the same time.
+
+**How to avoid this bug:**
+1. **Never tie setCollection([...]) to an auto-saving ulkSet effect.** In 99-app.js, do not trigger a backend ulkSet simply because the local React state array changed.
+2. **Use targeted saves.** When creating, editing, or deleting an entity, explicitly await DataService.save("collection", item), DataService.bulkUpsert("collection", [changedItems]), or DataService.remove("collection", id) in your handler function *before* or *concurrently* with updating the local UI state.
+3. **Use useDiffSync carefully.** For smaller configuration collections, useDiffSync works well by calculating diffs, but for mass data like samples, always use explicit targeted ulkUpsert (as refactored in Phase 1).
+
+## Security Architecture
+
+The full Role-Based Access Control (RBAC) and Security Architecture implementation details, including the API protection model, session management, segregation of duties, and security testing matrix, can be found in the [RBAC Security Report](./RBAC_Security_Report.md).
+

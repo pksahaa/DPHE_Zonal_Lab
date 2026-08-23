@@ -12,30 +12,20 @@
 // advertises working credentials to anyone who opens the page.
 const SHOW_DEMO_CREDENTIALS = false;
 
-// SHA-256 via the browser's built-in Web Crypto API — no external crypto
-// library needed. This is still client-side hashing (there's no server to
-// keep a secret pepper on until the backend migration lands), so it stops
-// short of a real production auth scheme, but it's a meaningful step up from
-// comparing plaintext passwords directly: a leaked users list/localStorage
-// dump no longer hands over every password as-is.
+// Password verification now happens on the server (see handleLogin_ /
+// verifyAndMaybeMigratePassword_ in Code.gs) — the browser sends the raw
+// password over HTTPS to DataService.login() and never sees, computes, or
+// compares any hash itself. That closes the gap the old client-side
+// SHA-256 scheme still had: previously the FULL users collection (every
+// account's password hash included) had to be downloaded into the browser
+// just so login could compare hashes locally, which meant anyone who
+// opened the page — logged in or not — could read every password hash.
+// This function is kept only as a fallback for local ("no backend
+// configured") demo mode, where there's no server to verify against.
 async function hashPassword(plain) {
   const bytes = new TextEncoder().encode(plain);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
-}
-async function verifyPassword(user, enteredPassword) {
-  if (user.passwordHash) {
-    const enteredHash = await hashPassword(enteredPassword);
-    return enteredHash === user.passwordHash;
-  }
-  // Legacy fallback for any user record created before this change (e.g.
-  // already sitting in a browser's localStorage). Still works, but flagged
-  // so it's visible in the console that this account needs re-hashing.
-  if (user.password) {
-    console.warn(`User "${user.username}" still has a plaintext password — log in once more after this is migrated, or recreate the account, to get a hashed password.`);
-    return user.password === enteredPassword;
-  }
-  return false;
 }
 
 function FirstTimeSetupPage({ onSetupComplete }) {
@@ -57,6 +47,25 @@ function FirstTimeSetupPage({ onSetupComplete }) {
     setSaving(true);
     setError("");
     try {
+      if (DataService.getConfig().mode === "gas") {
+        // Server-side atomic first-run creation (handleBootstrapAdmin_ in
+        // Code.gs) — verifies zero accounts exist and hashes the password
+        // itself, and logs the caller straight in. Replaces the old
+        // client-side "users.length === 0" check, which made that decision
+        // from a copy of the list already sitting in the browser instead of
+        // asking the server at the moment of creation.
+        const result = await DataService.bootstrapAdmin({
+          username: username.trim().toLowerCase(),
+          password,
+          name: name.trim() || "System Administrator",
+          designation: designation.trim() || "Senior Chemist"
+        });
+        if (!result.ok) { setError(result.error || "Failed to create admin user."); setSaving(false); return; }
+        onSetupComplete(result.user, result.token, result.expiresAt);
+        return;
+      }
+      // Local (no backend configured) demo mode — no server to verify
+      // against, so this stays a plain local record as before.
       const passwordHash = await hashPassword(password);
       const initialAdmin = {
         id: uid("user"),
@@ -148,13 +157,41 @@ function LoginPage({
   async function handleSubmit(e) {
     e.preventDefault();
     setChecking(true);
+    if (DataService.getConfig().mode === "gas") {
+      // Server verifies the password (see handleLogin_ in Code.gs) — the
+      // browser never computes or compares a hash itself, and never had to
+      // download every account's hash to do it.
+      let result;
+      try {
+        result = await DataService.login(username.trim(), password);
+      } catch (err) {
+        setChecking(false);
+        setError(`Could not reach the backend: ${err.message}`);
+        return;
+      }
+      setChecking(false);
+      if (!result || !result.ok) {
+        setError((result && result.error) || "Invalid username or password.");
+        return;
+      }
+      setError("");
+      onLogin(result.user, result.token, result.expiresAt);
+      return;
+    }
+    // Local (no backend configured) demo mode — no server to verify
+    // against, so the check happens against the locally-held record.
     const candidate = users.find(u => u.username.toLowerCase() === username.trim().toLowerCase());
     if (candidate && candidate.active === false) {
       setChecking(false);
       setError("This account has been deactivated. Contact your Administrator.");
       return;
     }
-    const ok = candidate ? await verifyPassword(candidate, password) : false;
+    let ok = false;
+    if (candidate && candidate.passwordHash) {
+      ok = (await hashPassword(password)) === candidate.passwordHash;
+    } else if (candidate && candidate.password) {
+      ok = candidate.password === password;
+    }
     setChecking(false);
     if (!ok) {
       setError("Invalid username or password.");

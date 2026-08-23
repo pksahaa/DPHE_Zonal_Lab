@@ -122,23 +122,28 @@ function bulkMarkReviewed(sampleList, testTypeId, testTypeName, session, setSamp
     updatedList.push(updated);
     count++;
   });
-  if (!updatedList.length) return;
-  // Apply all updates to local state at once, then persist to backend.
-  // Using bulkSet via a single setSamples updater avoids firing one save
-  // per sample and ensures all changes are committed atomically.
-  updatedList.forEach(updated => {
-    setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), null);
-  });
-  // Persist all updated samples to the backend via a single bulkUpsert call
-  // (touches only these rows — no re-fetching the whole samples table
-  // first) rather than one save per sample — avoids overlapping write
-  // requests and ensures a failed backend save surfaces as a visible toast
-  // instead of being silently dropped.
-  DataService.bulkUpsert("samples", updatedList).catch(err => {
+  if (!updatedList.length) return Promise.resolve();
+  // ONE backend call — move setSamples INSIDE .then() so rows only disappear
+  // from the Review queue after the backend has confirmed the save.
+  // This way the user sees the row persist with a pending state and only
+  // sees it vanish (along with the success toast) once it's truly saved.
+  return DataService.submitApprovalDecision(updatedList, { step: "review", testTypeId }).then(stamped => {
+    if (Array.isArray(stamped)) {
+      stamped.forEach(st => {
+        const orig = updatedList.find(u => u.id === st.id);
+        if (orig) { orig._version = st._version; orig.updatedAt = st.updatedAt; }
+      });
+    }
+    setSamples(prev => {
+      const map = new Map(updatedList.map(u => [u.id, u]));
+      return prev.map(s => map.get(s.id) || s);
+    }, null);
+    notify?.(`${count} sample(s) marked reviewed for ${testTypeName} — ready for final approval.`, "ok");
+  }).catch(err => {
     console.error("Failed to save reviewed samples to backend:", err);
-    notify?.(`Marked reviewed in this session, but backend save failed — reload to re-check. (${err && err.message || err})`, "warn");
+    notify?.(`Review failed to save — please try again. (${err && err.message || err})`, "warn");
+    throw err;
   });
-  notify?.(`${count} sample(s) marked reviewed for ${testTypeName} — ready for final approval.`, "ok");
 }
 // (Group-level "Return to Analyst" used to live here as
 // bulkReturnToAnalystFromReview — superseded by the per-row/per-batch
@@ -201,6 +206,12 @@ function StageViewToggle({ viewMode, setViewMode }) {
 //     brand-new Analytical Batch again: it behaves exactly like a freshly
 //     registered sample. It no longer shows up in ANY Results Workflow
 //     queue — it's back with Sample Registration / Add Test Record instead.
+//     REQUIRES A REASON — see ReasonRequiredModal above; the reason,
+//     previous result, and originating Test Record are recorded on the
+//     sample itself (sample.returnEvents[], see returnRequestedTestToAnalyst
+//     in 20-sample-model.js) AND as a structured auditLog entry below, so
+//     both "look at this sample's history" and "look at the audit trail"
+//     show the same, complete story.
 //   On Hold — flags the parameter and parks it at Awaiting Review (staying
 //     put if it was already there). It keeps showing up — visibly, tagged
 //     "On Hold" — so nothing silently disappears; it's just skipped by
@@ -209,32 +220,129 @@ function StageViewToggle({ viewMode, setViewMode }) {
 // ----
 function RowHoldReturnActions({ sample, testTypeId, testTypeName, session, notify, setSamples, setTestRecords, testRecords, size, stageGate }) {
   const held = isTestOnHold(sample, testTypeId);
-  function doReturn() {
-    if (!stageGate.allowed) return;
+  const [confirmingReturn, setConfirmingReturn] = React.useState(false);
+  const [confirmingHold, setConfirmingHold] = React.useState(false);
+  const [isProcessing, setIsProcessing] = React.useState(false);
+
+  async function doReturn(reason) {
+    if (!stageGate.allowed || isProcessing) return;
+    // Capture what the result actually was, and the pre-change status,
+    // BEFORE voiding/transitioning — so the return event (and the audit
+    // entry below) keep a record of both.
+    const rtBefore = (sample.requestedTests || []).find(r => r.testTypeId === testTypeId);
+    const previousStatus = rtBefore ? rtBefore.status : null;
+    const resultInfo = getSampleResultForTest(sample, testTypeId, testRecords);
     const nextRecords = voidSampleResultForTest(testRecords, sample, testTypeId);
     if (nextRecords !== testRecords) setTestRecords?.(nextRecords);
-    const updated = returnRequestedTestToAnalyst(sample, testTypeId, testTypeName, session);
-    setSamples(prev => prev.map(s => s.id === sample.id ? updated : s), updated);
-    notify?.(`${sample.sampleCode} returned to analyst for ${testTypeName} — back in the pending-testing queue, same as a freshly registered sample.`, "warn");
+    const updated = returnRequestedTestToAnalyst(sample, testTypeId, testTypeName, session, reason, {
+      previousResult: resultInfo?.results ?? null,
+      testRecordId: resultInfo?.recordId ?? null
+    });
+    if (updated === sample) return; // reason was rejected inside the model function — nothing changed, nothing to persist/notify
+    setIsProcessing(true);
+    try {
+      const stamped = await DataService.returnToAnalyst([updated]);
+      const final = (Array.isArray(stamped) && stamped[0]) ? { ...updated, _version: stamped[0]._version, updatedAt: stamped[0].updatedAt } : updated;
+      setSamples(prev => prev.map(s => s.id === sample.id ? final : s), final);
+      DataService.appendAudit({
+        eventType: "RESULT_RETURNED",
+        entityType: "requestedTest",
+        entityId: `${sample.id}:${testTypeId}`,
+        sampleId: sample.id,
+        sampleCode: sample.sampleCode,
+        testTypeId,
+        testTypeName,
+        testRecordId: resultInfo?.recordId ?? null,
+        reason,
+        previousValue: previousStatus,
+        newValue: "in_progress",
+        entity: "sample",
+        action: "return_to_analyst",
+        note: `Returned to analyst for ${testTypeName}: ${reason}`
+      }).catch(err => console.error("Audit log write failed (non-fatal):", err));
+      setConfirmingReturn(false);
+      notify?.(`${sample.sampleCode} returned to analyst for ${testTypeName} — back in the pending-testing queue, same as a freshly registered sample.`, "warn");
+    } catch(err) {
+      console.error("Failed to return sample to analyst:", err);
+      notify?.(`Return failed — please try again. (${err && err.message || err})`, "warn");
+    } finally {
+      setIsProcessing(false);
+    }
   }
-  function doHold() {
-    if (!stageGate.allowed) return;
-    const updated = holdRequestedTestForSample(sample, testTypeId, testTypeName, session);
-    setSamples(prev => prev.map(s => s.id === sample.id ? updated : s), updated);
-    notify?.(`${sample.sampleCode} put on hold for ${testTypeName} — parked in Awaiting Review, other samples in this batch are unaffected.`, "warn");
+  // A REASON IS REQUIRED (Workflow/Data-Integrity Upgrade Step 8 — this was
+  // previously the one sensitive per-parameter action with no reason
+  // prompt at all). Passed through as `note` to holdRequestedTestForSample
+  // (20-sample-model.js), which already accepted an optional note param —
+  // just wasn't being given one from here.
+  async function doHold(reason) {
+    if (!stageGate.allowed || isProcessing) return;
+    const updated = holdRequestedTestForSample(sample, testTypeId, testTypeName, session, reason);
+    if (updated === sample) return; // reason was rejected inside the model function — nothing changed, nothing to persist/notify
+    setIsProcessing(true);
+    try {
+      const stamped = await DataService.holdTest([updated]);
+      const final = (Array.isArray(stamped) && stamped[0]) ? { ...updated, _version: stamped[0]._version, updatedAt: stamped[0].updatedAt } : updated;
+      setSamples(prev => prev.map(s => s.id === sample.id ? final : s), final);
+      DataService.appendAudit({
+        eventType: "TEST_ON_HOLD",
+        entityType: "requestedTest",
+        entityId: `${sample.id}:${testTypeId}`,
+        sampleId: sample.id,
+        sampleCode: sample.sampleCode,
+        testTypeId,
+        testTypeName,
+        reason,
+        entity: "sample",
+        action: "hold",
+        note: `${testTypeName} put on hold: ${reason}`
+      }).catch(err => console.error("Audit log write failed (non-fatal):", err));
+      setConfirmingHold(false);
+      notify?.(`${sample.sampleCode} put on hold for ${testTypeName} — parked in Awaiting Review, other samples in this batch are unaffected.`, "warn");
+    } catch(err) {
+      console.error("Failed to put test on hold:", err);
+      notify?.(`Hold failed — please try again. (${err && err.message || err})`, "warn");
+    } finally {
+      setIsProcessing(false);
+    }
   }
-  function doResume() {
-    if (!stageGate.allowed) return;
+  async function doResume() {
+    if (!stageGate.allowed || isProcessing) return;
     const updated = resumeRequestedTestForSample(sample, testTypeId, testTypeName, session);
-    setSamples(prev => prev.map(s => s.id === sample.id ? updated : s), updated);
-    notify?.(`${sample.sampleCode} resumed for ${testTypeName} — back in the normal queue.`, "ok");
+    setIsProcessing(true);
+    try {
+      const stamped = await DataService.resumeTest([updated]);
+      const final = (Array.isArray(stamped) && stamped[0]) ? { ...updated, _version: stamped[0]._version, updatedAt: stamped[0].updatedAt } : updated;
+      setSamples(prev => prev.map(s => s.id === sample.id ? final : s), final);
+      notify?.(`${sample.sampleCode} resumed for ${testTypeName} — back in the normal queue.`, "ok");
+    } catch(err) {
+      console.error("Failed to resume test:", err);
+      notify?.(`Resume failed — please try again. (${err && err.message || err})`, "warn");
+    } finally {
+      setIsProcessing(false);
+    }
   }
   if (!stageGate.visible) return E(React.Fragment, null);
-  return E("div", { className: "flex items-center gap-1" },
-    held
-      ? E(IconButton, { key: "resume", name: "check", color: C.ok, title: "Resume — back into the normal queue", onClick: stageGate.guard(doResume) })
-      : E(IconButton, { key: "hold", name: "lock", color: C.warn, title: "On Hold — park in Awaiting Review", onClick: stageGate.guard(doHold) }),
-    E(IconButton, { key: "return", name: "arrowLeft", color: C.danger, title: "Return to Analyst — back to pending testing, like a fresh sample", onClick: stageGate.guard(doReturn) })
+  return E(React.Fragment, null,
+    E("div", { className: "flex items-center gap-1" },
+      held
+        ? E(IconButton, { key: "resume", name: "check", color: isProcessing ? C.muted : C.ok, title: "Resume — back into the normal queue", onClick: stageGate.guard(doResume), disabled: isProcessing })
+        : E(IconButton, { key: "hold", name: "lock", color: isProcessing ? C.muted : C.warn, title: "On Hold — park in Awaiting Review", onClick: stageGate.guard(() => setConfirmingHold(true)), disabled: isProcessing }),
+      E(IconButton, { key: "return", name: "arrowLeft", color: isProcessing ? C.muted : C.danger, title: "Return to Analyst — back to pending testing, like a fresh sample", onClick: stageGate.guard(() => setConfirmingReturn(true)), disabled: isProcessing })
+    ),
+    confirmingReturn && E(ReasonRequiredModal, {
+      title: `Return to Analyst — ${sample.sampleCode}`,
+      description: `${testTypeName} will go back to pending testing, exactly like a freshly registered sample. The current result is voided (kept, not deleted, for the audit trail) and this sample drops out of every Results Workflow queue until it's tested again.`,
+      confirmLabel: "Return to Analyst",
+      onClose: () => setConfirmingReturn(false),
+      onConfirm: doReturn
+    }),
+    confirmingHold && E(ReasonRequiredModal, {
+      title: `On Hold — ${sample.sampleCode}`,
+      description: `${testTypeName} will be parked in Awaiting Review (excluded from whatever bulk action moves the rest of this batch forward) until resumed. No result is changed or voided.`,
+      confirmLabel: "Put On Hold",
+      onClose: () => setConfirmingHold(false),
+      onConfirm: doHold
+    })
   );
 }
 
@@ -282,11 +390,13 @@ function StageRow({ row, stage, testRecords, testTypes, parameters, references, 
   const resultInfo = getSampleResultForTest(sample, testTypeId, testRecords);
   const ref = sample.referenceId ? findReferenceById(references, sample.referenceId) : null;
   const evaluated = showSystemRemark ? evaluateSampleResultsForTest(sample, testTypeId, testTypes, parameters, testRecords) : [];
+  const [isProcessing, setIsProcessing] = React.useState(false);
   const rowKey = `${sample.id}__${testTypeId}`;
   const isSigningThisRow = signingKey === rowKey;
   const isEditingRemarkThisRow = remarkEditKey === rowKey;
   const currentManualRemark = getManualRemark(sample, testTypeId);
   const canEditRemark = showSystemRemark && !!setSamples && stageGate.visible;
+
   function handleManualRemarkChange(text) {
     if (!stageGate.allowed) {
       notify?.("Guest access can't edit reviewer remarks — this login is view-only for this action.", "warn");
@@ -295,24 +405,45 @@ function StageRow({ row, stage, testRecords, testTypes, parameters, references, 
     const updated = setManualRemarkOnSample(sample, testTypeId, text);
     setSamples?.(prev => prev.map(s => s.id === sample.id ? updated : s), updated);
   }
-  function doMarkReviewed() {
-    if (!stageGate.allowed) return;
-    bulkMarkReviewed([sample], testTypeId, testTypeName, session, setSamples, notify);
+
+  async function doMarkReviewed() {
+    if (!stageGate.allowed || isProcessing) return;
+    setIsProcessing(true);
+    try {
+      await bulkMarkReviewed([sample], testTypeId, testTypeName, session, setSamples, notify);
+    } catch (e) {} finally {
+      setIsProcessing(false);
+    }
   }
-  function doRelease() {
-    if (!stageGate.allowed) return;
+
+  async function doRelease() {
+    if (!stageGate.allowed || isProcessing) return;
     const result = bulkReleaseParameter([sample], testTypeId, testTypeName, session);
-    result.updated.forEach(u => {
-      // Update local state immediately for instant feedback
-      setSamples(prev => prev.map(s => s.id === u.id ? u : s), null);
-      // Persist to backend; surface errors as a toast instead of silent drop
-      DataService.save("samples", u).catch(err => {
-        console.error("Failed to save released sample to backend:", err);
-        notify?.(`Released in this session, but backend save failed — reload to re-check. (${err && err.message || err})`, "warn");
-      });
-    });
-    if (result.updated.length) notify?.(`${sample.sampleCode} released for ${testTypeName}.`, "ok");
+    const updatedList = result.updated;
+    if (!updatedList.length) return;
+    setIsProcessing(true);
+    try {
+      // Move setSamples INSIDE .then() so the row stays visible until backend confirms
+      const stamped = await DataService.releaseResult(updatedList);
+      if (Array.isArray(stamped)) {
+        stamped.forEach(st => {
+          const orig = updatedList.find(u => u.id === st.id);
+          if (orig) { orig._version = st._version; orig.updatedAt = st.updatedAt; }
+        });
+      }
+      setSamples(prev => {
+        const map = new Map(updatedList.map(u => [u.id, u]));
+        return prev.map(s => map.get(s.id) || s);
+      }, null);
+      notify?.(`${sample.sampleCode} released for ${testTypeName}.`, "ok");
+    } catch(err) {
+      console.error("Failed to save released samples to backend:", err);
+      notify?.(`Release failed to save — please try again. (${err && err.message || err})`, "warn");
+    } finally {
+      setIsProcessing(false);
+    }
   }
+
   const cells = [
     E("td", { key: "sample", className: "px-2 py-1.5" },
       E("button", { className: "text-xs font-semibold underline whitespace-nowrap", style: { color: C.teal }, onClick: () => goToSample?.(sample.id) }, sample.sampleCode),
@@ -323,10 +454,6 @@ function StageRow({ row, stage, testRecords, testTypes, parameters, references, 
   ];
   if (showTestTypeColumn) cells.push(E("td", { key: "tt", className: "px-2 py-1.5 text-xs truncate max-w-[110px]", style: { color: C.ink }, title: testTypeName }, testTypeName));
   const resultRows = resultInfo && resultInfo.results ? resultInfo.results.filter(r => r.value != null) : [];
-  // Only prefix each value with its parameter name when a row has more than
-  // one result — with a single result, the Test Type column already names
-  // the parameter (e.g. "Arsenic"), so repeating its short name ("As:")
-  // right next to the value is redundant.
   const resultText = resultRows.length
     ? (resultRows.length > 1
         ? resultRows.map(r => `${r.name}: ${fmtNum(r.value)}${r.unit ? ` ${r.unit}` : ""}`).join(", ")
@@ -336,18 +463,21 @@ function StageRow({ row, stage, testRecords, testTypes, parameters, references, 
   if (showSystemRemark) cells.push(E("td", { key: "remark", className: "px-2 py-1.5" },
     E(SystemRemarkCell, { evaluated, manualRemark: currentManualRemark })
   ));
+
   cells.push(E("td", { key: "actions", className: "px-2 py-1.5" },
     E("div", { className: "flex items-center gap-1 whitespace-nowrap" },
-      !held && stage === "review" && stageGate.visible && E(IconButton, { name: "check", color: C.teal, title: "Mark Reviewed", onClick: stageGate.guard(doMarkReviewed) }),
-      !held && stage === "approve" && stageGate.visible && E(IconButton, { name: "check", color: C.teal, title: "Final Approve / Reject", onClick: stageGate.guard(() => setSigningKey(isSigningThisRow ? null : rowKey)) }),
-      !held && stage === "release" && stageGate.visible && E(IconButton, { name: "printer", color: C.teal, title: "Release", onClick: stageGate.guard(doRelease) }),
-      canEditRemark && E(IconButton, {
-        name: "edit",
-        color: currentManualRemark ? C.teal : C.muted,
-        title: currentManualRemark ? "Edit reviewer remark" : "Add reviewer remark",
-        onClick: stageGate.guard(() => setRemarkEditKey(isEditingRemarkThisRow ? null : rowKey))
-      }),
-      E(RowHoldReturnActions, { sample, testTypeId, testTypeName, session, notify, setSamples, setTestRecords, testRecords, size: "sm", stageGate })
+      isProcessing ? E("span", { className: "text-[10px] uppercase font-bold text-gray-400" }, "Saving...") : E(React.Fragment, null,
+        !held && stage === "review" && stageGate.visible && E(IconButton, { name: "check", color: C.teal, title: "Mark Reviewed", onClick: stageGate.guard(doMarkReviewed) }),
+        !held && stage === "approve" && stageGate.visible && E(IconButton, { name: "check", color: C.teal, title: "Final Approve / Reject", onClick: stageGate.guard(() => setSigningKey(isSigningThisRow ? null : rowKey)) }),
+        !held && stage === "release" && stageGate.visible && E(IconButton, { name: "printer", color: C.teal, title: "Release", onClick: stageGate.guard(doRelease) }),
+        canEditRemark && E(IconButton, {
+          name: "edit",
+          color: currentManualRemark ? C.teal : C.muted,
+          title: currentManualRemark ? "Edit reviewer remark" : "Add reviewer remark",
+          onClick: stageGate.guard(() => setRemarkEditKey(isEditingRemarkThisRow ? null : rowKey))
+        }),
+        E(RowHoldReturnActions, { sample, testTypeId, testTypeName, session, notify, setSamples, setTestRecords, testRecords, size: "sm", stageGate })
+      )
     )
   ));
   return E(React.Fragment, { key: rowKey },
@@ -370,22 +500,30 @@ function StageRow({ row, stage, testRecords, testTypes, parameters, references, 
             return;
           }
           try {
-            const result = bulkDecideParameter([sample], testTypeId, testTypeName, payload, session);
+            const result = bulkDecideParameter([sample], testTypeId, testTypeName, payload, session, testRecords, testTypes);
             const updatedList = result.updated;
-            updatedList.forEach(u => {
-              // Update local state immediately for instant feedback
-              setSamples(prev => prev.map(s => s.id === u.id ? u : s), null);
-              // Persist to backend with error notification
-              DataService.save("samples", u).catch(err => {
-                console.error("Failed to save approved sample to backend:", err);
-                notify?.(`Approval recorded in this session, but backend save failed — reload to re-check. (${err && err.message || err})`, "warn");
-              });
-            });
             if (updatedList.length) {
-              notify?.(
-                payload.decision === "approved" ? `${sample.sampleCode} approved for ${testTypeName}.` : `${sample.sampleCode} sent back to analyst for ${testTypeName}.`,
-                payload.decision === "approved" ? "ok" : "warn"
-              );
+              // ONE backend call — setSamples is inside .then() so the row
+              // stays visible until the backend confirms the save.
+              DataService.submitApprovalDecision(updatedList, { step: "approve", testTypeId }).then(stamped => {
+                if (Array.isArray(stamped)) {
+                  stamped.forEach(st => {
+                    const orig = updatedList.find(u => u.id === st.id);
+                    if (orig) { orig._version = st._version; orig.updatedAt = st.updatedAt; }
+                  });
+                }
+                setSamples(prev => {
+                  const map = new Map(updatedList.map(u => [u.id, u]));
+                  return prev.map(s => map.get(s.id) || s);
+                }, null);
+                notify?.(
+                  payload.decision === "approved" ? `${sample.sampleCode} approved for ${testTypeName}.` : `${sample.sampleCode} sent back to analyst for ${testTypeName}.`,
+                  payload.decision === "approved" ? "ok" : "warn"
+                );
+              }).catch(err => {
+                console.error("Failed to save approved sample to backend:", err);
+                notify?.(`Approval failed to save — please try again. (${err && err.message || err})`, "warn");
+              });
             }
           } catch (e) {
             notify?.(e.message, "warn");
@@ -432,6 +570,7 @@ function BatchStageTable({ rows, stage, testRecords, subBatches, testTypes, para
     // We'll populate on first render via useMemo below
     return init;
   });
+  const [processingBuckets, setProcessingBuckets] = React.useState({});
   const [bucketsInitialized, setBucketsInitialized] = React.useState(false);
   const MIN_VISIBLE_WHEN_COLLAPSED = 3;
   const buckets = React.useMemo(() => groupRowsByBatch(rows, testRecords, subBatches), [rows, testRecords, subBatches]);
@@ -456,33 +595,68 @@ function BatchStageTable({ rows, stage, testRecords, subBatches, testTypes, para
       // in expanded mode the full table renders without any height cap.
       const visibleRows = bucket.rows;
       const hiddenCount = 0; // no rows hidden — scroll handles overflow
+      const isProcessing = !!processingBuckets[bucket.key];
+      // Collect all unique tracking / reference numbers for this batch's member samples
+      const bucketTrackingNos = (() => {
+        const tnSet = new Set();
+        bucket.rows.forEach(r => {
+          const s = r.sample;
+          if (s && s.referenceId) {
+            const ref = findReferenceById(references, s.referenceId);
+            const tn = ref && (ref.trackingNo || ref.refNo);
+            if (tn) tnSet.add(tn);
+          }
+        });
+        return Array.from(tnSet).join(", ");
+      })();
+      const bucketTitle = bucketTrackingNos
+        ? `${bucket.label} — ${bucket.testTypeName} [${bucketTrackingNos}]`
+        : `${bucket.label} — ${bucket.testTypeName}`;
+      function setIsProcessing(val) {
+        setProcessingBuckets(prev => ({ ...prev, [bucket.key]: val }));
+      }
       function toggleCollapse() {
         setCollapsedBuckets(prev => ({ ...prev, [bucket.key]: !prev[bucket.key] }));
       }
-      function doBulkMarkReviewed() {
-        if (!stageGate.allowed) return;
-        bulkMarkReviewed(activeSamples, bucket.testTypeId, bucket.testTypeName, session, setSamples, notify);
+      async function doBulkMarkReviewed() {
+        if (!stageGate.allowed || isProcessing) return;
+        setIsProcessing(true);
+        try {
+          await bulkMarkReviewed(activeSamples, bucket.testTypeId, bucket.testTypeName, session, setSamples, notify);
+        } catch (e) {} finally {
+          setIsProcessing(false);
+        }
       }
-      function doBulkRelease() {
-        if (!stageGate.allowed) return;
+      async function doBulkRelease() {
+        if (!stageGate.allowed || isProcessing) return;
         const result = bulkReleaseParameter(activeSamples, bucket.testTypeId, bucket.testTypeName, session);
         if (!result.updated.length) return;
-        // Apply all updates to local state at once for instant UI feedback
-        result.updated.forEach(u => setSamples(prev => prev.map(s => s.id === u.id ? u : s), null));
-        // Persist the changed rows in one bulkUpsert call — no full-table
-        // re-fetch/replace, so it's fast even with a huge samples table and
-        // can't race with another bulk action landing around the same time.
-        DataService.bulkUpsert("samples", result.updated).catch(err => {
+        setIsProcessing(true);
+        try {
+          const stamped = await DataService.releaseResult(result.updated);
+          if (Array.isArray(stamped)) {
+            stamped.forEach(st => {
+              const orig = result.updated.find(u => u.id === st.id);
+              if (orig) { orig._version = st._version; orig.updatedAt = st.updatedAt; }
+            });
+          }
+          setSamples(prev => {
+            const map = new Map(result.updated.map(u => [u.id, u]));
+            return prev.map(s => map.get(s.id) || s);
+          }, null);
+          notify?.(`${result.updated.length} sample(s) released for ${bucket.testTypeName}.`, "ok");
+        } catch(err) {
           console.error("Failed to save released samples to backend:", err);
-          notify?.(`Released in this session, but backend save failed — reload to re-check. (${err && err.message || err})`, "warn");
-        });
-        notify?.(`${result.updated.length} sample(s) released for ${bucket.testTypeName}.`, "ok");
+          notify?.(`Release failed to save — please try again. (${err && err.message || err})`, "warn");
+        } finally {
+          setIsProcessing(false);
+        }
       }
       const bucketSigningKey = `bucket__${bucket.key}`;
       const isBucketSigning = signingKey === bucketSigningKey;
       return E(SectionCard, {
         key: bucket.key,
-        title: `${bucket.label} — ${bucket.testTypeName}`,
+        title: bucketTitle,
         className: "mb-3",
         right: isCollapsible && E("button", {
           type: "button",
@@ -520,41 +694,48 @@ function BatchStageTable({ rows, stage, testRecords, subBatches, testTypes, para
           ) // close scrollable wrapper div
         ),
         activeSamples.length > 0 && E("div", { className: "flex flex-wrap gap-2 mt-2" },
-          stage === "review" && stageGate.visible && E(Button, { size: "sm", onClick: stageGate.guard(doBulkMarkReviewed) }, E(Icon, { name: "check", size: 12 }), `Mark Reviewed — whole batch (${activeSamples.length})`),
-          stage === "approve" && stageGate.visible && E(Button, { size: "sm", onClick: stageGate.guard(() => setSigningKey(isBucketSigning ? null : bucketSigningKey)) }, E(Icon, { name: "check", size: 12 }), `Final Approve / Reject — whole batch (${activeSamples.length})`),
-          stage === "release" && stageGate.visible && E(Button, { size: "sm", onClick: stageGate.guard(doBulkRelease) }, E(Icon, { name: "printer", size: 12 }), `Release — whole batch (${activeSamples.length})`)
+          stage === "review" && stageGate.visible && E(Button, { size: "sm", disabled: isProcessing, onClick: stageGate.guard(doBulkMarkReviewed) }, isProcessing ? "Saving..." : E(React.Fragment, null, E(Icon, { name: "check", size: 12 }), `Mark Reviewed — whole batch (${activeSamples.length})`)),
+          stage === "approve" && stageGate.visible && E(Button, { size: "sm", disabled: isProcessing, onClick: stageGate.guard(() => setSigningKey(isBucketSigning ? null : bucketSigningKey)) }, isProcessing ? "Saving..." : E(React.Fragment, null, E(Icon, { name: "check", size: 12 }), `Final Approve / Reject — whole batch (${activeSamples.length})`)),
+          stage === "release" && stageGate.visible && E(Button, { size: "sm", disabled: isProcessing, onClick: stageGate.guard(doBulkRelease) }, isProcessing ? "Saving..." : E(React.Fragment, null, E(Icon, { name: "printer", size: 12 }), `Release — whole batch (${activeSamples.length})`))
         ),
         isBucketSigning && E(SignatureCapture, {
           user: session,
           label: `Final Approval — ${bucket.label} · ${bucket.testTypeName} (${activeSamples.length} sample(s))`,
-          onConfirm: payload => {
+          onConfirm: async payload => {
             if (!stageGate.allowed) {
               notify?.("Guest access can't approve results — this login is view-only for this action.", "warn");
               setSigningKey(null);
               return;
             }
+            if (isProcessing) return;
+            setIsProcessing(true);
             try {
-              const result = bulkDecideParameter(activeSamples, bucket.testTypeId, bucket.testTypeName, payload, session);
+              const result = bulkDecideParameter(activeSamples, bucket.testTypeId, bucket.testTypeName, payload, session, testRecords, testTypes);
               const updatedList = result.updated;
               if (updatedList.length) {
-                // Apply all updates to local state at once for instant UI feedback
-                updatedList.forEach(u => setSamples(prev => prev.map(s => s.id === u.id ? u : s), null));
-                // Persist in one bulkUpsert call (changed rows only) —
-                // avoids both the full-table re-fetch/replace cost and the
-                // race it opened up against another bulk action.
-                DataService.bulkUpsert("samples", updatedList).catch(err => {
-                  console.error("Failed to save approved samples to backend:", err);
-                  notify?.(`Approval recorded in this session, but backend save failed — reload to re-check. (${err && err.message || err})`, "warn");
-                });
+                const stamped = await DataService.submitApprovalDecision(updatedList, { step: "approve", testTypeId: bucket.testTypeId });
+                if (Array.isArray(stamped)) {
+                  stamped.forEach(st => {
+                    const orig = updatedList.find(u => u.id === st.id);
+                    if (orig) { orig._version = st._version; orig.updatedAt = st.updatedAt; }
+                  });
+                }
+                setSamples(prev => {
+                  const map = new Map(updatedList.map(u => [u.id, u]));
+                  return prev.map(s => map.get(s.id) || s);
+                }, null);
+                notify?.(
+                  payload.decision === "approved" ? `${updatedList.length} sample(s) approved for ${bucket.testTypeName}.` : `${updatedList.length} sample(s) sent back to analyst for ${bucket.testTypeName}.`,
+                  payload.decision === "approved" ? "ok" : "warn"
+                );
               }
-              notify?.(
-                payload.decision === "approved" ? `${updatedList.length} sample(s) approved for ${bucket.testTypeName}.` : `${updatedList.length} sample(s) sent back to analyst for ${bucket.testTypeName}.`,
-                payload.decision === "approved" ? "ok" : "warn"
-              );
-            } catch (e) {
-              notify?.(e.message, "warn");
+            } catch (err) {
+              console.error("Failed to save approved samples to backend:", err);
+              notify?.(`Approval failed to save — please try again. (${err && err.message || err})`, "warn");
+            } finally {
+              setIsProcessing(false);
+              setSigningKey(null);
             }
-            setSigningKey(null);
           }
         })
       );
@@ -608,14 +789,28 @@ function PendingUploadQueue({ subBatches, samples, testRecords, testTypes, refer
                   sb.assignedTester ? ` · Assigned: ${sb.assignedTester}` : ""
                 ),
                 (() => {
-                  const firstSample = (samples || []).find(s => (sb.memberSampleIds || []).includes(s.id));
-                  const ref = firstSample?.referenceId ? findReferenceById(references, firstSample.referenceId) : null;
+                  // Collect all unique tracking nos / ref nos from ALL member samples
+                  const memberRefs = (sb.memberSampleIds || []).reduce((acc, sid) => {
+                    const s = (samples || []).find(x => x.id === sid);
+                    const ref = s?.referenceId ? findReferenceById(references, s.referenceId) : null;
+                    if (ref && !acc.some(r => r.id === ref.id)) acc.push(ref);
+                    return acc;
+                  }, []);
+                  const trackingLabels = memberRefs.map(ref =>
+                    ref.trackingNo || ref.refNo || referenceDisplayLabel(ref)
+                  ).filter(Boolean);
                   return E("div", {
                     className: "text-[11px] px-1.5 py-0.5 rounded font-mono mt-1 inline-block",
                     style: { background: C.bg, color: C.muted },
-                    title: "Date | Test Name | Ref / Memo No. | Tracking No."
-                  }, formatBatchIdentifier(todayStr(), sb.testTypeName, ref?.refNo, ref?.trackingNo));
+                    title: "Linked Reference / Tracking Nos."
+                  }, trackingLabels.length
+                    ? (trackingLabels.length === 1
+                        ? "Ref: " + trackingLabels[0]
+                        : "Refs: " + trackingLabels.join(" · "))
+                    : "(no reference linked)"
+                  );
                 })()
+
               ),
               E("div", { className: "flex items-center gap-2" },
                 E(Button, { size: "sm", onClick: () => goToTestEntry?.(sb.id) },
@@ -754,3 +949,4 @@ function ResultsWorkflowTab({
     E(ScrollTopBottomButtons)
   );
 }
+

@@ -46,6 +46,15 @@ const DataService = (() => {
     }
   }
   let config = loadConfig();
+  // Session token issued by the backend's "login" action (see Code.gs) and
+  // re-attached to every write request from here on. DataService itself
+  // only holds it in memory; AppRoot is responsible for persisting it as
+  // part of the session object (same place it already keeps role/name) and
+  // calling setSessionToken() once at boot and again right after login.
+  let sessionToken = "";
+  function setSessionToken(t) {
+    sessionToken = t || "";
+  }
   function configure(next) {
     config = {
       ...config,
@@ -143,7 +152,12 @@ const DataService = (() => {
     if (action === "list" || action === "ping" || action === "multiList") {
       const qs = new URLSearchParams({
         action,
-        token: token || ""
+        token: token || "",
+        // Only meaningful for collections the backend treats as
+        // permission-gated reads (currently just auditLog — see
+        // applyCollectionReadPolicy_ in Code.gs); harmless to send on every
+        // other read.
+        sessionToken: sessionToken || ""
       });
       if (collection) qs.set("collection", collection);
       if (collections) qs.set("collections", collections);
@@ -163,7 +177,12 @@ const DataService = (() => {
         action,
         collection,
         payload,
-        token
+        token,
+        // Every protected write is checked against this on the backend
+        // (see requireSession_ in Code.gs) — login/logout/bootstrapAdmin
+        // are the only actions that don't need it, since they're how a
+        // session gets established in the first place.
+        sessionToken
       })
     });
     const json = await res.json();
@@ -416,6 +435,75 @@ const DataService = (() => {
     return all.filter(r => !r.date || r.date >= cutoffStr);
   }
 
+  // ---- Auth (mirrors Code.gs: login / logout / bootstrapAdmin / setUserPassword) ----
+  // "local" mode has no server and no other browsers to protect data from,
+  // so these are meaningful only in "gas" mode — local mode keeps working
+  // exactly as it always has (no login round trip needed).
+  async function login(username, password) {
+    if (config.mode !== "gas") return { ok: false, error: "Server login is only available in Google Apps Script (shared) mode." };
+    const result = await gasCall("login", { payload: { username, password } });
+    if (result && result.ok && result.token) setSessionToken(result.token);
+    return result;
+  }
+  async function logout() {
+    if (config.mode === "gas") {
+      try { await gasCall("logout", { payload: { sessionToken } }); } catch (e) { /* best-effort */ }
+    }
+    setSessionToken("");
+  }
+  async function bootstrapAdmin(payload) {
+    if (config.mode !== "gas") return { ok: false, error: "Server setup is only available in Google Apps Script (shared) mode." };
+    const result = await gasCall("bootstrapAdmin", { payload });
+    if (result && result.ok) {
+      // Immediately log the freshly-created admin in so the caller doesn't
+      // have to make a second round trip with the same credentials.
+      return login(payload.username, payload.password);
+    }
+    return result;
+  }
+  async function setUserPassword(userId, newPassword, user) {
+    if (config.mode !== "gas") return { ok: false, error: "Only available in Google Apps Script (shared) mode." };
+    return gasCall("setUserPassword", { collection: "users", payload: { userId, newPassword, user } });
+  }
+  // Dedicated endpoint for the Review / Approve-Reject decision on one or
+  // more samples (Code.gs: handleSubmitApprovalDecision_) — replaces a
+  // plain bulkUpsert("samples", ...) so the backend can verify this is
+  // specifically a review/approval action (right role, right signer, no
+  // self-approval, and no OTHER field on the record silently changed
+  // along for the ride) instead of trusting an arbitrary write.
+  // `records` is the array of already-computed updated sample objects
+  // (from setRequestedTestStatus/bulkDecideParameter in
+  // 20-sample-model.js) — unchanged from how bulkUpsert was called before.
+  async function submitApprovalDecision(records, { step, testTypeId } = {}) {
+    if (config.mode !== "gas") return bulkUpsert("samples", records); // local demo mode has no session/role concept to enforce
+    return gasCall("submitApprovalDecision", { payload: { records, step, testTypeId } });
+  }
+  
+  async function assignSamples(records) {
+    if (config.mode !== "gas") return bulkUpsert("samples", records);
+    return gasCall("assignSamples", { payload: { records } });
+  }
+
+  async function returnToAnalyst(records) {
+    if (config.mode !== "gas") return bulkUpsert("samples", records);
+    return gasCall("returnToAnalyst", { payload: { records } });
+  }
+
+  async function holdTest(records) {
+    if (config.mode !== "gas") return bulkUpsert("samples", records);
+    return gasCall("holdTest", { payload: { records } });
+  }
+
+  async function resumeTest(records) {
+    if (config.mode !== "gas") return bulkUpsert("samples", records);
+    return gasCall("resumeTest", { payload: { records } });
+  }
+
+  async function releaseResult(records) {
+    if (config.mode !== "gas") return bulkUpsert("samples", records);
+    return gasCall("releaseResult", { payload: { records } });
+  }
+
   return {
     configure,
     getConfig,
@@ -436,6 +524,17 @@ const DataService = (() => {
     archiveTestRecord,
     fetchArchivedRecords,
     restoreRecord,
+    login,
+    logout,
+    bootstrapAdmin,
+    setUserPassword,
+    submitApprovalDecision,
+    assignSamples,
+    returnToAnalyst,
+    holdTest,
+    resumeTest,
+    releaseResult,
+    setSessionToken,
     // Escape hatch for custom, non-CRUD actions implemented server-side
     // (see gas-backend/Code.gs) — e.g. the Data Backup module's
     // getBackupConfig/configureBackup/backupNow. Only meaningful in "gas"

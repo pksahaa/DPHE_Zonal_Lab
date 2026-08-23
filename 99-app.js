@@ -29,6 +29,15 @@ function AppRoot() {
   const [usersLoadNonce, setUsersLoadNonce] = useState(0);
   const [session, setSession] = useState(() => loadKey("session", null));
 
+  // Restore the backend session token (if any) into DataService as early
+  // as possible on every mount/reload — every protected write from here on
+  // is checked against it server-side (see requireSession_ in Code.gs), so
+  // without this every write would fail right after a page refresh even
+  // though the user is still "logged in" from their point of view.
+  useEffect(() => {
+    if (session && session.token) DataService.setSessionToken(session.token);
+  }, []);
+
   useEffect(() => {
     setUsersLoadFailed(false);
     Promise.all([
@@ -39,7 +48,11 @@ function AppRoot() {
       if (permSingleton) {
         setPermissionMatrixState(backfillSamplePermissions(permSingleton.matrix || permSingleton));
       } else {
-        setPermissionMatrixState(backfillSamplePermissions(DEFAULT_PERMISSION_MATRIX));
+        const defaultMatrix = backfillSamplePermissions(DEFAULT_PERMISSION_MATRIX);
+        setPermissionMatrixState(defaultMatrix);
+        if (session?.role === "Administrator") {
+          DataService.saveSingleton("permissionMatrix", { matrix: defaultMatrix }).catch(() => {});
+        }
       }
       setUsersLoaded(true);
     }).catch(err => {
@@ -52,7 +65,6 @@ function AppRoot() {
   const handleUpdateUsers = useCallback((updater) => {
     setUsers(prev => {
       const next = typeof updater === "function" ? updater(prev) : updater;
-      DataService.bulkSet("users", next);
       return next;
     });
   }, []);
@@ -87,19 +99,26 @@ function AppRoot() {
     }
   }, [users, session, usersLoaded]);
 
-  function handleLogin(user) {
+  function handleLogin(user, token, expiresAt) {
+    if (token) DataService.setSessionToken(token);
     const sess = {
       userId: user.id,
       name: user.name,
       username: user.username,
       role: user.role,
       overrides: user.permissionOverrides || {},
-      ts: Date.now()
+      ts: Date.now(),
+      // Present only in "gas" mode (see DataService.login / handleLogin_ in
+      // Code.gs) — every protected backend write is checked against this,
+      // not against anything the client claims about itself.
+      token: token || null,
+      expiresAt: expiresAt || null
     };
     setSession(sess);
     saveKey("session", sess);
   }
   function handleLogout() {
+    DataService.logout(); // best-effort server-side session revoke
     setSession(null);
     saveKey("session", null);
   }
@@ -135,10 +154,14 @@ function AppRoot() {
 
   if (users.length === 0) {
     return /*#__PURE__*/React.createElement(FirstTimeSetupPage, {
-      onSetupComplete: (newAdmin) => {
+      onSetupComplete: (newAdmin, token, expiresAt) => {
         setUsers([newAdmin]);
-        DataService.bulkSet("users", [newAdmin]);
-        handleLogin(newAdmin);
+        // In "gas" mode the account was already created server-side
+        // (handleBootstrapAdmin_, called via DataService.bootstrapAdmin) —
+        // writing it again here would be redundant and would need a
+        // session token that doesn't exist yet at this exact instant.
+        if (!token) DataService.bulkSet("users", [newAdmin]);
+        handleLogin(newAdmin, token, expiresAt);
       }
     });
   }
@@ -480,23 +503,6 @@ function LabApp({
   const [samples, setSamplesState] = useState([]);
   const [samplesLoaded, setSamplesLoaded] = useState(false);
   const [samplesLoadFailed, setSamplesLoadFailed] = useState(false);
-  useEffect(() => {
-    DataService.list("samples").then(list => {
-      setSamplesState(list);
-      setSamplesLoaded(true);
-      setSamplesLoadFailed(false);
-    }).catch(err => {
-      // No .catch previously meant a failed fetch here just hung forever
-      // with an unexplained loading spinner (samplesLoaded never became
-      // true, and nothing told the user why). It's safe to surface loudly
-      // rather than silently retry into a partial state, because nothing
-      // downstream of samplesLoaded=false ever runs a bulk-overwrite — see
-      // the migration effect's `!samplesLoaded` guard below.
-      console.error("Failed to load samples from backend:", err);
-      setSamplesLoadFailed(true);
-      notify?.(`Could not load Samples from the backend (${err.message}). Check Settings ▸ Backend Settings, then reload.`, "warn");
-    });
-  }, [loadReloadNonce]);
   const setSamples = useCallback(async (updater, changedRecord) => {
     setSamplesState(prev => updater(prev));
     if (!changedRecord) return;
@@ -510,25 +516,36 @@ function LabApp({
     // 21-sample-ui.js for the call site this exists for.
     if (Array.isArray(changedRecord)) {
       if (!changedRecord.length) return;
-      await DataService.bulkUpsert("samples", changedRecord);
+      const stampedArray = await DataService.bulkUpsert("samples", changedRecord);
+      if (Array.isArray(stampedArray)) {
+        stampedArray.forEach(st => {
+          const orig = changedRecord.find(u => u.id === st.id);
+          if (orig) {
+            orig._version = st._version;
+            orig.updatedAt = st.updatedAt;
+          }
+        });
+      }
       await DataService.bulkAppendAudit(changedRecord.map(rec => ({
         entity: "sample",
         entityId: rec.id,
         sampleCode: rec.sampleCode,
-        action: rec.status,
-        user: session.name,
-        role: session.role
+        action: rec.status
+        // user, role, performedBy, ts are now injected server-side from the session
       })));
       return;
     }
-    await DataService.save("samples", changedRecord);
+    const stamped = await DataService.save("samples", changedRecord);
+    if (stamped && stamped._version) {
+      changedRecord._version = stamped._version;
+      changedRecord.updatedAt = stamped.updatedAt;
+    }
     await DataService.appendAudit({
       entity: "sample",
       entityId: changedRecord.id,
       sampleCode: changedRecord.sampleCode,
-      action: changedRecord.status,
-      user: session.name,
-      role: session.role
+      action: changedRecord.status
+      // user, role, performedBy, ts are now injected server-side from the session
     });
   }, [session.name, session.role]);
 
@@ -538,19 +555,14 @@ function LabApp({
   // as samples above.
   const [references, setReferencesState] = useState([]);
   const [referencesLoaded, setReferencesLoaded] = useState(false);
-  useEffect(() => {
-    DataService.list("references").then(list => {
-      setReferencesState(list);
-      setReferencesLoaded(true);
-    }).catch(err => {
-      console.error("Failed to load references from backend:", err);
-      notify?.(`Could not load Reference batches from the backend (${err.message}). Check Settings ▸ Backend Settings, then reload.`, "warn");
-    });
-  }, [loadReloadNonce]);
   const setReferences = useCallback(async (updater, changedRecord) => {
     setReferencesState(prev => updater(prev));
     if (changedRecord) {
-      await DataService.save("references", changedRecord);
+      const stamped = await DataService.save("references", changedRecord);
+      if (stamped && stamped._version) {
+        changedRecord._version = stamped._version;
+        changedRecord.updatedAt = stamped.updatedAt;
+      }
     }
   }, []);
   // One-time, idempotent migration: any sample already carrying a
@@ -559,9 +571,9 @@ function LabApp({
   // writes anything if there's actually legacy data to migrate.
   const [migrationChecked, setMigrationChecked] = useState(false);
   useEffect(() => {
-    if (!samplesLoaded || !referencesLoaded || !loaded || migrationChecked) return;
+    if (!loaded || !samplesLoaded || !referencesLoaded || migrationChecked || samplesLoadFailed) return;
     setMigrationChecked(true);
-    const needsReferenceMigration = samples.some(s => !s.referenceId);
+    const needsReferenceMigration = samples.some(s => s.batchRef && !s.referenceId);
     const needsStatusBackfill = samples.some(s => (s.requestedTests || []).some(rt => !rt.status));
     if (!needsReferenceMigration && !needsStatusBackfill) return;
     let workingSamples = samples;
@@ -574,10 +586,19 @@ function LabApp({
     if (needsStatusBackfill) {
       workingSamples = backfillRequestedTestStatuses(workingSamples, testRecords, subBatches);
     }
+    const refMap = new Map(references.map(r => [r.id, r]));
+    const changedReferences = workingReferences.filter(r => !refMap.has(r.id));
+    
+    const sampleMap = new Map(samples.map(s => [s.id, s]));
+    const changedSamples = workingSamples.filter(s => {
+      const old = sampleMap.get(s.id);
+      return !old || old.referenceId !== s.referenceId || JSON.stringify(old.requestedTests) !== JSON.stringify(s.requestedTests);
+    });
+    
     setReferencesState(workingReferences);
     setSamplesState(workingSamples);
-    DataService.bulkSet("references", workingReferences);
-    DataService.bulkSet("samples", workingSamples);
+    if (changedReferences.length > 0) DataService.bulkUpsert("references", changedReferences);
+    if (changedSamples.length > 0) DataService.bulkUpsert("samples", changedSamples);
   }, [samplesLoaded, referencesLoaded, loaded, migrationChecked, samples, references, testRecords, subBatches]);
 
   // Auto-archive sweep — runs at most once per calendar day, only after
@@ -592,7 +613,7 @@ function LabApp({
     runAutoArchiveSweepIfDue({ testRecords, samples, subBatches, setTestRecords, session, notify });
   }, [loaded, samplesLoaded, autoArchiveChecked, testRecords, samples, subBatches, session]);
   useEffect(() => {
-    const collectionsList = ["chemicals", "glassware", "equipment", "gas", "parameters", "testTypes", "active:testRecords", "subBatches", "masterChemicals"];
+    const collectionsList = ["active:samples", "references", "chemicals", "glassware", "equipment", "gas", "parameters", "testTypes", "active:testRecords", "subBatches", "masterChemicals"];
     DataService.multiList(collectionsList).then(res => {
       // NOTE: production deployments must NOT fall back to seed/demo data
       // when a collection comes back empty from the backend — an empty
@@ -603,6 +624,10 @@ function LabApp({
       //
       // Using multiList fetches all 9 collections in one single request,
       // avoiding massive initial load latency and queueing timeouts.
+      setSamplesState(res['active:samples'] || []);
+      setSamplesLoaded(true);
+      setReferencesState(res['references'] || []);
+      setReferencesLoaded(true);
       setChemicals(markExpiredBatches(normalizeChemicals(res["chemicals"] || [])));
       setGlassware(normalizeGlassware(res["glassware"] || []));
       setEquipment(normalizeEquipment(res["equipment"] || []));
@@ -626,6 +651,65 @@ function LabApp({
       notify(`Could not load data from the backend. Editing is disabled this session to protect your data — use Settings ▸ Backend Settings ▸ Test Connection, then reload the page, before making changes.`, "warn");
     });
   }, [loadReloadNonce]);
+
+  // Background polling — every 30 seconds, silently re-fetch just samples
+  // and active testRecords so changes made by OTHER users (e.g. an analyzer
+  // saving a test record that moves samples to "Awaiting Review") are visible
+  // without a manual reload. Only runs after initial load succeeds and only
+  // when the app is loaded in gas mode (no-op in local mode).
+  // Merges freshly fetched data into local state by id so any local
+  // in-flight changes are not clobbered.
+  useEffect(() => {
+    if (!loaded) return;
+    const POLL_INTERVAL_MS = 30000;
+    const intervalId = setInterval(() => {
+      DataService.multiList(["active:samples", "active:testRecords"]).then(res => {
+        const freshSamples = res["active:samples"];
+        const freshRecords = res["active:testRecords"];
+        if (Array.isArray(freshSamples)) {
+          setSamplesState(prev => {
+            const localMap = new Map(prev.map(s => [s.id, s]));
+            const freshMap = new Map(freshSamples.map(s => [s.id, s]));
+            // Keep any local record that's newer (higher _version or not on server yet),
+            // otherwise replace with server version so remote changes show up.
+            const merged = [];
+            freshMap.forEach((srv, id) => {
+              const local = localMap.get(id);
+              if (!local || (srv.updatedAt || "") > (local.updatedAt || "")) {
+                merged.push(srv);
+              } else {
+                merged.push(local);
+              }
+            });
+            // Keep local-only records (optimistic inserts not yet on server)
+            prev.forEach(s => { if (!freshMap.has(s.id)) merged.push(s); });
+            return merged;
+          });
+        }
+        if (Array.isArray(freshRecords)) {
+          setTestRecords(prev => {
+            const localMap = new Map(prev.map(r => [r.id, r]));
+            const freshMap = new Map(freshRecords.map(r => [r.id, r]));
+            const merged = [];
+            freshMap.forEach((srv, id) => {
+              const local = localMap.get(id);
+              if (!local || (srv.updatedAt || "") > (local.updatedAt || "")) {
+                merged.push(srv);
+              } else {
+                merged.push(local);
+              }
+            });
+            prev.forEach(r => { if (!freshMap.has(r.id)) merged.push(r); });
+            return merged;
+          });
+        }
+      }).catch(() => {
+        // Silent — polling failures are non-critical; user can still work,
+        // they just won't see remote changes until next successful poll.
+      });
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(intervalId);
+  }, [loaded]);
 
   // `notify` must be defined BEFORE the auto-save useEffect blocks below so
   // that `notifyBackendSaveError` (which calls notify) always has a live
@@ -695,78 +779,70 @@ function LabApp({
     saveQueueRef.current[collection] = thisSave;
     return thisSave;
   }, []);
+  function useDiffSync(collectionName, currentData, depsArray, isFirstSaveGuard, errorMessage) {
+    const prevDataRef = useRef(currentData);
+    useEffect(() => {
+      const prev = prevDataRef.current;
+      prevDataRef.current = currentData;
+      if (!(loaded && !loadHadFailures && !isFirstSaveGuard())) return;
+      const prevById = new Map(prev.map(r => [r.id, r]));
+      const nextIds = new Set();
+      const upserts = [];
+      currentData.forEach(rec => {
+        nextIds.add(rec.id);
+        if (prevById.get(rec.id) !== rec) upserts.push(rec);
+      });
+      const removedIds = [];
+      prevById.forEach((_, id) => {
+        if (!nextIds.has(id)) removedIds.push(id);
+      });
+      if (!upserts.length && !removedIds.length) return;
+      queuedSave(collectionName, async () => {
+        if (upserts.length) {
+          const stamped = await DataService.bulkUpsert(collectionName, upserts);
+          if (Array.isArray(stamped)) {
+            stamped.forEach(st => {
+              const orig = upserts.find(u => u.id === st.id);
+              if (orig) {
+                orig._version = st._version;
+                orig.updatedAt = st.updatedAt;
+              }
+            });
+          }
+        }
+        if (removedIds.length) await DataService.bulkRemove(collectionName, removedIds);
+      }).catch(err => notifyBackendSaveError(errorMessage, err));
+    }, depsArray);
+  }
+
   const isFirstChemicalsSave = useHydrationGuard();
-  useEffect(() => {
-    if (loaded && !loadHadFailures && !isFirstChemicalsSave()) queuedSave("chemicals", () => DataService.bulkSet("chemicals", chemicals)).catch(err => notifyBackendSaveError("chemicals/inventory", err));
-  }, [chemicals, loaded]);
+  useDiffSync("chemicals", chemicals, [chemicals, loaded], isFirstChemicalsSave, "chemicals/inventory");
+
   const isFirstMasterChemicalsSave = useHydrationGuard();
   useEffect(() => {
     if (loaded && !loadHadFailures && !isFirstMasterChemicalsSave()) queuedSave("masterChemicals", () => DataService.saveSingleton("masterChemicals", { list: masterChemicals })).catch(err => notifyBackendSaveError("master chemical list", err));
   }, [masterChemicals, loaded]);
+
   const isFirstGlasswareSave = useHydrationGuard();
-  useEffect(() => {
-    if (loaded && !loadHadFailures && !isFirstGlasswareSave()) queuedSave("glassware", () => DataService.bulkSet("glassware", glassware)).catch(err => notifyBackendSaveError("glassware", err));
-  }, [glassware, loaded]);
+  useDiffSync("glassware", glassware, [glassware, loaded], isFirstGlasswareSave, "glassware");
+
   const isFirstEquipmentSave = useHydrationGuard();
-  useEffect(() => {
-    if (loaded && !loadHadFailures && !isFirstEquipmentSave()) queuedSave("equipment", () => DataService.bulkSet("equipment", equipment)).catch(err => notifyBackendSaveError("equipment", err));
-  }, [equipment, loaded]);
+  useDiffSync("equipment", equipment, [equipment, loaded], isFirstEquipmentSave, "equipment");
+
   const isFirstGasSave = useHydrationGuard();
-  useEffect(() => {
-    if (loaded && !loadHadFailures && !isFirstGasSave()) queuedSave("gas", () => DataService.bulkSet("gas", gasList)).catch(err => notifyBackendSaveError("gas cylinders", err));
-  }, [gasList, loaded]);
+  useDiffSync("gas", gasList, [gasList, loaded], isFirstGasSave, "gas cylinders");
+
   const isFirstParametersSave = useHydrationGuard();
-  useEffect(() => {
-    if (loaded && !loadHadFailures && !isFirstParametersSave()) queuedSave("parameters", () => DataService.bulkSet("parameters", parameters)).catch(err => notifyBackendSaveError("parameters", err));
-  }, [parameters, loaded]);
+  useDiffSync("parameters", parameters, [parameters, loaded], isFirstParametersSave, "parameters");
+
   const isFirstTestTypesSave = useHydrationGuard();
-  useEffect(() => {
-    if (loaded && !loadHadFailures && !isFirstTestTypesSave()) queuedSave("testTypes", () => DataService.bulkSet("testTypes", testTypes)).catch(err => notifyBackendSaveError("test types", err));
-  }, [testTypes, loaded]);
+  useDiffSync("testTypes", testTypes, [testTypes, loaded], isFirstTestTypesSave, "test types");
+
   const isFirstTestRecordsSave = useHydrationGuard();
-  // Was: unconditional DataService.bulkSet("testRecords", testRecords) on
-  // every change — bulkSet -> replaceAllRows_ rewrites the ENTIRE
-  // testRecords sheet, so archiving/restoring/editing even one record
-  // (setTestRecords fires this effect on any array change) paid for a full
-  // sheet rewrite every single time — this is what was actually making
-  // single AND bulk archive/restore feel slow (the fix shipped for
-  // DataService.archiveTestRecord() doesn't touch this path — that
-  // function is only used by the automated age-based sweep in
-  // 23-data-backup.js, not the manual Archive/Restore buttons, which only
-  // ever go through this effect). Diffing against the previous array by id
-  // and sending just the records that actually changed — via the existing
-  // targeted bulkUpsert (changed/added) and remove (deleted) calls —
-  // turns a single archive into one small request instead of a full-sheet
-  // rewrite, and a multi-select archive into one bulkUpsert/remove batch
-  // instead of N full rewrites. Reference-inequality is enough to detect a
-  // changed record because every call site here builds new objects
-  // (spread/map/filter), never mutates in place.
-  const prevTestRecordsRef = useRef(testRecords);
-  useEffect(() => {
-    const prev = prevTestRecordsRef.current;
-    prevTestRecordsRef.current = testRecords;
-    if (!(loaded && !loadHadFailures && !isFirstTestRecordsSave())) return;
-    const prevById = new Map(prev.map(r => [r.id, r]));
-    const nextIds = new Set();
-    const upserts = [];
-    testRecords.forEach(rec => {
-      nextIds.add(rec.id);
-      if (prevById.get(rec.id) !== rec) upserts.push(rec);
-    });
-    const removedIds = [];
-    prevById.forEach((_, id) => {
-      if (!nextIds.has(id)) removedIds.push(id);
-    });
-    if (!upserts.length && !removedIds.length) return;
-    queuedSave("testRecords", async () => {
-      if (upserts.length) await DataService.bulkUpsert("testRecords", upserts);
-      if (removedIds.length) await DataService.bulkRemove("testRecords", removedIds);
-    }).catch(err => notifyBackendSaveError("test records", err));
-  }, [testRecords, loaded]);
+  useDiffSync("testRecords", testRecords, [testRecords, loaded], isFirstTestRecordsSave, "test records");
+
   const isFirstSubBatchesSave = useHydrationGuard();
-  useEffect(() => {
-    if (loaded && !loadHadFailures && !isFirstSubBatchesSave()) queuedSave("subBatches", () => DataService.bulkSet("subBatches", subBatches)).catch(err => notifyBackendSaveError("sub-batches", err));
-  }, [subBatches, loaded]);
+  useDiffSync("subBatches", subBatches, [subBatches, loaded], isFirstSubBatchesSave, "sub-batches");
   if (!loaded) return /*#__PURE__*/React.createElement("div", {
     className: "p-8 text-sm",
     style: {
@@ -944,20 +1020,21 @@ function LabApp({
     className: "flex-1 min-w-0 px-5 py-6"
   }, /*#__PURE__*/React.createElement("div", {
     className: "max-w-6xl mx-auto"
-  }, tab === "dashboard" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(SampleKpiStrip, {
-    samples: samples,
-    goTo: t => setTab(t)
-  }), /*#__PURE__*/React.createElement(DashboardTab, {
+  }, tab === "dashboard" && /*#__PURE__*/React.createElement(DashboardTab, {
     chemicals: chemicals,
     glassware: glassware,
     equipment: equipment,
     gasList: gasList,
     testRecords: testRecords,
+    samples: samples,
+    references: references,
+    testTypes: testTypes,
+    parameters: parameters,
     goTo: (t, sub) => {
       setTab(t);
       if (sub) setInvTab(sub);
     }
-  })), tab === "samples" && (samplesLoaded ? /*#__PURE__*/React.createElement(SamplesTab, {
+  }), tab === "samples" && (samplesLoaded ? /*#__PURE__*/React.createElement(SamplesTab, {
     samples: samples,
     setSamples: setSamples,
     references: references,
@@ -1090,7 +1167,8 @@ function LabApp({
     session: session,
     permissionMatrix: permissionMatrix,
     notify: notify,
-    goToSample: goToSample
+    goToSample: goToSample,
+    parameters: parameters
   }), tab === "qc" && /*#__PURE__*/React.createElement(QcModuleTab, {
     testTypes: testTypes,
     testRecords: testRecords
@@ -1142,3 +1220,5 @@ function LabApp({
 }
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(/*#__PURE__*/React.createElement(AppRoot, null));
+
+

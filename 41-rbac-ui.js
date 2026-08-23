@@ -655,6 +655,7 @@ function UsersAdminTab({
   const [subTab, setSubTab] = React.useState("users"); // "users" | "permissions"
   const [formUser, setFormUser] = React.useState(null); // null = closed, {} = new, {...user} = edit
   const [resetTarget, setResetTarget] = React.useState(null);
+  const [transferTarget, setTransferTarget] = React.useState(null);
   const [deleteTarget, setDeleteTarget] = React.useState(null);
   const canCreate = can(permissionMatrix, session, "users", "create");
   const canEdit = can(permissionMatrix, session, "users", "edit");
@@ -664,33 +665,32 @@ function UsersAdminTab({
   }
   async function handleSaveUser(payload) {
     if (payload.id) {
-      const patch = {
+      const existingUser = users.find(u => u.id === payload.id);
+      if (!existingUser) return;
+      const patched = {
+        ...existingUser,
         username: payload.username.trim(),
         name: payload.name.trim(),
         designation: payload.designation.trim(),
         role: payload.role,
         permissionOverrides: payload.permissionOverrides || {}
       };
-      setUsers(prev => prev.map(u => u.id === payload.id ? {
-        ...u,
-        ...patch
-      } : u));
-      const overrideCount = Object.keys(patch.permissionOverrides).length;
+      await DataService.save("users", patched);
+      setUsers(prev => prev.map(u => u.id === payload.id ? patched : u));
+      const overrideCount = Object.keys(patched.permissionOverrides).length;
       DataService.appendAudit({
         entity: "user",
         entityId: payload.id,
         action: "edit",
         user: session.username,
         role: session.role,
-        note: `Updated user "${patch.username}" (role: ${patch.role}${overrideCount ? `, ${overrideCount} custom permission module(s)` : ""})`
+        note: `Updated user "${patched.username}" (role: ${patched.role}${overrideCount ? `, ${overrideCount} custom permission module(s)` : ""})`
       });
-      notify(`Updated "${patch.username}".`, "ok");
+      notify(`Updated "${patched.username}".`, "ok");
     } else {
-      const passwordHash = await hashPassword(payload.password);
       const newUser = {
         id: uid("user"),
         username: payload.username.trim(),
-        passwordHash,
         name: payload.name.trim(),
         designation: payload.designation.trim(),
         role: payload.role,
@@ -699,6 +699,17 @@ function UsersAdminTab({
         createdAt: new Date().toISOString(),
         createdBy: session.username
       };
+      if (DataService.getConfig().mode === "gas") {
+        try {
+          await DataService.setUserPassword(newUser.id, payload.password, newUser);
+        } catch (err) {
+          notify(`Failed to create user: ${err && err.message || "unknown error"}`, "warn");
+          return; // don't update local state or audit log if it failed
+        }
+      } else {
+        const passwordHash = await hashPassword(payload.password);
+        newUser.passwordHash = passwordHash;
+      }
       setUsers(prev => [...prev, newUser]);
       DataService.appendAudit({
         entity: "user",
@@ -713,12 +724,19 @@ function UsersAdminTab({
     setFormUser(null);
   }
   async function handleResetPassword(id, newPassword) {
-    const passwordHash = await hashPassword(newPassword);
-    setUsers(prev => prev.map(u => u.id === id ? {
-      ...u,
-      passwordHash
-    } : u));
     const target = users.find(u => u.id === id);
+    if (DataService.getConfig().mode === "gas") {
+      try {
+        await DataService.setUserPassword(id, newPassword);
+      } catch (err) {
+        notify(`Could not reset password: ${err && err.message || "unknown error"}`, "warn");
+        return;
+      }
+    } else {
+      // Local (no backend) demo mode only.
+      const passwordHash = await hashPassword(newPassword);
+      setUsers(prev => prev.map(u => u.id === id ? { ...u, passwordHash } : u));
+    }
     DataService.appendAudit({
       entity: "user",
       entityId: id,
@@ -730,16 +748,49 @@ function UsersAdminTab({
     notify(`Password reset for "${target?.username || "user"}".`, "ok");
     setResetTarget(null);
   }
-  function handleToggleActive(u) {
+  // Same account (id/username/role/permissions) carries on for the post;
+  // only the human behind it changes. See TransferOfficerModal's comment
+  // above for why old records don't need to be touched: they already
+  // stamped the outgoing officer's name as a plain string at the time.
+  async function handleTransferOfficer(newName, newDesignation, reason) {
+    const target = transferTarget;
+    if (!target) return;
+    const historyEntry = {
+      id: uid("xfer"),
+      fromName: target.name,
+      toName: newName,
+      reason,
+      transferredBy: session.name || session.username,
+      transferredAt: new Date().toISOString()
+    };
+    const patched = {
+      ...target,
+      name: newName,
+      designation: newDesignation || target.designation,
+      transferHistory: [...(target.transferHistory || []), historyEntry]
+    };
+    await DataService.save("users", patched);
+    setUsers(prev => prev.map(u => u.id === target.id ? patched : u));
+    DataService.appendAudit({
+      entity: "user",
+      entityId: target.id,
+      action: "transfer",
+      user: session.username,
+      role: session.role,
+      note: `Officer transferred on "${target.username}" (${patched.designation || patched.role}): "${target.name}" → "${newName}". Reason: ${reason}`
+    });
+    notify(`"${target.username}" now assigned to "${newName}" — earlier work stays recorded under "${target.name}".`, "ok");
+    setTransferTarget(null);
+  }
+  async function handleToggleActive(u) {
     const nextActive = u.active === false ? true : false;
     if (!nextActive && u.role === "Administrator" && activeAdminCount(users) <= 1) {
       notify("Can't deactivate the last active Administrator.", "warn");
       return;
     }
-    setUsers(prev => prev.map(x => x.id === u.id ? {
-      ...x,
-      active: nextActive
-    } : x));
+    const patched = { ...u, active: nextActive };
+    await DataService.save("users", patched);
+    setUsers(prev => prev.map(x => x.id === u.id ? patched : x));
     DataService.appendAudit({
       entity: "user",
       entityId: u.id,
@@ -749,7 +800,7 @@ function UsersAdminTab({
       note: `${nextActive ? "Reactivated" : "Deactivated"} user "${u.username}"`
     });
   }
-  function handleDeleteConfirmed(u) {
+  async function handleDeleteConfirmed(u) {
     if (u.id === session.userId) {
       notify("You can't delete your own account while logged in.", "warn");
       setDeleteTarget(null);
@@ -760,6 +811,7 @@ function UsersAdminTab({
       setDeleteTarget(null);
       return;
     }
+    await DataService.remove("users", u.id);
     setUsers(prev => prev.filter(x => x.id !== u.id));
     DataService.appendAudit({
       entity: "user",
@@ -866,6 +918,7 @@ function UsersAdminTab({
     onAdd: () => setFormUser({}),
     onEdit: u => setFormUser(u),
     onResetPassword: u => setResetTarget(u),
+    onTransfer: u => setTransferTarget(u),
     onToggleActive: handleToggleActive,
     onDelete: u => setDeleteTarget(u)
   }) : React.createElement(PermissionMatrixPanel, {
@@ -886,6 +939,10 @@ function UsersAdminTab({
     user: resetTarget,
     onClose: () => setResetTarget(null),
     onSave: pw => handleResetPassword(resetTarget.id, pw)
+  }), transferTarget && React.createElement(TransferOfficerModal, {
+    user: transferTarget,
+    onClose: () => setTransferTarget(null),
+    onConfirm: handleTransferOfficer
   }), deleteTarget && React.createElement(Modal, {
     title: "Delete User",
     onClose: () => setDeleteTarget(null)
@@ -913,6 +970,7 @@ function UsersListPanel({
   onAdd,
   onEdit,
   onResetPassword,
+  onTransfer,
   onToggleActive,
   onDelete
 }) {
@@ -958,6 +1016,11 @@ function UsersListPanel({
       title: "Reset password",
       onClick: () => onResetPassword(u)
     }), canEdit && React.createElement(IconButton, {
+      name: "arrowRight",
+      color: C.teal,
+      title: "Transfer — same login/role, new officer's name (old work stays under the old name)",
+      onClick: () => onTransfer(u)
+    }), canEdit && React.createElement(IconButton, {
       name: isActive ? "x" : "check",
       color: isActive ? C.warn : C.ok,
       title: isActive ? "Deactivate" : "Reactivate",
@@ -989,7 +1052,10 @@ function UsersListPanel({
       style: {
         color: C.ink
       }
-    }, u.name || "—"), React.createElement("td", {
+    }, u.name || "—", (u.transferHistory || []).length > 0 && React.createElement(Badge, {
+      tone: "info",
+      title: `Previously: ${(u.transferHistory || []).map(h => h.fromName).join(" → ")}`
+    }, "Transferred")), React.createElement("td", {
       className: "px-2 py-1.5",
       style: {
         color: C.muted
@@ -1203,8 +1269,8 @@ function UserFormModal({
       return;
     }
     if (!isEdit) {
-      if (password.length < 6) {
-        setError("Password must be at least 6 characters.");
+      if (password.length < 8) {
+        setError("Password must be at least 8 characters.");
         return;
       }
       if (password !== confirmPassword) {
@@ -1316,8 +1382,8 @@ function ResetPasswordModal({
   const [error, setError] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   async function handleSubmit() {
-    if (password.length < 6) {
-      setError("Password must be at least 6 characters.");
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters.");
       return;
     }
     if (password !== confirmPassword) {
@@ -1355,6 +1421,110 @@ function ResetPasswordModal({
     onClick: handleSubmit,
     loading: saving
   }, "Reset Password"))));
+}
+
+// ============================================================================
+// TRANSFER OFFICER — an officer's post changes hands (transfer/promotion/
+// leave), but the LOGIN ACCOUNT (id, username, role, permissions) is meant
+// to carry on as-is for that post rather than being deleted and recreated.
+// This is deliberately NOT the same as just editing the "Full Name" field
+// in Edit User: it's a dedicated, reason-required, audited action that
+// records exactly who held the post before and who holds it now
+// (user.transferHistory[]), so the post's staffing history is visible at a
+// glance later — not just inferable from a generic "edit" audit line.
+//
+// Nothing else needs to change for old work to keep the old officer's name
+// and new work to show the new one: every action already stamps `name` as
+// a plain string AT THE TIME it happens (byUser/toUser/tester/etc. across
+// 20-sample-model.js, 13-testrecords-ui.js, ...) rather than a live
+// reference to the user record, so results/approvals/releases/custody
+// events already made under this account are untouched by this change.
+// Going forward, 99-app.js's session-resync effect (session.name kept in
+// sync with the user record, even mid-session) means every NEW action
+// picks up the new officer's name automatically the moment this save
+// completes — no re-login required.
+// ============================================================================
+function TransferOfficerModal({
+  user,
+  onClose,
+  onConfirm
+}) {
+  const [newName, setNewName] = React.useState("");
+  const [newDesignation, setNewDesignation] = React.useState(user.designation || "");
+  const [reason, setReason] = React.useState("");
+  const [error, setError] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+  async function handleSubmit() {
+    const trimmedName = newName.trim();
+    const trimmedReason = reason.trim();
+    if (!trimmedName) {
+      setError("The new officer's full name is required.");
+      return;
+    }
+    if (trimmedName === (user.name || "").trim()) {
+      setError("New name is the same as the current name — nothing to transfer.");
+      return;
+    }
+    if (!trimmedReason) {
+      setError("A reason/remark is required (e.g. transfer order no., posting date).");
+      return;
+    }
+    setError("");
+    setSaving(true);
+    await onConfirm(trimmedName, newDesignation.trim(), trimmedReason);
+    setSaving(false);
+  }
+  const history = user.transferHistory || [];
+  return React.createElement(Modal, {
+    title: `Transfer — ${user.username}`,
+    onClose: onClose
+  }, React.createElement("div", {
+    className: "p-4 grid gap-3"
+  }, React.createElement(Banner, {
+    tone: "info"
+  }, `This keeps the same login (username, role, permissions) for the "${user.designation || user.role}" post. All work already done under this account stays recorded under "${user.name}"; everything from now on will show the new officer's name.`), error && React.createElement(Banner, {
+    tone: "danger"
+  }, error), React.createElement("div", {
+    className: "text-xs",
+    style: { color: C.muted }
+  }, "Current officer: ", React.createElement("span", { style: { color: C.ink, fontWeight: 600 } }, user.name || "—")), React.createElement(TextField, {
+    label: "New Officer's Full Name",
+    value: newName,
+    onChange: e => setNewName(e.target.value),
+    placeholder: "e.g. Md. Rahim Uddin"
+  }), React.createElement(TextField, {
+    label: "Designation",
+    value: newDesignation,
+    onChange: e => setNewDesignation(e.target.value),
+    placeholder: "e.g. Senior Chemist"
+  }), React.createElement("label", {
+    className: "flex flex-col gap-1 text-xs",
+    style: { color: C.muted }
+  }, "Reason / Remarks (required)", React.createElement("textarea", {
+    className: "border rounded px-2 py-1.5 text-sm",
+    style: { borderColor: C.border, minHeight: 60 },
+    value: reason,
+    onChange: e => setReason(e.target.value),
+    placeholder: "e.g. Transfer order no. …, effective …"
+  })), history.length > 0 && React.createElement("div", null, React.createElement("div", {
+    className: "text-xs font-medium mb-1",
+    style: { color: C.muted }
+  }, "Transfer history for this account"), React.createElement("div", {
+    className: "rounded-lg overflow-hidden",
+    style: { border: `1px solid ${C.border}` }
+  }, history.slice().reverse().map((h, i) => React.createElement("div", {
+    key: h.id || i,
+    className: "px-2.5 py-1.5 text-xs",
+    style: { borderBottom: i < history.length - 1 ? `1px solid ${C.border}` : "none" }
+  }, React.createElement("span", { style: { color: C.ink, fontWeight: 600 } }, h.fromName), " → ", React.createElement("span", { style: { color: C.ink, fontWeight: 600 } }, h.toName), React.createElement("div", { style: { color: C.muted } }, `${new Date(h.transferredAt).toLocaleString()} — by ${h.transferredBy || "—"}${h.reason ? ` — ${h.reason}` : ""}`))))), React.createElement("div", {
+    className: "flex justify-end gap-2 mt-1"
+  }, React.createElement(Button, {
+    variant: "outline",
+    onClick: onClose
+  }, "Cancel"), React.createElement(Button, {
+    onClick: handleSubmit,
+    loading: saving
+  }, "Confirm Transfer"))));
 }
 
 // ---- Permission Matrix editor (per-role Module × Action grid) ----

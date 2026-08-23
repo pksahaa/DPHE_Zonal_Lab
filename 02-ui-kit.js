@@ -496,6 +496,134 @@ function ConfirmBar({
     onClick: onConfirm
   }, confirmLabel)));
 }
+// ---- shared "reason required" confirm modal — anywhere an action needs a
+// mandatory, non-empty written reason before it proceeds (Return to
+// Analyst, Void/Invalidate a Test Record, and any future action the
+// Workflow/Data-Integrity Upgrade adds the same requirement to). One
+// authoritative implementation instead of copy-pasting this shape into
+// every file that needs it — see SampleCustodyActionModal in
+// 21-sample-ui.js for the sibling pattern at the whole-sample level
+// (On Hold/Reject/Cancel), which this intentionally mirrors visually.
+// `actions` (optional) turns this into a CHOICE modal instead of a single
+// confirm — e.g. Request Correction offering "Correction Only" vs "Retest"
+// as two distinct outcomes sharing one mandatory reason. Each entry is
+// { key, label, detail, variant, onConfirm(reason) }. When omitted, this
+// renders exactly as before: one button (confirmLabel/onConfirm) — every
+// existing call site (Return to Analyst, Void, per-parameter Hold, Reject,
+// whole-sample Hold/Reject/Cancel) keeps working unchanged.
+function ReasonRequiredModal({
+  title,
+  description,
+  confirmLabel,
+  actions,
+  onClose,
+  onConfirm,
+  placeholder
+}) {
+  const [reason, setReason] = React.useState("");
+  const [err, setErr] = React.useState("");
+  // Step 11 — Inventory Double-Consumption Guard. A rapid double-click (or
+  // clicking again while waiting on a slow network response) must never
+  // fire the underlying action twice — most of this modal's callers
+  // restore/deduct chemical or gas inventory (Void/Correction Request,
+  // Hold, Return to Analyst), and running that twice silently corrupts the
+  // balance. `submittedRef` is a ref, not state, specifically so the CHECK
+  // is synchronous and can't race a second click that lands before React
+  // re-renders (a `submitted` state flag alone can't guarantee that; the
+  // ref read/write below happens on the same tick as the click itself).
+  const submittedRef = React.useRef(false);
+  const [submitted, setSubmitted] = React.useState(false);
+  function run(fn) {
+    if (submittedRef.current) return;
+    const trimmed = reason.trim();
+    if (!trimmed) {
+      setErr("A reason is required.");
+      return;
+    }
+    submittedRef.current = true;
+    setSubmitted(true);
+    fn(trimmed);
+  }
+  const resolvedActions = actions && actions.length ? actions : [{
+    key: "confirm",
+    label: confirmLabel || "Confirm",
+    variant: "danger",
+    onConfirm
+  }];
+  const isChoice = !!(actions && actions.length > 1);
+  return /*#__PURE__*/React.createElement(Modal, {
+    title,
+    onClose
+  }, description && /*#__PURE__*/React.createElement("p", {
+    className: "text-xs mb-3",
+    style: {
+      color: C.muted
+    }
+  }, description), /*#__PURE__*/React.createElement("label", {
+    className: "flex flex-col gap-1 text-xs mb-1",
+    style: {
+      color: C.muted
+    }
+  }, "Reason (required)", /*#__PURE__*/React.createElement("textarea", {
+    autoFocus: true,
+    className: "border rounded px-2 py-1.5 text-sm",
+    style: {
+      borderColor: C.border,
+      minHeight: 70
+    },
+    value: reason,
+    onChange: e => {
+      setReason(e.target.value);
+      setErr("");
+    },
+    placeholder: placeholder || "e.g. wrong dilution used, transcription error, QC failure on the run…"
+  })), err && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs mb-2",
+    style: {
+      color: C.warn
+    }
+  }, err), isChoice ?
+  // ---- choice layout: one bordered option block per action, each with
+  // its own explanation directly above its button, so the two outcomes
+  // are never confused for a plain Cancel/Confirm pair. ----
+  /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col gap-2 mt-2"
+  }, resolvedActions.map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.key,
+    className: "rounded-lg p-2.5",
+    style: {
+      border: `1px solid ${C.border}`,
+      background: C.bg
+    }
+  }, a.detail && /*#__PURE__*/React.createElement("p", {
+    className: "text-xs mb-2",
+    style: {
+      color: C.ink
+    }
+  }, a.detail), /*#__PURE__*/React.createElement(Button, {
+    variant: a.variant || "danger",
+    size: "sm",
+    disabled: submitted,
+    onClick: () => run(a.onConfirm)
+  }, a.label))), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end mt-1"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "ghost",
+    size: "sm",
+    onClick: onClose
+  }, "Cancel"))) : /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end gap-2 mt-3"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "ghost",
+    size: "sm",
+    onClick: onClose
+  }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
+    variant: resolvedActions[0].variant || "danger",
+    size: "sm",
+    disabled: submitted,
+    onClick: () => run(resolvedActions[0].onConfirm)
+  }, resolvedActions[0].label)));
+}
 function StatCard({
   label,
   value,

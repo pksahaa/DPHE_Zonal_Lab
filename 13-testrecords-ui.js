@@ -27,6 +27,164 @@ function isTestRecordArchivable(r, samples, testRecords, subBatches) {
   if (!r) return false;
   return releasedMemberSampleIds(r, samples, testRecords, subBatches).length > 0;
 }
+// ============================================================================
+// EDIT LOCK (Workflow/Data-Integrity Upgrade Step 5) — once ANY member of a
+// Test Record has reached "approved" or "released", the whole record is no
+// longer normally editable: approving/releasing is a formal sign-off, and
+// quietly changing the numbers underneath it afterward would invalidate
+// that sign-off without anyone downstream knowing. A record still at
+// "results_entered"/"under_review" is untouched by this — routine editing
+// before sign-off is normal lab work, not a correction.
+//
+// "Whole record", not per-member, because Edit changes shared fields
+// (tester, equipment, chemicals, every member's results) in one save — a
+// partial lock would let editing member A's results slip through a save
+// that's really being driven by still-editable member B, silently altering
+// A's already-approved value too.
+//
+// The way BACK to changing an approved/released result is Void/Invalidate
+// (Step 3) — framed as "Request Correction" here (same underlying action,
+// see doVoid — it already does exactly what the spec calls for: previous
+// result retained, sample reset for a brand-new attempt, which Retest/
+// Attempt History (Step 4) then automatically tracks as attemptNo+1).
+// ============================================================================
+function isTestRecordLocked(r, samples, testRecords, subBatches) {
+  if (!r || r.voided) return false;
+  const sampleIds = r.memberSampleIds && r.memberSampleIds.length ? r.memberSampleIds : r.sampleId ? [r.sampleId] : [];
+  return sampleIds.some(sid => {
+    const sample = (samples || []).find(s => s.id === sid);
+    if (!sample) return false;
+    const stage = testStageForSample(sample, r.testTypeId, testRecords, subBatches);
+    return stage === "approved" || stage === "released";
+  });
+}
+// ============================================================================
+// RETEST FEE MODAL — the fix for revenue double-counting across retests
+// (each retested sample in a batch is billed independently). Unlike the
+// two-button "Waive All / Charge All" choice this replaces, every retested
+// member gets its OWN checkbox, so e.g. 5 retests where 3 should be billed
+// and 2 waived can be decided in a single save — the two-button version
+// couldn't express that at all.
+// ============================================================================
+function RetestFeeModal({ samples, onClose, onConfirm }) {
+  const [reason, setReason] = React.useState("");
+  const [err, setErr] = React.useState("");
+  // sampleId -> true (charge) | false/undefined (waived). Defaults to
+  // waived — matches "lab decided to repeat" being the more common,
+  // safer-by-default retest reason; each row is an explicit opt-IN to charge.
+  const [charge, setCharge] = React.useState({});
+  const [submitted, setSubmitted] = React.useState(false);
+  function waiveAll() {
+    setCharge({});
+  }
+  function chargeAll() {
+    setCharge(Object.fromEntries(samples.map(s => [s.id, true])));
+  }
+  function confirm() {
+    const trimmed = reason.trim();
+    if (!trimmed) {
+      setErr("A reason is required.");
+      return;
+    }
+    if (submitted) return;
+    setSubmitted(true);
+    onConfirm(trimmed, charge);
+  }
+  const chargedCount = samples.filter(s => charge[s.id]).length;
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: "Retest — reason & fee required",
+    onClose
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-xs mb-3",
+    style: { color: C.muted }
+  }, `${samples.length} sample(s) in this Analytical Batch were previously tested for this parameter and returned/voided. Saving creates a NEW, separate attempt for each — the earlier attempt stays untouched for the audit trail. Any other, first-time sample(s) in this same batch are unaffected and still bill normally via the "Collect Fee" checkbox.`), /*#__PURE__*/React.createElement("label", {
+    className: "flex flex-col gap-1 text-xs mb-3",
+    style: { color: C.muted }
+  }, "Reason (required, applies to all retested sample(s) above)", /*#__PURE__*/React.createElement("textarea", {
+    autoFocus: true,
+    className: "border rounded px-2 py-1.5 text-sm",
+    style: { borderColor: C.border, minHeight: 60 },
+    value: reason,
+    onChange: e => { setReason(e.target.value); setErr(""); },
+    placeholder: "e.g. QC failure on the original run, dilution error, customer requested a re-check…"
+  })), err && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs mb-2",
+    style: { color: C.warn }
+  }, err), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between gap-2 mb-1.5"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs",
+    style: { color: C.muted }
+  }, "Per-sample, or apply to all at once:"), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-1.5"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "outline",
+    size: "sm",
+    onClick: waiveAll
+  }, "Waive All"), /*#__PURE__*/React.createElement(Button, {
+    variant: "outline",
+    size: "sm",
+    onClick: chargeAll
+  }, "Charge All"))), /*#__PURE__*/React.createElement("div", {
+    className: "rounded-lg mb-2 overflow-hidden",
+    style: { border: `1px solid ${C.border}` }
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "w-full text-xs"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
+    className: "text-left px-2.5 py-1.5",
+    style: { borderBottom: `1px solid ${C.border}`, color: C.muted, background: C.bg }
+  }, "Retested Sample"), /*#__PURE__*/React.createElement("th", {
+    className: "text-center px-2.5 py-1.5",
+    style: { borderBottom: `1px solid ${C.border}`, color: C.muted, background: C.bg }
+  }, "Waive"), /*#__PURE__*/React.createElement("th", {
+    className: "text-center px-2.5 py-1.5",
+    style: { borderBottom: `1px solid ${C.border}`, color: C.muted, background: C.bg }
+  }, "Charge"))), /*#__PURE__*/React.createElement("tbody", null, samples.map(s => /*#__PURE__*/React.createElement("tr", {
+    key: s.id
+  }, /*#__PURE__*/React.createElement("td", {
+    className: "px-2.5 py-1.5",
+    style: { borderBottom: `1px solid ${C.border}`, color: C.ink, fontWeight: 600 }
+  }, s.code),
+  // Two separate, clearly-labeled checkboxes instead of one checkbox whose
+  // meaning flips depending on its checked state (was confusing — a single
+  // box that's sometimes "Waived" and sometimes "Charged" reads as if
+  // waive+charge were one combined thing). Waive and Charge are mutually
+  // exclusive per sample, so checking one always unchecks the other —
+  // exactly the same underlying state (`charge[s.id]`), just shown as two
+  // explicit boxes rather than one relabeling box.
+  /*#__PURE__*/React.createElement("td", {
+    className: "px-2.5 py-1.5 text-center",
+    style: { borderBottom: `1px solid ${C.border}` }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    "aria-label": `Waive retest fee for ${s.code}`,
+    checked: !charge[s.id],
+    onChange: () => setCharge(prev => ({ ...prev, [s.id]: false }))
+  })),
+  /*#__PURE__*/React.createElement("td", {
+    className: "px-2.5 py-1.5 text-center",
+    style: { borderBottom: `1px solid ${C.border}` }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    "aria-label": `Charge retest fee for ${s.code}`,
+    checked: !!charge[s.id],
+    onChange: () => setCharge(prev => ({ ...prev, [s.id]: true }))
+  }))))))), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs mb-3",
+    style: { color: C.muted }
+  }, `${chargedCount} of ${samples.length} retested sample(s) will be charged; ${samples.length - chargedCount} will be waived.`), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end gap-2"
+  }, /*#__PURE__*/React.createElement(Button, {
+    variant: "ghost",
+    size: "sm",
+    onClick: onClose
+  }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
+    variant: "primary",
+    size: "sm",
+    disabled: submitted,
+    onClick: confirm
+  }, "Save as Retest")));
+}
 // ===== 13-testrecords-ui.js =====
 // ============================================================================
 // TEST EXECUTION & RECORDS — running a test against a Test Method (consumes
@@ -64,8 +222,7 @@ function AddTestTab({
   const trCreateGate = permGate(permissionMatrix, session, "testRecords", "create", notify, "add test records");
   const trEditGateForSave = permGate(permissionMatrix, session, "testRecords", "edit", notify, "edit test records");
   const [selectedSubBatchId, setSelectedSubBatchId] = useState("");
-  // Submit-guard for handleSave — see the try/finally wrapper below.
-  const savingRef = React.useRef(false);
+
   // How the technician is choosing what to record results for. Individual
   // (single, unbatched) sample entry has been removed — every result entry
   // must flow through an Analytical Batch, either picked directly
@@ -122,6 +279,13 @@ function AddTestTab({
   const [bracketingPoints, setBracketingPoints] = useState([]); // [{id,label,value, comparator, limitLow, limitHigh, targetValue}]
   const [numQcCheckpoints, setNumQcCheckpoints] = useState("3");
   const [submitAttempted, setSubmitAttempted] = useState(false);
+  // Retest/Attempt History (Workflow/Data-Integrity Upgrade Step 4) — set
+  // when handleSaveInner() detects this save covers at least one sample
+  // that's being re-tested (had a prior Return to Analyst/Void for this
+  // exact test type). Holds the modal open until a reason is given; see
+  // handleSaveInner's own comment for why the reason is threaded through as
+  // a plain function argument rather than read back out of this state.
+  const [retestPrompt, setRetestPrompt] = useState(null); // null | { count }
   function toggleOptionalUsed(key) {
     setOptionalUsed(prev => ({
       ...prev,
@@ -187,6 +351,30 @@ function AddTestTab({
     notify?.(`Created ${sb.label} from this Reference — ${batchModeSamples.length} sample(s). Continue below.`, "ok");
   }
   const subBatchMembers = selectedSubBatch ? selectedSubBatch.memberSampleIds.map(id => (samples || []).find(s => s.id === id)).filter(Boolean) : [];
+  // Earliest a Test Date can legitimately be — a sample can't be tested
+  // before it physically existed in the lab. Uses the latest of (Received
+  // Date, Collection Date) per member sample (Received Date is already
+  // guaranteed >= Collection Date by validateRegistrationDates, so this is
+  // effectively "on or after the sample was received"), then takes the max
+  // across every member so one earlier-registered sample in a batch can't
+  // let the whole batch's Test Date sit before a later-registered member.
+  function sampleEarliestTestDate(s) {
+    return s.receivedDate || s.collectionDate || null;
+  }
+  const editingMembers = !selectedSubBatch && editingRecord && editingRecord.sampleId
+    ? [(samples || []).find(s => s.id === editingRecord.sampleId)].filter(Boolean)
+    : [];
+  const testDateMembers = selectedSubBatch ? subBatchMembers : editingMembers;
+  const minTestDate = testDateMembers.reduce((min, s) => {
+    const d = sampleEarliestTestDate(s);
+    return d && (!min || d > min) ? d : min;
+  }, null);
+  // Preview-only: which of the currently selected batch's members are
+  // retests (attemptNo > 1) — surfaced as a heads-up banner before save so
+  // the "Retest — reason & fee required" modal doesn't come as a surprise.
+  const retestMembersPreview = selectedSubBatch && !editingRecord
+    ? subBatchMembers.filter(s => computeAttemptInfo(s, selectedSubBatch.testTypeId, testRecords).attemptNo > 1)
+    : [];
   // Client auto-populates from the Reference(s) behind the selected batch/
   // sub-batch — same source (Reference.contactPerson — the Client Name from
   // the Client Part paperwork) and the same "recompute on selection change"
@@ -807,14 +995,17 @@ function AddTestTab({
     setMemberInputs({});
     setSelectionMode("batch");
     setSelectedSubBatchId("");
+    setRetestPrompt(null);
   }
   function handleCancelEdit() {
     resetForm();
     onDoneEditing && onDoneEditing();
   }
-  function handleSaveInner() {
+  async function handleSaveInner(confirmedRetestReason, chargeRetestFeeMap) {
     setSubmitAttempted(true);
     if (!selectedTest) return;
+    if (isFutureDate(testDate)) return notify("Test Date can't be in the future.", "warn");
+    if (minTestDate && testDate < minTestDate) return notify(`Test Date can't be before ${minTestDate} — that's when the latest member sample was received/collected.`, "warn");
     if (!tester.trim()) return notify("Please enter tester name", "warn");
     if (numberOfStandardSamples === "" && numberOfFieldSamples === "") return notify("Please enter No. of Standard Samples and No. of Field Samples (use 0 if none).", "warn");
     if (dilutionRequired && numberOfDilutedSamples === "") return notify("Please enter No. of Samples Requiring Dilution (use 0 if none).", "warn");
@@ -822,6 +1013,48 @@ function AddTestTab({
     // result entry must flow through an Analytical Batch (picked directly,
     // or assembled from a Reference via "Use This Batch" above).
     if (!editingRecord && !selectedSubBatch) return notify("Please select an Analytical Batch before entering results.", "warn");
+
+    // Edit lock (Workflow/Data-Integrity Upgrade Step 5) — defensive
+    // re-check in case this record was approved/released by someone else
+    // WHILE this edit form was open (the Edit button that opens this form
+    // is already hidden/disabled once locked — see isTestRecordLocked,
+    // top of this file — this just covers the race). Use Request
+    // Correction from the Test Records list instead.
+    //
+    // `isCorrectionEdit` is the ONE sanctioned bypass: it's only ever set
+    // by doCorrectionEdit() (below), which is only reachable via the
+    // "Correction Only" button in the Request Correction modal — i.e. the
+    // user already explicitly chose this path and already gave a required
+    // reason before ever getting here. A locked record can NOT be reached
+    // through the normal Edit pencil (hidden once locked) or by directly
+    // constructing editingRecord some other way, so this bypass can't be
+    // used to silently slip past the lock.
+    if (editingRecord && !editingRecord.isCorrectionEdit && isTestRecordLocked(editingRecord, samples, testRecords, subBatches)) {
+      notify("This record has since been approved/released and can no longer be edited directly. Close this form and use \"Request Correction\" from the Test Records list instead.", "warn");
+      return;
+    }
+
+    // Retest detection (Workflow/Data-Integrity Upgrade Step 4) — only
+    // applies to a brand-new Analytical Batch save (editing an existing
+    // record is a correction to THAT attempt, not a new one). Any member
+    // sample with a prior Return to Analyst/Void for this exact test type
+    // (see computeAttemptInfo, 16-sub-batch.js) makes this a retest, which
+    // requires a reason — same "reason required" contract as Return to
+    // Analyst and Void. The reason is threaded straight through as a
+    // function argument (confirmedRetestReason) rather than round-tripped
+    // through React state, so there's no risk of this synchronous,
+    // many-early-return function ever reading a stale value.
+    if (!editingRecord && selectedSubBatch && !confirmedRetestReason) {
+      const retestSamples = selectedSubBatch.memberSampleIds
+        .map(id => (samples || []).find(x => x.id === id))
+        .filter(s => s && computeAttemptInfo(s, selectedSubBatch.testTypeId, testRecords).attemptNo > 1);
+      if (retestSamples.length > 0) {
+        setRetestPrompt({
+          samples: retestSamples.map(s => ({ id: s.id, code: s.sampleCode }))
+        });
+        return; // wait for the reason — RetestReasonModal below re-calls handleSaveInner(reason) on confirm
+      }
+    }
 
     // Analytical Batch (Sub-Batch) save: refuse to create a record where a
     // member sample ends up with zero result values — this is what used to
@@ -864,9 +1097,38 @@ function AddTestTab({
     // rebuilding it a second time when the record payload is assembled.
     const computedMemberResults = selectedSubBatch ? selectedSubBatch.memberSampleIds.map(sampleId => {
       const memberSample = (samples || []).find(s => s.id === sampleId);
+      // Retest/Attempt History — computed fresh per member (not editing, so
+      // this is always attemptNo 1 unless computeAttemptInfo finds a prior
+      // Return to Analyst/Void for this exact test type). See
+      // computeAttemptInfo's own comment in 16-sub-batch.js.
+      const attemptInfo = memberSample ? computeAttemptInfo(memberSample, selectedSubBatch.testTypeId, testRecords) : {
+        attemptNo: 1,
+        previousTestRecordId: null
+      };
+      // Per-member fee — this is the actual fix for revenue double-counting
+      // on retests. A first attempt (attemptNo===1) bills exactly like
+      // before, off the record-wide "Collect Fee" toggle. A RETEST member
+      // (attemptNo>1) does NOT automatically inherit that toggle — it's
+      // priced off the explicit PER-SAMPLE choice made in the Retest fee
+      // modal (chargeRetestFeeMap[sampleId] === true = customer-requested
+      // repeat, billed again; anything else = lab-decided repeat, fee
+      // waived), so one Analytical Batch can freely mix first-time
+      // (billed), waived-retest, AND charged-retest members — e.g. 5
+      // retests where 3 are billed and 2 are waived in the very same save.
+      // When just correcting/re-saving an ALREADY-retested record (editing,
+      // not a fresh retest), the original per-member decision is preserved
+      // from editingRecord rather than re-asked.
+      const memberFeeApplicable = attemptInfo.attemptNo <= 1
+        ? feeApplicable
+        : editingRecord
+          ? ((editingRecord.memberResults || []).find(m => m.sampleId === sampleId)?.feeApplicable ?? false)
+          : !!(chargeRetestFeeMap && chargeRetestFeeMap[sampleId]);
       return {
         sampleId,
         sampleCode: memberSample?.sampleCode || "",
+        attemptNo: attemptInfo.attemptNo,
+        previousTestRecordId: attemptInfo.previousTestRecordId,
+        feeApplicable: memberFeeApplicable,
         results: resultParameters.map(p => {
           const override = (resultOverridesBySample[sampleId] || []).find(r => r.paramId === p.id);
           if (override) return override;
@@ -963,14 +1225,6 @@ function AddTestTab({
     // reporting only (inventory tracked manually), per the optional Amount Used design.
     
     const allGasEntries = [...gasesUsed, ...(dilutionRequired ? dilutionGasesUsed : [])];
-    if (allGasEntries.length > 0) {
-      const noCylinder = allGasEntries.filter(e => !e.cylinderId);
-      if (noCylinder.length > 0) {
-        notify(`Please select which cylinder was used for: ${noCylinder.map(e => e.gasName).join(", ")}`, "warn");
-        return;
-      }
-    }
-
     const allGasUsage = allGasEntries.filter(e => e.updateInventory);
     const gasInsufficient = [];
     allGasUsage.forEach(e => {
@@ -1031,6 +1285,18 @@ function AddTestTab({
     });
     setChemicals(nextChemicals);
     const equip = equipment.find(e => e.id === equipmentId);
+    // Actual billed count/revenue for THIS record — for an Analytical
+    // Batch, this is member-aware (see computedMemberResults above): a
+    // retested member only counts toward billedSamples/revenue if it was
+    // explicitly charged (chargeRetestFee/preserved decision), so a batch
+    // mixing first-time and retested samples bills correctly instead of
+    // the old all-or-nothing "Collect Fee" toggle double-charging (or
+    // under-charging) every retest in the batch alike. Falls back to the
+    // simple record-wide count for the (legacy) non-batch case.
+    const finalBilledSamples = computedMemberResults
+      ? computedMemberResults.filter(m => m.feeApplicable !== false).length
+      : billedSamples;
+    const finalRevenue = +(finalBilledSamples * unitCost).toFixed(2);
     const recordPayload = {
       date: testDate,
       tester: tester.trim(),
@@ -1053,10 +1319,19 @@ function AddTestTab({
       memberSampleIds: selectedSubBatch ? selectedSubBatch.memberSampleIds : null,
       subBatchId: selectedSubBatch ? selectedSubBatch.id : null,
       subBatchLabel: selectedSubBatch ? selectedSubBatch.label : null,
+      // Retest/Attempt History (record-level rollup of the per-member
+      // attemptNo/previousTestRecordId set on computedMemberResults above —
+      // see computeAttemptInfo, 16-sub-batch.js). Preserved as-is when
+      // editing an existing record (a correction to that SAME attempt, not
+      // a new one); only set fresh for a brand-new Analytical Batch save.
+      attemptNo: editingRecord ? editingRecord.attemptNo || 1 : computedMemberResults ? Math.max(1, ...computedMemberResults.map(m => m.attemptNo || 1)) : 1,
+      retestReason: editingRecord ? editingRecord.retestReason || null : confirmedRetestReason || null,
+      createdAt: editingRecord ? editingRecord.createdAt || null : new Date().toISOString(),
+      createdBy: editingRecord ? editingRecord.createdBy || null : session?.name || tester.trim(),
       feeApplicable,
       unitCost,
-      billedSamples,
-      revenue: revenuePreview,
+      billedSamples: finalBilledSamples,
+      revenue: finalRevenue,
       sampleSource: sampleSource.trim(),
       gasesUsed,
       dilutionRequired,
@@ -1102,152 +1377,194 @@ function AddTestTab({
       } : null
     };
     if (editingRecord) {
+      // Correction-edit audit trail (Workflow/Data-Integrity Upgrade Step
+      // 5/6 follow-up) — captures a genuine BEFORE/AFTER of exactly what a
+      // Correction Only edit is allowed to touch (reported values and what
+      // was actually consumed), not just "someone corrected this, trust
+      // me". The Immutable Approval Snapshot on the sample's approval
+      // record (see buildApprovalSnapshot, 20-sample-model.js) still keeps
+      // the ORIGINALLY approved value frozen regardless of this edit — this
+      // history is what lets a reviewer see what changed and why.
+      const historyEntry = editingRecord.isCorrectionEdit ? {
+        id: uid("ch"),
+        reason: editingRecord.correctionReason || "Correction Only",
+        date: new Date().toISOString(),
+        by: session?.name || "System",
+        before: {
+          memberResults: (editingRecord.memberResults || []).map(m => ({
+            sampleId: m.sampleId,
+            results: m.results
+          })),
+          consumption: editingRecord.consumption || {},
+          bottleLog: editingRecord.bottleLog || {},
+          gasLog: editingRecord.gasLog || [],
+          equipmentName: editingRecord.equipmentName || "",
+          tester: editingRecord.tester || ""
+        },
+        after: {
+          memberResults: (computedMemberResults || []).map(m => ({
+            sampleId: m.sampleId,
+            results: m.results
+          })),
+          consumption,
+          bottleLog,
+          gasLog,
+          equipmentName: equip ? equip.name : "",
+          tester: tester.trim()
+        }
+      } : null;
+
       const updatedRecord = {
         ...editingRecord,
-        ...recordPayload
+        ...recordPayload,
+        correctionHistory: historyEntry 
+          ? [...(editingRecord.correctionHistory || []), historyEntry] 
+          : editingRecord.correctionHistory
       };
-      // Optimistic local update first (UI reflects the edit immediately),
-      // then persist to the backend — mirrors the pattern used for samples
-      // (setSamples + DataService.bulkSet) below. Without this DataService
-      // call the edit only ever lived in React state and was lost on
-      // reload / never reached other devices.
-      setTestRecords(prev => prev.map(r => r.id === editingRecord.id ? updatedRecord : r));
-      DataService.save("testRecords", updatedRecord).catch(err => {
-        console.error("Failed to persist test record to backend:", err);
-        notify(`Test record updated locally, but the backend save failed: ${err.message}. Reload to confirm it persisted.`, "warn");
-      });
-      DataService.appendAudit({
-        entity: "testRecord",
-        entityId: editingRecord.id,
-        action: "edit",
-        user: session?.username || tester || "System",
-        role: session?.role || "Sample Analyzer",
-        note: `Updated test record "${recordPayload.testTypeName}" (${recordPayload.date})`
-      });
-      notify(anyMissing ? "Test record updated, but one or more linked chemicals no longer exist in inventory." : "Test record updated. Inventory adjusted accordingly.", anyMissing ? "warn" : "ok");
-      resetForm();
-      onDoneEditing && onDoneEditing();
+      
+      delete updatedRecord.correctionReason;
+      
+      // Wait for backend save to complete before updating UI
+      try {
+        const stamped = await DataService.save("testRecords", updatedRecord);
+        if (stamped && stamped._version) {
+          updatedRecord._version = stamped._version;
+          updatedRecord.updatedAt = stamped.updatedAt;
+        }
+        setTestRecords(prev => prev.map(r => r.id === editingRecord.id ? updatedRecord : r));
+        notify(historyEntry ? "Correction saved — the approved/released status is unchanged, and inventory was reconciled (not double-consumed)." : anyMissing ? "Test record updated, but one or more linked chemicals no longer exist in inventory." : "Test record updated. Inventory adjusted accordingly.", anyMissing ? "warn" : "ok");
+        resetForm();
+        onDoneEditing && onDoneEditing();
+        DataService.appendAudit({
+          eventType: historyEntry ? "CORRECTION_APPLIED" : "TEST_RECORD_EDITED",
+          entity: "testRecord",
+          entityType: "testRecord",
+          entityId: editingRecord.id,
+          opId: historyEntry?.id || null,
+          testTypeId: recordPayload.testTypeId,
+          testTypeName: recordPayload.testTypeName,
+          action: historyEntry ? "correction_applied" : "edit",
+          performedBy: session?.name,
+          user: session?.username || tester || "System",
+          role: session?.role || "Sample Analyzer",
+          reason: historyEntry?.reason || null,
+          note: historyEntry ? `Correction applied to approved/released test record "${recordPayload.testTypeName}" (${recordPayload.date}): ${historyEntry.reason} — approval status left untouched; inventory reconciled (old consumption restored, new consumption deducted) rather than double-counted.` : `Updated test record "${recordPayload.testTypeName}" (${recordPayload.date})`
+        }).catch(err => console.error("Audit log write failed (non-fatal):", err));
+      } catch (err) {
+        console.error("Failed to persist edit to backend:", err);
+        throw new Error(err.message || "Failed to save to backend.");
+      }
     } else {
       const newRecordId = uid("rec");
       const newRecord = {
         id: newRecordId,
         ...recordPayload
       };
-      // Same story as the edit branch above: update local state
-      // optimistically, then actually write the new record to the
-      // backend. This was the missing piece — previously a brand-new
-      // Analytical Batch / Test Record never got saved to GAS at all,
-      // only its member samples did.
-      setTestRecords(prev => [...prev, newRecord]);
-      DataService.save("testRecords", newRecord).catch(err => {
-        console.error("Failed to persist test record to backend:", err);
-        notify(`Test record saved locally, but the backend save failed: ${err.message}. Reload to confirm it persisted.`, "warn");
-      });
-      DataService.appendAudit({
-        entity: "testRecord",
-        entityId: newRecordId,
-        action: "create",
-        user: session?.username || tester || "System",
-        role: session?.role || "Sample Analyzer",
-        note: `Created test record "${recordPayload.testTypeName}" (${recordPayload.date})`
-      });
       const actingUser = session || {
         name: tester || "System",
         role: "Sample Analyzer"
       };
-      // The specific parameter this record is FOR — only that parameter's
-      // status moves to results_entered (== "Awaiting Review" everywhere
-      // downstream: Results Workflow's Review queue and Test Records both
-      // key off this exact status); every other requested parameter on the
-      // sample is untouched. setRequestedTestStatus() re-syncs the
-      // whole-sample `status` as a bottleneck rollup on its own (Phase 3) —
-      // no separate "check if everything's done" logic needed here anymore.
-      //
-      // This is the ONE status-transition code path for Analytical Batch
-      // saves — it runs identically whether each member's result came from
-      // hand-typed raw readings (memberInputs, resolved via
-      // computeMemberResult above) or from "Upload Results (Excel)"
-      // (resultOverridesBySample). Both were already merged into the same
-      // recordPayload.memberResults above, so there is no separate/second
-      // save routine for Bulk Upload that could drift out of sync with
-      // manual entry — every save, however the values were entered, dispatches
-      // this exact block and explicitly flips status to AWAITING_REVIEW
-      // ("results_entered") so the batch shows up immediately in both
-      // "Test Records" and "Awaiting Review".
       const AWAITING_REVIEW = "results_entered";
-      if (selectedSubBatch && setSamples) {
-        // One bulkSet for every member of this batch, instead of the old
-        // approach of one save() PER member fired without waiting for the
-        // previous one to finish (up to a few dozen simultaneous requests
-        // to the same backend for a big Analytical Batch) — that had no
-        // error handling at all, so a failed member update was invisible,
-        // and firing that many requests at once risked the same kind of
-        // write-write collision the Apps Script lock (see Code.gs doPost)
-        // now guards against anyway. This is simpler AND safer.
-        //
-        // IMPORTANT — optimistic update: setSamples runs BEFORE the backend
-        // bulkSet resolves so the Awaiting Review queue appears immediately
-        // after save. The same pattern applies to the test record itself
-        // (setTestRecords above is also synchronous). If the backend save
-        // later fails, we surface a warning toast so the user knows to
-        // reload — but we never leave the UI in a state where the test
-        // record exists but the samples still show as "in_progress".
-        const memberIdSet = new Set(selectedSubBatch.memberSampleIds);
-        const updatedSamples = (samples || []).map(s => {
-          if (!memberIdSet.has(s.id)) return s;
-          return setRequestedTestStatus({
-            ...s,
-            linkedTestRecordIds: [...(s.linkedTestRecordIds || []), newRecordId]
-          }, selectedSubBatch.testTypeId, AWAITING_REVIEW, actingUser);
+
+      try {
+        // 1. Wait for testRecord to save
+        const stampedRecord = await DataService.save("testRecords", newRecord);
+        if (stampedRecord && stampedRecord._version) {
+          newRecord._version = stampedRecord._version;
+          newRecord.updatedAt = stampedRecord.updatedAt;
+        }
+
+        let updatedSamples = [];
+        let changedSamples = [];
+        if (selectedSubBatch && setSamples) {
+          const memberIdSet = new Set(selectedSubBatch.memberSampleIds);
+          updatedSamples = (samples || []).map(s => {
+            if (!memberIdSet.has(s.id)) return s;
+            const updated = setRequestedTestStatus({
+              ...s,
+              linkedTestRecordIds: [...(s.linkedTestRecordIds || []), newRecordId]
+            }, selectedSubBatch.testTypeId, AWAITING_REVIEW, actingUser);
+            changedSamples.push(updated);
+            return updated;
+          });
+
+          // 2. Wait for samples to save
+          if (changedSamples.length > 0) {
+            const stampedSamples = await DataService.bulkUpsert("samples", changedSamples);
+            if (Array.isArray(stampedSamples)) {
+              stampedSamples.forEach(st => {
+                const orig = changedSamples.find(u => u.id === st.id);
+                if (orig) {
+                  orig._version = st._version;
+                  orig.updatedAt = st.updatedAt;
+                }
+              });
+            }
+          }
+        }
+
+        // 3. Backend calls succeeded! Now update React State.
+        setTestRecords(prev => {
+          if (prev.some(r => r.id === newRecord.id)) {
+            return prev.map(r => r.id === newRecord.id ? newRecord : r);
+          }
+          return [...prev, newRecord];
         });
-        // Update local state immediately (optimistic) — UI reflects the new
-        // status without waiting for the backend round-trip to complete.
-        setSamples(() => updatedSamples);
-        DataService.bulkSet("samples", updatedSamples).then(() => {
-          DataService.appendAudit({
-            entity: "sample",
-            entityId: selectedSubBatch.memberSampleIds.join(","),
-            action: AWAITING_REVIEW,
-            user: actingUser.name,
-            role: actingUser.role,
-            note: `${selectedSubBatch.memberSampleIds.length} sample(s) moved to Awaiting Review via Analytical Batch "${recordPayload.testTypeName}"`
-          }).catch(err => console.error("Audit log write failed (non-fatal):", err));
-        }).catch(err => {
-          notify(`Test record saved, but syncing the ${selectedSubBatch.memberSampleIds.length} sample statuses to the backend failed: ${err.message}. The UI shows the correct state — reload to confirm it persisted.`, "warn");
-        });
-        if (setSubBatches) {
-          setSubBatches(prev => prev.map(sb => sb.id === selectedSubBatch.id ? {
-            ...sb,
-            status: "tested",
-            testRecordId: newRecordId
-          } : sb));
+
+        if (selectedSubBatch && setSamples) {
+          // Pass null as second arg so setSamples only updates state (avoiding duplicate backend save)
+          setSamples(() => updatedSamples, null);
+
+          if (setSubBatches) {
+            setSubBatches(prev => prev.map(sb => sb.id === selectedSubBatch.id ? {
+              ...sb,
+              status: "tested",
+              testRecordId: newRecordId
+            } : sb));
+          }
         }
         setSelectedSubBatchId("");
         setMemberInputs({});
+        notify(anyMissing ? "Saved, but one or more linked chemicals no longer exist in inventory." : "Test record saved. Inventory updated (FEFO).", anyMissing ? "warn" : "ok");
+        resetForm();
+      } catch (err) {
+        console.error("Failed to persist test record to backend:", err);
+        throw new Error(err.message || "Failed to save test record.");
       }
-      notify(anyMissing ? "Saved, but one or more linked chemicals no longer exist in inventory." : "Test record saved. Inventory updated (FEFO).", anyMissing ? "warn" : "ok");
-      resetForm();
+
+      DataService.appendAudit({
+        entity: "testRecord",
+        entityId: newRecordId,
+        testTypeId: recordPayload.testTypeId,
+        testTypeName: recordPayload.testTypeName,
+        action: "create",
+        performedBy: session?.name,
+        user: session?.username || tester || "System",
+        role: session?.role || "Sample Analyzer",
+        note: `Created test record "${recordPayload.testTypeName}" (${recordPayload.date})`
+      }).catch(err => console.error("Audit log write failed (non-fatal):", err));
     }
   }
-  // Submit-guard: handleSaveInner is synchronous with many early-return
-  // validation branches, so the guard sits in a try/finally here — it opens
-  // exactly once per real click and always resets, whichever return path
-  // handleSaveInner takes (including the early "missing tester name" etc.
-  // validation failures).
-  function handleSave() {
-    if (savingRef.current) return;
+
+  const [isSaving, setIsSaving] = useState(false);
+
+  async function handleSave(confirmedRetestReason, chargeRetestFeeMap) {
+    if (isSaving) return;
     const saveGate = editingRecord ? trEditGateForSave : trCreateGate;
     if (!saveGate.allowed) {
       notify?.(`Guest access can't ${editingRecord ? "edit" : "add"} test records — this login is view-only for this action.`, "warn");
       return;
     }
-    savingRef.current = true;
+    setIsSaving(true);
     try {
-      handleSaveInner();
+      await handleSaveInner(confirmedRetestReason, chargeRetestFeeMap);
+    } catch (e) {
+      notify(`Failed to save: ${e.message}`, "warn");
     } finally {
-      savingRef.current = false;
+      setIsSaving(false);
     }
   }
+
   const sampleSourceLabel = {
     field: "field",
     standard: "standard",
@@ -1641,15 +1958,15 @@ function AddTestTab({
   return /*#__PURE__*/React.createElement("div", null, editingRecord && /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between gap-3 p-2.5 rounded mb-4",
     style: {
-      background: C.infoBg,
-      color: C.info
+      background: editingRecord.isCorrectionEdit ? C.warnBg : C.infoBg,
+      color: editingRecord.isCorrectionEdit ? C.warn : C.info
     }
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-xs flex items-center gap-1.5"
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "edit",
     size: 13
-  }), "Editing test record from ", editingRecord.date, " — saving will update this record and adjust inventory accordingly."), /*#__PURE__*/React.createElement(Button, {
+  }), editingRecord.isCorrectionEdit ? `Correction Only — editing an already approved/released record from ${editingRecord.date}. Reason: "${editingRecord.correctionReason}". Its approval/release status is NOT affected; only the values you change here are updated, and inventory is reconciled (old consumption restored, new consumption deducted) rather than double-counted.` : `Editing test record from ${editingRecord.date} — saving will update this record and adjust inventory accordingly.`), /*#__PURE__*/React.createElement(Button, {
     size: "sm",
     variant: "ghost",
     onClick: handleCancelEdit
@@ -1704,8 +2021,11 @@ function AddTestTab({
   }, t.name)))), /*#__PURE__*/React.createElement(TextField, {
     label: "Test Date",
     type: "date",
+    max: todayStr(),
+    min: minTestDate || undefined,
     value: testDate,
-    onChange: e => setTestDate(e.target.value)
+    onChange: e => setTestDate(e.target.value),
+    error: submitAttempted && isFutureDate(testDate) ? "Test Date can't be in the future." : submitAttempted && minTestDate && testDate < minTestDate ? `Test Date can't be before ${minTestDate} (sample not yet received/collected).` : undefined
   }), /*#__PURE__*/React.createElement(TextField, {
     label: "Tester Name",
     value: tester,
@@ -1780,7 +2100,16 @@ function AddTestTab({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "info",
     size: 12
-  }), "Enter Field Samples above to calculate revenue for this record (standard/QC samples aren't billed).")), !selectedTest && /*#__PURE__*/React.createElement("div", {
+  }), "Enter Field Samples above to calculate revenue for this record (standard/QC samples aren't billed).")), retestMembersPreview.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs mb-4 p-2.5 rounded flex items-start gap-2",
+    style: {
+      background: C.warnBg,
+      color: C.warn
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "warning",
+    size: 13
+  }), /*#__PURE__*/React.createElement("span", null, `${retestMembersPreview.length} sample(s) in this batch are RETESTS (previously returned/voided for this parameter): ${retestMembersPreview.slice(0, 6).map(s => s.sampleCode).join(", ")}${retestMembersPreview.length > 6 ? "…" : ""}. Saving will ask for a reason and let you tick, per sample, whether to charge the fee again — the rest of this batch still bills normally.`)), !selectedTest && /*#__PURE__*/React.createElement("div", {
     className: "text-sm",
     style: {
       color: C.muted
@@ -2053,14 +2382,22 @@ function AddTestTab({
     variant: "outline",
     onClick: handleCancelEdit
   }, "Cancel"), /*#__PURE__*/React.createElement(Button, {
-    onClick: handleSave
-  }, editingRecord ? "Update Test Record" : "Save Test Record")), showResultUploadModal && buildUploadPseudoRecord() && /*#__PURE__*/React.createElement(RecordBulkUploadModal, {
+    disabled: isSaving,
+    onClick: () => handleSave()
+  }, isSaving ? "Saving..." : editingRecord ? "Update Test Record" : "Save Test Record")), showResultUploadModal && buildUploadPseudoRecord() && /*#__PURE__*/React.createElement(RecordBulkUploadModal, {
     record: buildUploadPseudoRecord(),
     testType: selectedTest,
     samples: samples,
     onApply: applyPreSaveResultUpload,
     onClose: () => setShowResultUploadModal(false),
     notify: notify
+  }), retestPrompt && /*#__PURE__*/React.createElement(RetestFeeModal, {
+    samples: retestPrompt.samples,
+    onClose: () => setRetestPrompt(null),
+    onConfirm: (reason, chargeMap) => {
+      setRetestPrompt(null);
+      handleSave(reason, chargeMap);
+    }
   }));
 }
 // ============================================================================
@@ -2315,9 +2652,9 @@ function TestRecordsTab({
   notify,
   onEditRecord
 }) {
-  const [deleteRecord, setDeleteRecord] = useState(null);
+  const [voidingRecord, setVoidingRecord] = useState(null);
   const trEditGate = permGate(permissionMatrix, session, "testRecords", "edit", notify, "edit test records");
-  const trDeleteGate = permGate(permissionMatrix, session, "testRecords", "delete", notify, "delete test records");
+  const trDeleteGate = permGate(permissionMatrix, session, "testRecords", "delete", notify, "void test records");
   const canEditRecords = trEditGate.visible;
   const canDeleteRecords = trDeleteGate.visible;
   // A record can only be archived once at least one of its samples has
@@ -2332,6 +2669,7 @@ function TestRecordsTab({
   const [archivingId, setArchivingId] = useState(null);
   const [bulkArchiving, setBulkArchiving] = useState(false);
   const isArchivable = React.useCallback(r => isTestRecordArchivable(r, samples, testRecords, subBatches), [samples, testRecords, subBatches]);
+  const isLocked = React.useCallback(r => isTestRecordLocked(r, samples, testRecords, subBatches), [samples, testRecords, subBatches]);
   function toggleArchiveSelect(id) {
     setArchiveSelection(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   }
@@ -2534,46 +2872,98 @@ function TestRecordsTab({
     [id]: !prev[id]
   }));
   const PAGE_SIZE = 10;
-  function doDelete(rec) {
-    setChemicals(prev => markExpiredBatches(restoreConsumption(prev, rec.bottleLog || {})));
-    if (rec.gasLog && rec.gasLog.length > 0) setGasList(prev => restoreGasConsumption(prev, rec.gasLog));
-    // Deleting the record removes it, but that alone leaves every member
-    // sample's requestedTests[].status frozen wherever it was (e.g. still
-    // "results_entered"/"under_review") — see testStageForSample() in
-    // 16-sub-batch.js: that status field is now the real, stored source of
-    // truth, it's not re-derived from the record's existence. Without this
-    // reset the sample would silently stop being offered for a new
-    // Analytical Batch even though its test record is gone. Reuse the exact
-    // same "Return to Analyst" reset the Results Workflow already uses
-    // (returnRequestedTestToAnalyst, 20-sample-model.js) for every member
-    // this record covered, so a deleted record puts each sample back to
-    // "in_progress" — eligible again for a fresh Analytical Batch, and (once
-    // that batch is itself deleted — see doDeleteSubBatch below) visible
-    // again wherever Ref Batch/Register Sample groups it.
+  // ============================================================================
+  // VOID / INVALIDATE — replaces the old permanent delete for a Test
+  // Record (Workflow/Data-Integrity Upgrade Step 3). A voided record STAYS
+  // in the database — original result, tester, date, everything — with
+  // voided/voidedAt/voidedBy/voidReason recorded alongside it, instead of
+  // vanishing outright. Every other consumer of testRecords already treats
+  // a voided result as "doesn't count":
+  //   - getSampleResultForTest() (16-sub-batch.js) already filters out
+  //     !r.voided / !m.voided — this is the SAME field the per-sample
+  //     "Return to Analyst" void already uses, just applied to every member
+  //     of the whole record here — so a voided record is automatically
+  //     invisible to reports, eligibility checks, and Results Workflow
+  //     with no changes needed there.
+  //   - Analytics' filteredRecords (14c-analytics-pages-2.js) explicitly
+  //     excludes voided records from revenue/consumption/performance
+  //     numbers, so a voided test never inflates anyone's stats.
+  // A reason is REQUIRED (same "reason required" contract as Return to
+  // Analyst — see ReasonRequiredModal in 02-ui-kit.js), and reused as the
+  // reason passed to returnRequestedTestToAnalyst() below so the sample's
+  // own returnEvents[] history and this void share one consistent story.
+  //
+  // `correctionMode` (only meaningful when the record was locked, i.e. this
+  // is a Request Correction, not a routine Void) is either:
+  //   "retest"          — same as before: chemical/gas consumption is
+  //                        RESTORED to inventory, since the sample(s) go
+  //                        back through the analytical process from scratch
+  //                        and will consume fresh reagent on the new attempt.
+  //   "correction_only" — a paperwork/transcription-style fix (e.g. wrong
+  //                        unit typed, wrong sample code on the report) —
+  //                        the analytical work itself was fine, so nothing
+  //                        was actually wasted. Consumption is LEFT AS-IS
+  //                        (not restored) since restoring it would let the
+  //                        same physical reagent draw get "un-spent" and
+  //                        potentially double-counted against a future
+  //                        batch that didn't actually reuse it.
+  // A routine Void (wasLocked === false) has always had exactly one
+  // behavior — restore — and keeps that; the choice only appears for the
+  // "Request Correction" framing.
+  // ============================================================================
+  function doCorrectionEdit(rec, reason) {
+    onEditRecord({
+      ...rec,
+      isCorrectionEdit: true,
+      correctionReason: reason
+    });
+    setVoidingRecord(null);
+  }
+
+  function doVoid(rec, reason, correctionMode) {
+    // Same underlying action either way (see the function-level comment on
+    // isTestRecordLocked, top of this file, for why "Request Correction"
+    // on an approved/released record and a routine Void of an
+    // in-review one are the same operation, just framed differently) —
+    // computed once, up front, so the audit entry below reflects which
+    // framing was actually shown to the user for THIS record, even if its
+    // lock state could theoretically change between render and click.
+    const wasLocked = isTestRecordLocked(rec, samples, testRecords, subBatches);
+    const mode = wasLocked ? correctionMode === "correction_only" ? "correction_only" : "retest" : null;
+    const restoreConsumptionForThisAction = !wasLocked || mode === "retest";
+    if (restoreConsumptionForThisAction) {
+      setChemicals(prev => markExpiredBatches(restoreConsumption(prev, rec.bottleLog || {})));
+      if (rec.gasLog && rec.gasLog.length > 0) setGasList(prev => restoreGasConsumption(prev, rec.gasLog));
+    }
+    // Same reset every member sample needs as a full delete used to do —
+    // see returnRequestedTestToAnalyst's own comment in 20-sample-model.js
+    // for why this is the exact right function to reuse here.
     const memberIds = rec.memberSampleIds && rec.memberSampleIds.length ? rec.memberSampleIds : rec.sampleId ? [rec.sampleId] : [];
     if (memberIds.length) {
       const updatedMembers = [];
       memberIds.forEach(id => {
         const member = (samples || []).find(s => s.id === id);
         if (!member) return;
-        updatedMembers.push(returnRequestedTestToAnalyst(member, rec.testTypeId, rec.testTypeName, session, `Test record for "${rec.testTypeName}" (${rec.date}) was deleted — back to pending testing.`));
+        updatedMembers.push(returnRequestedTestToAnalyst(member, rec.testTypeId, rec.testTypeName, session, reason, {
+          testRecordId: rec.id
+        }));
       });
-      // Update local state without per-item server calls
-      updatedMembers.forEach(u => {
-        setSamples(prev => prev.map(s => s.id === u.id ? u : s), null);
-      });
-      // Persist all sample resets in one backend call — bulkUpsert only
-      // touches these rows, no full-table re-fetch/replace first.
-      DataService.bulkUpsert("samples", updatedMembers).catch(err => {
+      // Single state update for all member samples
+      setSamples(prev => {
+        const map = new Map(updatedMembers.map(u => [u.id, u]));
+        return prev.map(s => map.get(s.id) || s);
+      }, null);
+      DataService.bulkUpsert("samples", updatedMembers).then(stamped => {
+        if (Array.isArray(stamped)) {
+          stamped.forEach(st => {
+            const orig = updatedMembers.find(u => u.id === st.id);
+            if (orig) { orig._version = st._version; orig.updatedAt = st.updatedAt; }
+          });
+        }
+      }).catch(err => {
         console.error("Failed to persist sample resets to backend:", err);
       });
     }
-    // Reset the linked Analytical Batch (sub-batch) back to "pending" so it
-    // can immediately be used again in Add Test Records — without this the
-    // batch stays at "tested" status and disappears from the Add Test Record
-    // picker (which only shows pending sub-batches). The user can either
-    // re-enter test results for the same batch, or delete the batch from
-    // Analytical Batch management to start fresh with a new one.
     if (rec.subBatchId && setSubBatches) {
       setSubBatches(prev => prev.map(sb => sb.id === rec.subBatchId ? {
         ...sb,
@@ -2581,20 +2971,61 @@ function TestRecordsTab({
         testRecordId: null
       } : sb));
     }
-    setTestRecords(prev => prev.filter(r => r.id !== rec.id));
-    setDeleteRecord(null);
+    const voidedAt = new Date().toISOString();
+    setTestRecords(prev => prev.map(r => r.id === rec.id ? {
+      ...r,
+      voided: true,
+      voidedAt,
+      voidedBy: session.name,
+      voidReason: reason,
+      // Distinguishes "Request Correction" (this record was already
+      // approved/released — see isTestRecordLocked, top of file) from a
+      // routine Void of a still-in-review record, so the badge below and
+      // any later audit review can tell the two apart even without
+      // re-deriving lock state from the (now-superseded) member data.
+      wasCorrectionRequest: wasLocked,
+      // Which of the two Correction Request choices was made — null for a
+      // routine Void (no choice was ever offered there). See the doVoid
+      // comment above for what each mode means for chemical/gas
+      // consumption; kept on the record itself so the Test Records list,
+      // audit review, and analytics can all see it later without having to
+      // re-derive it from whether inventory happens to look restored.
+      correctionMode: mode,
+      // Every member's own result is flagged too — for a Sub-Batch/batch
+      // record this is what actually makes getSampleResultForTest() treat
+      // EVERY sample it covered as "no result", not just the record as a
+      // whole. A single (non-batch) record has no memberResults array, so
+      // this is a no-op there — the top-level `voided` flag above already
+      // covers it.
+      memberResults: Array.isArray(r.memberResults) ? r.memberResults.map(m => ({
+        ...m,
+        voided: true
+      })) : r.memberResults
+    } : r));
+    setVoidingRecord(null);
     DataService.appendAudit({
+      eventType: wasLocked ? "CORRECTION_REQUESTED" : "TEST_RECORD_VOIDED",
+      entityType: "testRecord",
       entity: "testRecord",
       entityId: rec.id,
-      action: "delete",
+      testTypeId: rec.testTypeId,
+      testTypeName: rec.testTypeName,
+      sampleIds: memberIds,
+      action: wasLocked ? "correction_requested" : "void",
+      correctionMode: mode,
+      performedBy: session.name,
       user: session.username,
       role: session.role,
-      note: `Deleted test record "${rec.testTypeName}" (${rec.date}) — ${memberIds.length} sample(s) returned to pending testing; analytical batch reset to pending`
-    });
-    notify(`Test record deleted — chemical/gas amounts restored, sample(s) back in the pending-testing queue.${ rec.subBatchId ? " The analytical batch has been reset to pending — you can enter new results for it, or delete it from Analytical Batch management." : ""}`);
+      reason,
+      note: wasLocked ? `Correction requested (${mode === "correction_only" ? "Correction Only — chemical/gas consumption left as-is" : "Retest — chemical/gas consumption restored"}) for approved/released test record "${rec.testTypeName}" (${rec.date}): ${reason} — approved value retained; ${memberIds.length} sample(s) returned to pending testing for a new, corrected attempt.` : `Voided test record "${rec.testTypeName}" (${rec.date}): ${reason} — ${memberIds.length} sample(s) returned to pending testing; analytical batch reset to pending.`
+    }).catch(err => console.error("Audit log write failed (non-fatal):", err));
+    notify(`${wasLocked ? `Correction requested (${mode === "correction_only" ? "Correction Only" : "Retest"}) — the approved/released value is kept for the audit trail` : "Test record voided"}. ${restoreConsumptionForThisAction ? "Chemical/gas amounts restored, sample(s)" : "Sample(s)"} back in the pending-testing queue.${ rec.subBatchId ? " The analytical batch has been reset to pending — enter the corrected results as a new Analytical Batch, or delete it from Analytical Batch management." : ""}`);
   }
+  const [showVoided, setShowVoided] = useState(false);
   const q = search.trim().toLowerCase();
+  const voidedCount = testRecords.filter(r => r.voided).length;
   const filtered = [...testRecords].reverse().filter(r => {
+    if (r.voided && !showVoided) return false;
     if (!q) return true;
     return [r.tester, r.testTypeName, r.equipmentName, r.date, r.sampleSource].some(v => (v || "").toLowerCase().includes(q));
   });
@@ -2613,7 +3044,12 @@ function TestRecordsTab({
       Chemicals_Used: Object.entries(r.consumption).map(([k, v]) => `${k}: ${fmtNum(v)}ml`).join(", "),
       Gas_Used: (r.gasesUsed || []).map(g => g.gasName).join(", "),
       Dilution: r.dilutionRequired ? `${r.numberOfDilutedSamples || 0} sample(s)` : "No",
-      Revenue: r.feeApplicable === false ? "Free" : fmtNum(r.revenue || 0)
+      // A voided record's revenue is shown as 0, not its original figure —
+      // matching the analytics exclusion in 14c-analytics-pages-2.js, so an
+      // export can't accidentally double as a "billable tests" sheet that
+      // still counts invalidated work.
+      Revenue: r.voided ? 0 : r.feeApplicable === false ? "Free" : fmtNum(r.revenue || 0),
+      Voided: r.voided ? `${r.wasCorrectionRequest ? `Correction Requested (${r.correctionMode === "correction_only" ? "Correction Only" : "Retest"})` : "Yes"} — ${r.voidReason || ""}` : "No"
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
@@ -2631,7 +3067,19 @@ function TestRecordsTab({
     }),
     right: /*#__PURE__*/React.createElement("div", {
       className: "flex items-center gap-2 flex-wrap no-print"
-    }, /*#__PURE__*/React.createElement("label", {
+    }, voidedCount > 0 && /*#__PURE__*/React.createElement("label", {
+      className: "flex items-center gap-1.5 text-xs cursor-pointer",
+      style: {
+        color: C.muted
+      }
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "checkbox",
+      checked: showVoided,
+      onChange: e => {
+        setShowVoided(e.target.checked);
+        setPage(1);
+      }
+    }), `Show voided (${voidedCount})`), /*#__PURE__*/React.createElement("label", {
       className: "flex items-center gap-1.5 text-xs",
       style: {
         color: C.muted
@@ -2779,13 +3227,31 @@ function TestRecordsTab({
       tone: "warn"
     }, r.numberOfDilutedSamples || 0, " diluted"), r.qcCheck && /*#__PURE__*/React.createElement(Badge, {
       tone: r.qcCheck.pass ? "ok" : "warn"
-    }, "QC ", r.qcCheck.pass ? "Pass" : "Fail"), r.feeApplicable === false ? /*#__PURE__*/React.createElement(Badge, {
+    }, "QC ", r.qcCheck.pass ? "Pass" : "Fail"), (r.attemptNo || 1) > 1 && /*#__PURE__*/React.createElement(Badge, {
+      tone: "info",
+      title: r.retestReason ? `Retest reason: ${r.retestReason}` : undefined
+    }, "Attempt #", r.attemptNo), r.voided ? /*#__PURE__*/React.createElement(Badge, {
+      tone: "danger",
+      title: `${r.wasCorrectionRequest ? `Correction requested (${r.correctionMode === "correction_only" ? "Correction Only — consumption not restored" : "Retest — consumption restored"})` : "Voided"} by ${r.voidedBy || "?"} on ${r.voidedAt ? r.voidedAt.slice(0, 10) : "?"}: ${r.voidReason || ""}`
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: "warning",
+      size: 11
+    }), r.wasCorrectionRequest ? (r.correctionMode === "correction_only" ? " Corrected (no restore)" : " Corrected (retest)") : " Voided") : (r.correctionHistory && r.correctionHistory.length > 0) ? /*#__PURE__*/React.createElement(Badge, {
+      tone: "info",
+      title: `Corrected in-place ${r.correctionHistory.length} time(s). Latest: ${r.correctionHistory[r.correctionHistory.length - 1].reason}`
+    }, "Corrected") : r.feeApplicable === false ? /*#__PURE__*/React.createElement(Badge, {
       tone: "muted"
     }, "Free") : /*#__PURE__*/React.createElement(Badge, {
       tone: "ok"
-    }, "Total Cost: BDT ", fmtNum(liveUnitCost * billedSamplesForRow)), /*#__PURE__*/React.createElement("div", {
+    }, "Total Cost: BDT ", fmtNum(liveUnitCost * billedSamplesForRow)), !r.voided && isLocked(r) && /*#__PURE__*/React.createElement(Badge, {
+      tone: "info",
+      title: "Approved/released — no longer directly editable. Use \"Request Correction\" if a change is genuinely needed."
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: "lock",
+      size: 11
+    }), " Locked"), /*#__PURE__*/React.createElement("div", {
       className: "flex items-center gap-1"
-    }, canEditRecords && /*#__PURE__*/React.createElement(IconButton, {
+    }, canEditRecords && !r.voided && !isLocked(r) && /*#__PURE__*/React.createElement(IconButton, {
       name: "edit",
       color: C.teal,
       title: "Edit full test record",
@@ -2796,11 +3262,11 @@ function TestRecordsTab({
       title: "Archive this completed record",
       disabled: archivingId === r.id,
       onClick: trArchiveGate.guard(() => archiveOne(r))
-    }), canDeleteRecords && /*#__PURE__*/React.createElement(IconButton, {
-      name: "trash",
-      color: C.warn,
-      title: "Delete record",
-      onClick: trDeleteGate.guard(() => setDeleteRecord(r))
+    }), canDeleteRecords && !r.voided && /*#__PURE__*/React.createElement(IconButton, {
+      name: isLocked(r) ? "restore" : "trash",
+      color: isLocked(r) ? C.info : C.warn,
+      title: isLocked(r) ? "Request Correction — approved/released, so this starts a new corrected attempt instead of editing in place" : "Void this record — kept for the audit trail, not permanently deleted",
+      onClick: trDeleteGate.guard(() => setVoidingRecord(r))
     })))), isOpen && /*#__PURE__*/React.createElement("div", {
       className: "px-4 py-3 text-xs grid grid-cols-2 md:grid-cols-3 gap-3",
       style: {
@@ -2854,7 +3320,7 @@ function TestRecordsTab({
         className: "overflow-x-auto"
       }, /*#__PURE__*/React.createElement("table", {
         className: "w-full text-xs border-collapse"
-      }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ["Sample", "Client / Site", "Reference", "Stage"].concat(paramNames).map(h => /*#__PURE__*/React.createElement("th", {
+      }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ["Sample", "Client / Site", "Reference", "Stage", "Fee"].concat(paramNames).map(h => /*#__PURE__*/React.createElement("th", {
         key: h,
         className: "text-left px-2 py-1.5",
         style: { borderBottom: `1px solid ${C.border}`, color: C.muted }
@@ -2891,7 +3357,16 @@ function TestRecordsTab({
         }, stage && /*#__PURE__*/React.createElement("span", {
           className: "px-1.5 py-0.5 rounded",
           style: { background: stageStyle.bg, color: stageStyle.fg }
-        }, testStageLabel(stage))), ...paramNames.map(name => {
+        }, testStageLabel(stage))), /*#__PURE__*/React.createElement("td", {
+          className: "px-2 py-1.5"
+        }, (m.attemptNo || 1) > 1
+          ? /*#__PURE__*/React.createElement("span", {
+              className: "px-1.5 py-0.5 rounded",
+              style: { background: m.feeApplicable === false ? C.infoBg : C.okBg, color: m.feeApplicable === false ? C.muted : C.ok },
+              title: `Attempt #${m.attemptNo}`
+            }, m.feeApplicable === false ? `Waived (retest #${m.attemptNo})` : `Charged (retest #${m.attemptNo})`)
+          : /*#__PURE__*/React.createElement("span", { style: { color: C.muted } }, m.feeApplicable === false ? "Free" : "Billed")
+        ), ...paramNames.map(name => {
           const res = resultByName[name];
           return /*#__PURE__*/React.createElement("td", {
             key: name,
@@ -3061,14 +3536,31 @@ function TestRecordsTab({
         background: C.infoBg,
         color: C.info
       }
-    }, g.gasName, g.amount ? `: ${fmtNum(g.amount)}` : ""))))), deleteRecord?.id === r.id && /*#__PURE__*/React.createElement("div", {
-      className: "px-3 pb-2"
-    }, /*#__PURE__*/React.createElement(ConfirmBar, {
-      text: `Delete this test record (${r.date} · ${r.testTypeName})? Consumed chemical amounts will be returned to their bottles.`,
-      onConfirm: () => doDelete(r),
-      onCancel: () => setDeleteRecord(null)
-    })));
-  })), /*#__PURE__*/React.createElement(Pagination, {
+    }, g.gasName, g.amount ? `: ${fmtNum(g.amount)}` : ""))))));
+  })), voidingRecord && /*#__PURE__*/React.createElement(ReasonRequiredModal, {
+    title: isLocked(voidingRecord) ? `Request Correction — ${voidingRecord.date} · ${voidingRecord.testTypeName}` : `Void Test Record — ${voidingRecord.date} · ${voidingRecord.testTypeName}`,
+    description: isLocked(voidingRecord) ? "This result is approved/released, so it's no longer directly editable. The approved value is retained exactly as it was (for the audit trail) and every sample this record covered goes back to pending testing — enter the corrected result as a new Analytical Batch and it will automatically be tracked as a new, numbered attempt. Choose what should happen to the chemical/gas already consumed on this record:" : "The record stays in the system (not deleted) for the audit trail. Consumed chemical/gas amounts are returned to inventory, and every sample this record covered goes back to pending testing.",
+    confirmLabel: "Void Record",
+    // Request Correction offers a CHOICE (Correction Only vs Retest) instead
+    // of one button — a routine Void keeps the single-button flow it always
+    // had (see ReasonRequiredModal in 02-ui-kit.js: `actions` with 1 entry
+    // falls back to that same single-button layout automatically).
+    actions: isLocked(voidingRecord) ? [{
+      key: "correction_only",
+      label: "Correction Only (no restore)",
+      variant: "outline",
+      detail: "The test itself was done correctly — this is a paperwork/transcription-style fix (e.g. wrong unit, wrong sample code on the report). Chemical/gas already consumed stays consumed; nothing is returned to inventory.",
+      onConfirm: reason => doCorrectionEdit(voidingRecord, reason)
+    }, {
+      key: "retest",
+      label: "Retest (restore consumption)",
+      variant: "danger",
+      detail: "The result itself needs to be redone from scratch. Chemical/gas already consumed on this record is restored to inventory, since a fresh Analytical Batch will consume it again on the new attempt.",
+      onConfirm: reason => doVoid(voidingRecord, reason, "retest")
+    }] : null,
+    onClose: () => setVoidingRecord(null),
+    onConfirm: reason => doVoid(voidingRecord, reason)
+  }), /*#__PURE__*/React.createElement(Pagination, {
     page: pageClamped,
     totalPages: totalPages,
     totalItems: filtered.length,

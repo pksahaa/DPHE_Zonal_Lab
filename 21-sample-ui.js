@@ -329,6 +329,7 @@ function ClientPartFields({
     simple: true,
     type: "date",
     label: "Date",
+    max: todayStr(),
     value: form.letterDate,
     onChange: v => set("letterDate", v)
   }), /*#__PURE__*/React.createElement("div", {
@@ -431,6 +432,13 @@ function submitClientPart(form, references, session) {
 // normal string operators, so no Date parsing is needed. Any blank date is
 // skipped (not everything is required at every entry point).
 function validateRegistrationDates({ letterDate, collectionDate, receivedDate }) {
+  // Future-date guard first — a mistyped year here (e.g. 2026 instead of
+  // 2025) is what used to silently produce records that then don't show up
+  // in month-based reports/filters, which cap at the real current month
+  // (see isFutureDate, 00-core.js).
+  if (isFutureDate(letterDate)) return "Date of Ref / Memo No. can't be in the future.";
+  if (isFutureDate(collectionDate)) return "Collection Date can't be in the future.";
+  if (isFutureDate(receivedDate)) return "Received Date can't be in the future.";
   if (letterDate && collectionDate && letterDate > collectionDate) {
     return "Date of Ref / Memo No. can't be after the Collection Date.";
   }
@@ -716,6 +724,36 @@ function SignatureCapture({
   const [signedName, setSignedName] = React.useState(user?.name || user?.username || "");
   const [attested, setAttested] = React.useState(false);
   const [comment, setComment] = React.useState("");
+  const [err, setErr] = React.useState("");
+  // Step 11 — Double-submission guard, same reasoning as ReasonRequiredModal
+  // (02-ui-kit.js): a rapid double-click on Approve/Reject must not fire
+  // bulkDecideParameter() twice — that would create two approval entries
+  // (two approvalSnapshots, two audit rows) for one decision. Ref, not
+  // state, so the check is synchronous and can't race a second click.
+  const submittedRef = React.useRef(false);
+  const [submitted, setSubmitted] = React.useState(false);
+  function submitOnce(payload) {
+    if (submittedRef.current) return;
+    submittedRef.current = true;
+    setSubmitted(true);
+    onConfirm(payload);
+  }
+  // Reject now REQUIRES a comment (Workflow/Data-Integrity Upgrade Step 8 —
+  // this was previously the one sensitive review/approval decision with an
+  // optional-only reason). Approve keeps comment optional — nothing to
+  // explain when signing off cleanly.
+  function handleReject() {
+    if (!comment.trim()) {
+      setErr("A reason is required to reject — the analyst needs to know what to fix.");
+      return;
+    }
+    submitOnce({
+      decision: "rejected",
+      comment: comment.trim(),
+      signedName,
+      attested
+    });
+  }
   return /*#__PURE__*/React.createElement("div", {
     className: "rounded-lg p-3 mt-2",
     style: {
@@ -729,11 +767,19 @@ function SignatureCapture({
     }
   }, label), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "Comment (optional)",
+    label: "Comment (required to Reject, optional to Approve)",
     value: comment,
-    onChange: setComment,
+    onChange: v => {
+      setComment(v);
+      setErr("");
+    },
     textarea: true
-  }), /*#__PURE__*/React.createElement(TextField, {
+  }), err && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs mt-1",
+    style: {
+      color: C.warn
+    }
+  }, err), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
     label: "Type your full name to sign",
     value: signedName,
@@ -758,18 +804,15 @@ function SignatureCapture({
   }, /*#__PURE__*/React.createElement(Button, {
     size: "sm",
     variant: "outline",
-    onClick: () => onConfirm({
-      decision: "rejected",
-      comment,
-      signedName,
-      attested
-    })
+    disabled: submitted,
+    onClick: handleReject
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "warning",
     size: 12
   }), "Reject"), /*#__PURE__*/React.createElement(Button, {
     size: "sm",
-    onClick: () => onConfirm({
+    disabled: submitted,
+    onClick: () => submitOnce({
       decision: "approved",
       comment,
       signedName,
@@ -792,6 +835,7 @@ function SampleDetail({
   subBatches,
   references,
   setReferences,
+  parameters,
   onClose,
   onUpdate,
   onDelete,
@@ -862,6 +906,14 @@ function SampleDetail({
     setEditing(true);
   }
   function saveEdit() {
+    const dateErr = validateRegistrationDates({
+      collectionDate: editForm.collectionDate,
+      receivedDate: editForm.receivedDate
+    });
+    if (dateErr) {
+      notify?.(dateErr, "warn");
+      return;
+    }
     const next = editSample(sample, editForm, session);
     onUpdate(next);
     notify?.("Registration details updated.", "ok");
@@ -1017,6 +1069,7 @@ function SampleDetail({
     }
   }, "Collection Date", /*#__PURE__*/React.createElement("input", {
     type: "date",
+    max: todayStr(),
     className: "border rounded px-2 py-1 text-xs",
     style: {
       borderColor: C.border
@@ -1033,6 +1086,7 @@ function SampleDetail({
     }
   }, "Received Date", /*#__PURE__*/React.createElement("input", {
     type: "date",
+    max: todayStr(),
     className: "border rounded px-2 py-1 text-xs",
     style: {
       borderColor: C.border
@@ -1266,7 +1320,7 @@ function SampleDetail({
     style: {
       color: a.decision === "approved" ? C.ok : C.warn
     }
-  }, a.step === "review" ? "Review" : "Approval", ": ", a.decision), /*#__PURE__*/React.createElement("span", {
+  }, a.testTypeName ? `${a.testTypeName} — ` : "", a.step === "review" ? "Review" : "Approval", ": ", a.decision), /*#__PURE__*/React.createElement("span", {
     style: {
       color: C.muted
     }
@@ -1279,7 +1333,32 @@ function SampleDetail({
     style: {
       color: C.ink
     }
-  }, a.comment))))), /*#__PURE__*/React.createElement("div", {
+  }, a.comment), a.approvalSnapshot && /*#__PURE__*/React.createElement("div", {
+    className: "mt-1.5 pt-1.5",
+    style: {
+      borderTop: `1px dashed ${C.border}`,
+      color: C.muted
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "font-medium mb-0.5",
+    style: {
+      color: C.ink
+    }
+  }, "Approved value (frozen at approval time)"), a.approvalSnapshot.testTypeName && /*#__PURE__*/React.createElement("div", null, "Test: ", a.approvalSnapshot.testTypeName), a.approvalSnapshot.method && /*#__PURE__*/React.createElement("div", null, "Method: ", a.approvalSnapshot.method), a.approvalSnapshot.date && /*#__PURE__*/React.createElement("div", null, "Test Date: ", a.approvalSnapshot.date), (a.approvalSnapshot.results || []).length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: { color: C.ink }
+  }, a.approvalSnapshot.results.map((r, i) => {
+    const testType = (testTypes || []).find(t => t.id === a.approvalSnapshot.testTypeId);
+    const fallbackParamId = testType?.linkedParameterIds?.[i] || testType?.linkedParameterIds?.[0];
+    const pid = r.paramId || fallbackParamId;
+    const p = (parameters || []).find(x => x.id === pid) || {};
+    const name = r.name || p.name || p.shortName || "Result";
+    const unit = r.unit || p.unit || "";
+    return `${name}: ${r.value ?? "—"}${unit ? ` ${unit}` : ""}`;
+  }).join(" · ")), /*#__PURE__*/React.createElement("div", null, a.approvalSnapshot.equipmentName && `Equipment: ${a.approvalSnapshot.equipmentName} · `, "Tester: ", a.approvalSnapshot.tester || "—", (a.approvalSnapshot.attemptNo || 1) > 1 && ` · Attempt #${a.approvalSnapshot.attemptNo}`), a.approvalSnapshot.qcCheck && /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: a.approvalSnapshot.qcCheck.pass ? C.ok : C.warn
+    }
+  }, "QC (", a.approvalSnapshot.qcCheck.label || a.approvalSnapshot.qcCheck.qcType, "): ", a.approvalSnapshot.qcCheck.pass ? "Pass" : "Fail")))))), /*#__PURE__*/React.createElement("div", {
     className: "space-y-4"
   }, sample.status === "received" && perms.canAssign && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "text-xs font-semibold mb-1",
@@ -1474,7 +1553,7 @@ function SampleEntryCard({ index, row, updateRow, onDuplicate, onRemove, canRemo
     type: "date",
     value: row.collectionDate,
     min: collectionDateFrom || undefined,
-    max: collectionDateTo || undefined,
+    max: collectionDateTo || todayStr(),
     onChange: v => updateRow("collectionDate", v)
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
@@ -1723,6 +1802,7 @@ function BatchRegistrationForm({
     simple: true,
     label: "Collection Date — From",
     type: "date",
+    max: todayStr(),
     value: shared.collectionDateFrom,
     onChange: v => setShared({ ...shared, collectionDateFrom: v, collectionDateTo: shared.collectionDateTo < v ? v : shared.collectionDateTo })
   }), /*#__PURE__*/React.createElement(TextField, {
@@ -1731,11 +1811,13 @@ function BatchRegistrationForm({
     type: "date",
     value: shared.collectionDateTo,
     min: shared.collectionDateFrom || undefined,
+    max: todayStr(),
     onChange: v => setShared({ ...shared, collectionDateTo: v })
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
     label: "Received Date",
     type: "date",
+    max: todayStr(),
     value: shared.receivedDate,
     onChange: v => setShared({ ...shared, receivedDate: v })
   }), /*#__PURE__*/React.createElement(TextField, {
@@ -1922,6 +2004,7 @@ function ImportTestPickerModal({
     simple: true,
     label: "Collection Date — From",
     type: "date",
+    max: todayStr(),
     value: collectionDateFrom,
     onChange: v => { setCollectionDateFrom(v); if (collectionDateTo < v) setCollectionDateTo(v); }
   }), /*#__PURE__*/React.createElement(TextField, {
@@ -1930,6 +2013,7 @@ function ImportTestPickerModal({
     type: "date",
     value: collectionDateTo,
     min: collectionDateFrom || undefined,
+    max: todayStr(),
     onChange: v => setCollectionDateTo(v)
   }), /*#__PURE__*/React.createElement(SelectField, {
     simple: true,
@@ -1980,6 +2064,7 @@ const SAMPLE_TABLE_COLUMNS = [
   { key: "refNo", label: "Ref / Memo No." },
   { key: "trackingNo", label: "Tracking No.", locked: true },
   { key: "clientContact", label: "Client" },
+  { key: "clientType", label: "Client Type" },
   { key: "customerName", label: "Customer Name" },
   { key: "site", label: "Site Name/Village" },
   { key: "district", label: "District" },
@@ -2094,7 +2179,12 @@ function ScrollNavButtons({ onTop, onBottom }) {
 // consumed for it. Reject and Cancel require a cause and, per FORWARD_FLOW,
 // have no path forward again once set.
 const SAMPLE_CUSTODY_ACTIONS = {
-  on_hold: { label: "Hold", verb: "put on hold", reasonRequired: false, icon: "warning" },
+  // reasonRequired: true as of Workflow/Data-Integrity Upgrade Step 8 — Hold
+  // used to be the one custody action here with no reason prompt at all;
+  // now consistent with Reject/Cancel below (and with the per-parameter
+  // Hold in Results Workflow — see holdRequestedTestForSample,
+  // 20-sample-model.js).
+  on_hold: { label: "Hold", verb: "put on hold", reasonRequired: true, icon: "warning" },
   rejected: { label: "Reject", verb: "rejected", reasonRequired: true, icon: "ban" },
   cancelled: { label: "Cancel", verb: "cancelled", reasonRequired: true, icon: "x" }
 };
@@ -2492,6 +2582,7 @@ function SamplesTab({
     let count = 0;
     let skippedUnusable = 0;
     const addedSampleIds = [];
+    const changedSamples = [];
     const updatedSamples = (samples || []).map(s => {
       if (!memberIds.has(s.id)) return s;
       if (["rejected", "cancelled"].includes(s.status)) {
@@ -2502,6 +2593,7 @@ function SamplesTab({
       if (next !== s) {
         count++;
         addedSampleIds.push(s.id);
+        changedSamples.push(next);
       }
       return next;
     });
@@ -2511,7 +2603,16 @@ function SamplesTab({
         skippedUnusable
       };
     }
-    await DataService.bulkSet("samples", updatedSamples);
+    const stamped = await DataService.bulkUpsert("samples", changedSamples);
+    if (Array.isArray(stamped)) {
+      stamped.forEach(st => {
+        const orig = changedSamples.find(u => u.id === st.id);
+        if (orig) {
+          orig._version = st._version;
+          orig.updatedAt = st.updatedAt;
+        }
+      });
+    }
     await setSamples(() => updatedSamples);
     DataService.appendAudit({
       entity: "sample",
@@ -2759,6 +2860,9 @@ function SamplesTab({
       clientContact: /*#__PURE__*/React.createElement("td", {
         className: "px-2 py-1.5 whitespace-nowrap", style: { color: C.ink }
       }, rowRef?.contactPerson || "—"),
+      clientType: /*#__PURE__*/React.createElement("td", {
+        className: "px-2 py-1.5 whitespace-nowrap", style: { color: C.ink }
+      }, rowRef?.clientType || s.clientType || "—"),
       customerName: /*#__PURE__*/React.createElement("td", {
         className: "px-2 py-1.5 whitespace-nowrap", style: { color: C.ink }
       }, s.clientName),
@@ -3207,6 +3311,7 @@ function SamplesTab({
     subBatches: subBatches,
     references: references,
     setReferences: setReferences,
+    parameters: parameters,
     onClose: () => setOpenId(null),
     onUpdate: handleUpdate,
     onDelete: handleDeleteSample,
@@ -3371,6 +3476,13 @@ function SubBatchBuilder({
       notify?.("Select samples first — tick a Reference above to auto-select all of it, or check samples individually — then Create Multiple Batches.", "warn");
       return;
     }
+
+    // Step 10: Batch creation validation
+    const invalid = pool.filter(s => !pendingTestTypeIdsForSample(s, testRecords, subBatches).includes(selectedTestId));
+    if (invalid.length > 0) {
+      notify?.("Cannot create batches: Some selected samples are no longer eligible for this test (they may have been added to another batch).", "warn");
+      return;
+    }
     const maxPossibleBatches = Math.ceil(pool.length / perBatch);
     const numBatches = numBatchesRaw && numBatchesRaw > 0 ? Math.min(numBatchesRaw, maxPossibleBatches) : maxPossibleBatches;
     const test = testTypes.find(t => t.id === selectedTestId);
@@ -3464,6 +3576,18 @@ function SubBatchBuilder({
     }
     if (!selectedTestId || selectedSampleIds.length === 0) {
       notify?.("Pick a test type and at least one sample.", "warn");
+      creatingRef.current = false;
+      return;
+    }
+
+    // Step 10: Batch creation validation
+    const subBatchesForCheck = editingSubBatchId ? subBatches.filter(sb => sb.id !== editingSubBatchId) : subBatches;
+    const invalid = selectedSampleIds.filter(id => {
+      const s = samples.find(x => x.id === id);
+      return !s || !pendingTestTypeIdsForSample(s, testRecords, subBatchesForCheck).includes(selectedTestId);
+    });
+    if (invalid.length > 0) {
+      notify?.("Cannot create batch: Some selected samples are no longer eligible for this test (they may have been added to another batch).", "warn");
       creatingRef.current = false;
       return;
     }

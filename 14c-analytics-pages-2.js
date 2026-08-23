@@ -1595,28 +1595,156 @@ function DailyTrendsPage({
 }
 
 // ==================================== FORECAST REPORTS ====================================
-// Monthly Progress Report — a genuinely new report type (distinct from
-// Monthly Trends analytics), requested as a Custom Report sub-page. Not
-// built yet — this is an honest placeholder rather than a half-working
-// stand-in, so it's clear what still needs to be scoped/built (likely: a
-// month-over-month summary of samples registered/tested/approved/released,
-// printable like the other Custom Report pages).
+// Monthly Progress Report of Water Quality Test — matches the official DPHE
+// Zonal Lab paper format exactly (letterhead, one Exceed/Non-Exceed row-pair
+// per Client Type, broken down by As/Fe/Cl/Others, "During this month" vs
+// cumulative "From July/<FY start>"). The heavy lifting (aggregation +
+// printable HTML) lives in computeMonthlyProgressStats() /
+// buildMonthlyProgressReportHtml() (17-report-generator.js) — this
+// component is just the Month picker, on-screen preview (built from the
+// exact same table-HTML builder the print popup uses, via
+// dangerouslySetInnerHTML, so preview and printout can never drift apart),
+// and the "Generate & Print Report" button that opens it the same way every
+// other official report in this app opens (18-archive-ui.js pattern).
 function MonthlyProgressReportPage({
+  samples,
+  references,
+  testRecords,
+  testTypes,
+  parameters,
   notify
 }) {
-  return /*#__PURE__*/React.createElement(SectionCard, {
-    title: "Monthly Progress Report",
-    icon: /*#__PURE__*/React.createElement(Icon, {
-      name: "chart",
-      size: 15
-    })
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "text-sm p-4 rounded",
-    style: {
-      background: C.infoBg,
-      color: C.info
+  // Lazy-load archived records so purged/archived samples still count
+  // toward the cumulative totals.
+  var [archived, setArchived] = React.useState([]);
+  React.useEffect(function() {
+    DataService.list("archived_records").then(function(rows) {
+      setArchived(rows || []);
+    }).catch(function() {});
+  }, []);
+
+  // Cumulative baseline: from FY 2025-26 onward (July 2025+)
+  var BASELINE_FY_START_YEAR = 2025;
+  var currentMonthKey = mprMonthKey(todayStr());
+  var monthOptions = React.useMemo(function() {
+    return mprMonthOptions(BASELINE_FY_START_YEAR, currentMonthKey);
+  }, [currentMonthKey]);
+  var [selectedMonth, setSelectedMonth] = React.useState(currentMonthKey);
+
+  var [designation, setDesignation] = React.useState("Senior Chemist");
+  var [signLine2, setSignLine2] = React.useState("");
+  var [generating, setGenerating] = React.useState(false);
+
+  var stats = React.useMemo(function() {
+    return computeMonthlyProgressStats({
+      samples: samples,
+      references: references,
+      testRecords: testRecords,
+      testTypes: testTypes,
+      parameters: parameters,
+      archived: archived,
+      selectedMonth: selectedMonth
+    });
+  }, [samples, references, testRecords, testTypes, parameters, archived, selectedMonth]);
+
+  var tableHtml = React.useMemo(function() {
+    return buildMonthlyProgressReportTableHtml(stats);
+  }, [stats]);
+
+  async function generateAndPrint() {
+    if (generating) return;
+    setGenerating(true);
+    try {
+      // Opened synchronously (before the await below) so browsers don't
+      // treat it as an unrequested popup — same two-step dance
+      // 17-report-generator.js/18-archive-ui.js already use.
+      var w = openReportPrintWindow();
+      var labIdentity = await resolveLabIdentityLogos(getLabIdentity());
+      var html = buildMonthlyProgressReportHtml({
+        labIdentity: labIdentity,
+        stats: stats,
+        signatory: { designation: designation, line1: labIdentity.labName || "", line2: signLine2 }
+      });
+      finishReportPrintWindow(w, html);
+    } catch (e) {
+      notify && notify("Could not generate the report: " + (e && e.message ? e.message : e), "error");
+    } finally {
+      setGenerating(false);
     }
-  }, "This report type isn't built yet — it needs its own design (likely a month-by-month summary of samples registered / tested / approved / released, printable like the other Custom Report pages). Let me know what fields and layout you want and I'll build it next."));
+  }
+
+  var exportRows = stats.rows.map(function(row) {
+    var r = {};
+    r["Client Type"] = row.clientType;
+    r["Samples — During " + stats.monthLabel] = row.duringMonth.samples;
+    r["Samples — " + stats.fyStartLabel] = row.cumulative.samples;
+    MPR_CATEGORIES.forEach(function(cat) {
+      r[cat + " Exceed — During Month"] = row.duringMonth.byCat[cat].exceed;
+      r[cat + " Non-Exceed — During Month"] = row.duringMonth.byCat[cat].nonExceed;
+    });
+    r["Total Parameters — During " + stats.monthLabel] = row.duringMonth.total;
+    r["Total Parameters — " + stats.fyStartLabel] = row.cumulative.total;
+    r["Revenue (TK.) — During Month"] = row.duringMonth.revenue;
+    r["Revenue (TK.) — " + stats.fyStartLabel] = row.cumulative.revenue;
+    return r;
+  });
+
+  return /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement(SectionCard, {
+      title: "Monthly Progress Report of Water Quality Test",
+      icon: /*#__PURE__*/React.createElement(Icon, { name: "chart", size: 15 }),
+      right: /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-2 no-print flex-wrap" },
+        /*#__PURE__*/React.createElement("label", { className: "text-xs", style: { color: C.muted } }, "Month:"),
+        /*#__PURE__*/React.createElement("select", {
+          className: "border rounded px-2 py-1 text-xs",
+          style: { borderColor: C.border },
+          value: selectedMonth,
+          onChange: function(e) { setSelectedMonth(e.target.value); }
+        }, monthOptions.map(function(mk) {
+          return /*#__PURE__*/React.createElement("option", { key: mk, value: mk }, mprMonthLabel(mk));
+        })),
+        /*#__PURE__*/React.createElement(Button, {
+          size: "sm",
+          onClick: generateAndPrint,
+          disabled: generating
+        }, /*#__PURE__*/React.createElement(Icon, { name: "printer", size: 13 }), generating ? "Preparing…" : "Generate & Print Report")
+      )
+    },
+      /*#__PURE__*/React.createElement("div", { className: "text-xs mb-3 p-2 rounded no-print", style: { background: C.infoBg, color: C.info } },
+        "\"During this month\" shows data for ", /*#__PURE__*/React.createElement("strong", null, stats.monthLabel), ". \"", stats.fyStartLabel, "\" is cumulative since the start of FY ", stats.fiscalYear, " through the end of the selected month. Every released, valued parameter counts toward the Total; it's judged Exceed vs Non-Exceed against that Parameter's Reference Limit Min/Max (Test Configuration \u203a Parameters \u203a Limits) when configured, and counted as Non-Exceed by default when no limit is set (nothing to have exceeded). Only results with nothing entered yet are excluded."
+      ),
+      /*#__PURE__*/React.createElement("div", {
+        className: "grid gap-2 mb-3 no-print",
+        style: { gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }
+      },
+        /*#__PURE__*/React.createElement(TextField, {
+          simple: true,
+          label: "Signatory Designation",
+          value: designation,
+          onChange: function(v) { setDesignation(v); }
+        }),
+        /*#__PURE__*/React.createElement(TextField, {
+          simple: true,
+          label: "Signatory Address Line (optional)",
+          value: signLine2,
+          onChange: function(v) { setSignLine2(v); },
+          placeholder: "e.g. Radha Ballob, Rangpur."
+        })
+      ),
+      /*#__PURE__*/React.createElement("div", {
+        style: { overflowX: "auto" },
+        dangerouslySetInnerHTML: { __html: tableHtml }
+      })
+    ),
+    /*#__PURE__*/React.createElement("div", { className: "mt-4 no-print" },
+      /*#__PURE__*/React.createElement(DataTable, {
+        exportFilename: "monthly_progress_report_" + selectedMonth,
+        columns: Object.keys(exportRows[0] || { "Client Type": "" }).map(function(k) { return { key: k, label: k }; }),
+        rows: exportRows,
+        noDataText: "No data to export."
+      })
+    )
+  );
 }
 function ForecastPage({
   filteredRecords
@@ -1978,7 +2106,8 @@ function ReportsTab({
   session,
   permissionMatrix,
   notify,
-  goToSample
+  goToSample,
+  parameters
 }) {
   const [filters, setFilters] = React.useState(DEFAULT_FILTERS);
   const activePage = ALL_REPORT_PAGES.some(p => p.k === reportTab) ? reportTab : "executive";
@@ -2009,6 +2138,11 @@ function ReportsTab({
     return false;
   }, [filters.suppliers, equipment, chemicals]);
   const filteredRecords = React.useMemo(() => testRecords.filter(r => {
+    // Voided records (Void/Invalidate — see 13-testrecords-ui.js) are kept
+    // in the database for audit purposes but must never count toward
+    // revenue, consumption, or performance analytics — the test never
+    // produced a valid result, so it shouldn't inflate anyone's numbers.
+    if (r.voided) return false;
     if (!inDateRange(r.date)) return false;
     if (filters.technicians.length && !filters.technicians.includes(r.tester)) return false;
     if (filters.equipments.length && !filters.equipments.includes(r.equipmentName)) return false;
@@ -2064,7 +2198,8 @@ function ReportsTab({
     session,
     permissionMatrix,
     goToSample,
-    notify
+    notify,
+    parameters
   };
   function printReport() {
     window.print();

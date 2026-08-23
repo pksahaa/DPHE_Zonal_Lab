@@ -19,12 +19,21 @@
 // (sample, testTypeId) pair instead. Kept here only in case older code
 // elsewhere still imports it; do not use for new eligibility checks.
 const SUBBATCH_ELIGIBLE_STATUSES = ["registered", "received", "assigned", "in_progress"];
+// Generates a human-friendly "Analytical Batch No" like SB-Tracking-001, -002, -003 …
+// The counter is global (not year-scoped) so the number always grows and is
+// unambiguous even across fiscal-year boundaries.
 function generateSubBatchLabel(existingSubBatches) {
-  const year = todayStr().slice(0, 4);
-  const nums = (existingSubBatches || []).filter(sb => (sb.label || "").startsWith(`SB-${year}-`)).map(sb => Number(sb.label.split("-")[2]) || 0);
+  const all = (existingSubBatches || []);
+  // Match both the new SB-Tracking-NNN format and the legacy SB-YEAR-NNNN format
+  const nums = all.map(sb => {
+    const m = (sb.label || "").match(/SB-Tracking-(\d+)$/i)
+           || (sb.label || "").match(/SB-\d{4}-(\d+)$/);
+    return m ? (Number(m[1]) || 0) : 0;
+  });
   const next = (nums.length ? Math.max(...nums) : 0) + 1;
-  return `SB-${year}-${String(next).padStart(4, "0")}`;
+  return `SB-Tracking-${String(next).padStart(3, "0")}`;
 }
+
 function createSubBatch(fields, existingSubBatches) {
   return {
     id: uid("sb"),
@@ -45,24 +54,54 @@ function createSubBatch(fields, existingSubBatches) {
 // single Add Test Record entry (sampleId set directly) or from inside a
 // Sub-Batch's memberResults (memberSampleIds + memberResults).
 function getSampleResultForTest(sample, testTypeId, testRecords) {
-  const direct = (testRecords || []).find(r => r.testTypeId === testTypeId && r.sampleId === sample.id && !r.voided);
-  if (direct) return {
-    results: direct.results || [],
-    recordId: direct.id,
-    date: direct.date,
-    source: "single"
-  };
-  const run = (testRecords || []).find(r => r.testTypeId === testTypeId && Array.isArray(r.memberSampleIds) && r.memberSampleIds.includes(sample.id));
-  if (run) {
-    const member = (run.memberResults || []).find(m => m.sampleId === sample.id && !m.voided);
-    if (member) return {
+  // BUGFIX (see test-retest-attempts.js): must scan EVERY matching test
+  // record, not stop at the first one found. A sample that was Returned to
+  // Analyst and retested in a NEW Analytical Batch ends up referenced by
+  // TWO records for the same testTypeId — the old one (this sample's own
+  // member entry voided, but the record itself still active for its OTHER
+  // members) and the new one (this sample's entry valid). The old record
+  // is very often earlier in the array (created first), so a plain
+  // `.find()` that stops at the first record containing this sample would
+  // land on the OLD, voided-for-this-sample record and incorrectly report
+  // "no result" — even though the retest's result exists in a later
+  // record. That made retested samples wrongly look un-tested again
+  // (reappearing in Add Test Record / pending queues via
+  // isTestDoneForSample below) with no result value shown, especially
+  // once the old batch got released after the retest batch. Collecting
+  // every valid (non-voided, for THIS sample) candidate and picking the
+  // most recent attempt avoids that entirely.
+  const candidates = [];
+  (testRecords || []).forEach(r => {
+    if (r.testTypeId !== testTypeId) return;
+    if (r.sampleId === sample.id) {
+      if (!r.voided) candidates.push({
+        results: r.results || [],
+        recordId: r.id,
+        date: r.date,
+        source: "single",
+        attemptNo: r.attemptNo || 1
+      });
+      return;
+    }
+    if (r.voided || !Array.isArray(r.memberSampleIds) || !r.memberSampleIds.includes(sample.id)) return;
+    const member = (r.memberResults || []).find(m => m.sampleId === sample.id && !m.voided);
+    if (member) candidates.push({
       results: member.results || [],
-      recordId: run.id,
-      date: run.date,
-      source: "subBatch"
-    };
-  }
-  return null;
+      recordId: r.id,
+      date: r.date,
+      source: "subBatch",
+      attemptNo: member.attemptNo || r.attemptNo || 1
+    });
+  });
+  if (!candidates.length) return null;
+  // Only one candidate should normally exist at a time (voiding retires
+  // the previous attempt) — but if more than one is ever found, the most
+  // recent attempt (highest attemptNo, tie-broken by date) wins rather than
+  // whichever happened to be inserted first.
+  candidates.sort((a, b) => (b.attemptNo || 0) - (a.attemptNo || 0) || new Date(b.date || 0) - new Date(a.date || 0));
+  const best = candidates[0];
+  delete best.attemptNo;
+  return best;
 }
 
 // "Return to Analyst" (Results Workflow) needs this specific sample's result
@@ -87,6 +126,48 @@ function voidSampleResultForTest(testRecords, sample, testTypeId) {
     if (r.sampleId === sample.id) return { ...r, voided: true };
     return r;
   });
+}
+
+// ============================================================================
+// RETEST/ATTEMPT HISTORY (Workflow/Data-Integrity Upgrade Step 4) — figures
+// out this sample's attempt number for a given test type by walking
+// sample.returnEvents[] (populated by returnRequestedTestToAnalyst — see
+// 20-sample-model.js — for BOTH the Return to Analyst action and Void/
+// Invalidate, since Void reuses that same function). The most recent return
+// event for this testTypeId points at the Test Record it voided
+// (testRecordId); that record's own attemptNo (or its per-member attemptNo,
+// for a Sub-Batch/batch record) tells us what number THIS new attempt
+// becomes. A sample with no such event is always attempt #1 — no attempt
+// tracking to do, no reason required.
+//
+// NOTE: attempt numbers are never re-derived from testRecords alone —
+// returnEvents on the sample is the source of truth for "was there a prior
+// attempt". This keeps a voided/superseded Test Record fully inert for
+// every OTHER purpose (reports, eligibility — see getSampleResultForTest
+// above) while still being reachable here specifically for its attempt
+// history.
+// ============================================================================
+function computeAttemptInfo(sample, testTypeId, testRecords) {
+  const events = (sample.returnEvents || []).filter(e => e.testTypeId === testTypeId && e.testRecordId);
+  if (!events.length) return {
+    attemptNo: 1,
+    previousTestRecordId: null
+  };
+  const lastEvent = events[events.length - 1];
+  const prevRecord = (testRecords || []).find(r => r.id === lastEvent.testRecordId);
+  let prevAttemptNo = 1;
+  if (prevRecord) {
+    if (Array.isArray(prevRecord.memberResults)) {
+      const prevMember = prevRecord.memberResults.find(m => m.sampleId === sample.id);
+      prevAttemptNo = prevMember?.attemptNo || prevRecord.attemptNo || 1;
+    } else {
+      prevAttemptNo = prevRecord.attemptNo || 1;
+    }
+  }
+  return {
+    attemptNo: prevAttemptNo + 1,
+    previousTestRecordId: lastEvent.testRecordId
+  };
 }
 
 // Which Analytical Batch (or "Individual / No Batch") a (sample, testTypeId)
@@ -334,16 +415,19 @@ function reviewSubBatchApprove(sb, samples, setSamples, setSubBatches, session, 
   });
   
   if (updatedList.length > 0) {
-    updatedList.forEach(updated => {
-      setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), null);
-    });
-    // bulkUpsert only touches these rows — no re-fetching the whole
-    // samples table first (slow once it's huge) and no race if another
-    // bulk action lands on the backend around the same time (see
-    // bulkApproveSubBatch/bulkReleaseSubBatch below and setSamples() in
-    // 99-app.js for the full story on why the old list-then-replace
-    // pattern could silently drop a concurrent change).
-    DataService.bulkUpsert("samples", updatedList).catch(err => {
+    // Single state update for all samples
+    setSamples(prev => {
+      const map = new Map(updatedList.map(u => [u.id, u]));
+      return prev.map(s => map.get(s.id) || s);
+    }, null);
+    DataService.submitApprovalDecision(updatedList, { step: "review" }).then(stamped => {
+      if (Array.isArray(stamped)) {
+        stamped.forEach(st => {
+          const orig = updatedList.find(u => u.id === st.id);
+          if (orig) { orig._version = st._version; orig.updatedAt = st.updatedAt; }
+        });
+      }
+    }).catch(err => {
       console.error("Failed to persist samples to backend:", err);
       notify?.("Changes applied locally but backend save failed — reload to re-check.", "warn");
     });
@@ -351,8 +435,6 @@ function reviewSubBatchApprove(sb, samples, setSamples, setSubBatches, session, 
       entity: "subBatch",
       entityId: sb.id,
       action: "review",
-      user: session.username,
-      role: session.role,
       note: `Marked ${updatedList.length} sample(s) reviewed for ${sb.testTypeName}.`
     });
   }
@@ -363,35 +445,75 @@ function reviewSubBatchApprove(sb, samples, setSamples, setSubBatches, session, 
   } : x));
   notify?.(`${sb.label} marked reviewed — ${(sb.memberSampleIds || []).length} sample(s) ready for final approval on ${sb.testTypeName}.`, "ok");
 }
-function reviewSubBatchReturn(sb, samples, setSamples, setSubBatches, session, notify, note) {
+// NOTE: not currently wired into any screen — the live "Return to Analyst"
+// path is the per-row action in 22-results-workflow-ui.js's
+// RowHoldReturnActions. Kept here (and kept CORRECT/up to date, per the
+// "one authoritative implementation" rule — see returnRequestedTestToAnalyst
+// in 20-sample-model.js) in case a future "bulk return this whole
+// Analytical Batch" UI wants it, so it isn't a second, silently-diverging
+// copy of the same business logic waiting to bite whoever eventually wires
+// it up. `reason` is REQUIRED, same as the per-row action.
+function reviewSubBatchReturn(sb, samples, setSamples, setSubBatches, testRecords, setTestRecords, session, notify, reason) {
   if (!setSamples || !sb) return;
-  const finalNote = (note || "").trim() || `Returned to analyst for ${sb.testTypeName}.`;
+  const trimmedReason = (reason || "").trim();
+  if (!trimmedReason) {
+    notify?.("A reason is required to return a batch to the analyst.", "warn");
+    return;
+  }
   const updatedList = [];
+  const auditEntries = [];
+  let workingRecords = testRecords;
   (sb.memberSampleIds || []).forEach(id => {
     const member = (samples || []).find(s => s.id === id);
     if (!member) return;
     const rt = (member.requestedTests || []).find(r => r.testTypeId === sb.testTypeId);
     if (!rt || !["results_entered", "under_review"].includes(rt.status)) return;
-    const updated = setRequestedTestStatus(member, sb.testTypeId, "in_progress", session, finalNote);
-    updatedList.push(updated);
-  });
-  
-  if (updatedList.length > 0) {
-    updatedList.forEach(updated => {
-      setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), null);
+    const resultInfo = getSampleResultForTest(member, sb.testTypeId, workingRecords);
+    workingRecords = voidSampleResultForTest(workingRecords, member, sb.testTypeId);
+    const updated = returnRequestedTestToAnalyst(member, sb.testTypeId, sb.testTypeName, session, trimmedReason, {
+      previousResult: resultInfo?.results ?? null,
+      testRecordId: resultInfo?.recordId ?? null
     });
-    DataService.bulkUpsert("samples", updatedList).catch(err => {
+    if (updated === member) return; // shouldn't happen (reason already validated above), but never persist a no-op
+    updatedList.push(updated);
+    auditEntries.push({
+      eventType: "RESULT_RETURNED",
+      entityType: "requestedTest",
+      entityId: `${member.id}:${sb.testTypeId}`,
+      sampleId: member.id,
+      sampleCode: member.sampleCode,
+      testTypeId: sb.testTypeId,
+      testTypeName: sb.testTypeName,
+      testRecordId: resultInfo?.recordId ?? null,
+      performedBy: session?.name,
+      role: session?.role,
+      reason: trimmedReason,
+      previousValue: rt.status,
+      newValue: "in_progress",
+      entity: "sample",
+      action: "return_to_analyst",
+      note: `Returned to analyst (via Sub-Batch "${sb.label}") for ${sb.testTypeName}: ${trimmedReason}`
+    });
+  });
+  if (workingRecords !== testRecords) setTestRecords?.(workingRecords);
+  if (updatedList.length > 0) {
+    // Single state update for all samples
+    setSamples(prev => {
+      const map = new Map(updatedList.map(u => [u.id, u]));
+      return prev.map(s => map.get(s.id) || s);
+    }, null);
+    DataService.returnToAnalyst(updatedList).then(stamped => {
+      if (Array.isArray(stamped)) {
+        stamped.forEach(st => {
+          const orig = updatedList.find(u => u.id === st.id);
+          if (orig) { orig._version = st._version; orig.updatedAt = st.updatedAt; }
+        });
+      }
+    }).catch(err => {
       console.error("Failed to persist samples to backend:", err);
       notify?.("Changes applied locally but backend save failed — reload to re-check.", "warn");
     });
-    DataService.appendAudit({
-      entity: "subBatch",
-      entityId: sb.id,
-      action: "return_to_analyst",
-      user: session.username,
-      role: session.role,
-      note: `Returned ${updatedList.length} sample(s) to analyst for ${sb.testTypeName}.`
-    });
+    DataService.bulkAppendAudit(auditEntries).catch(err => console.error("Audit log write failed (non-fatal):", err));
   }
 
   setSubBatches(prev => prev.map(x => x.id === sb.id ? {
@@ -417,11 +539,20 @@ function bulkApproveSubBatch(sb, samples, setSamples, setSubBatches, session, no
     return;
   }
   if (result.updated.length > 0) {
-    result.updated.forEach(updated => {
-      setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), null);
-    });
+    // Single state update for all samples
+    setSamples(prev => {
+      const map = new Map(result.updated.map(u => [u.id, u]));
+      return prev.map(s => map.get(s.id) || s);
+    }, null);
 
-    DataService.bulkUpsert("samples", result.updated).catch(err => {
+    DataService.submitApprovalDecision(result.updated, { step: "approve" }).then(stamped => {
+      if (Array.isArray(stamped)) {
+        stamped.forEach(st => {
+          const orig = result.updated.find(u => u.id === st.id);
+          if (orig) { orig._version = st._version; orig.updatedAt = st.updatedAt; }
+        });
+      }
+    }).catch(err => {
       console.error("Failed to persist samples to backend:", err);
       notify?.("Changes applied locally but backend save failed — reload to re-check.", "warn");
     });
@@ -430,8 +561,6 @@ function bulkApproveSubBatch(sb, samples, setSamples, setSubBatches, session, no
       entity: "subBatch",
       entityId: sb.id,
       action: signaturePayload.decision === "approved" ? "approve" : "reject",
-      user: session.username,
-      role: session.role,
       note: `${result.updated.length} sample(s) ${actionDesc} for ${sb.testTypeName}.`
     });
   }
@@ -466,11 +595,20 @@ function bulkReleaseSubBatch(sb, samples, setSamples, setSubBatches, session, no
   const members = (sb.memberSampleIds || []).map(id => (samples || []).find(s => s.id === id)).filter(Boolean);
   const result = bulkReleaseParameter(members, sb.testTypeId, sb.testTypeName, session, note);
   if (result.updated.length > 0) {
-    result.updated.forEach(updated => {
-      setSamples(prev => prev.map(s => s.id === updated.id ? updated : s), null);
-    });
+    // Single state update for all samples
+    setSamples(prev => {
+      const map = new Map(result.updated.map(u => [u.id, u]));
+      return prev.map(s => map.get(s.id) || s);
+    }, null);
 
-    DataService.bulkUpsert("samples", result.updated).catch(err => {
+    DataService.releaseResult(result.updated).then(stamped => {
+      if (Array.isArray(stamped)) {
+        stamped.forEach(st => {
+          const orig = result.updated.find(u => u.id === st.id);
+          if (orig) { orig._version = st._version; orig.updatedAt = st.updatedAt; }
+        });
+      }
+    }).catch(err => {
       console.error("Failed to persist samples to backend:", err);
       notify?.("Changes applied locally but backend save failed — reload to re-check.", "warn");
     });
@@ -478,8 +616,6 @@ function bulkReleaseSubBatch(sb, samples, setSamples, setSubBatches, session, no
       entity: "subBatch",
       entityId: sb.id,
       action: "release",
-      user: session.username,
-      role: session.role,
       note: `Released ${result.updated.length} sample(s) for ${sb.testTypeName}.`
     });
   }

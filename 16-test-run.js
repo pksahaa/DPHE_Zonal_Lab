@@ -63,6 +63,14 @@ function TestRunTab({
   const qcEvaluation = matchedQcRule && qcMeasuredValue !== "" ? evaluateQcRule(matchedQcRule, qcMeasuredValue) : null;
   const eligibleSamples = selectedTestId ? samples.filter(s => RUN_ELIGIBLE_STATUSES.includes(s.status) && s.requestedTests.some(rt => rt.testTypeId === selectedTestId)) : [];
   const hasQc = !!(matchedQcRule && qcMeasuredValue !== "");
+  // Earliest a Test Date can legitimately be — same rule as Add Test Record
+  // (13-testrecords-ui.js): a sample can't be tested before it was received/
+  // collected. Latest of all selected members' Received/Collection Date.
+  const minTestDate = selectedSampleIds.reduce((min, id) => {
+    const s = samples.find(x => x.id === id);
+    const d = s && (s.receivedDate || s.collectionDate);
+    return d && (!min || d > min) ? d : min;
+  }, null);
   const qcFrequencyWarning = selectedTest?.qcFrequency && selectedSampleIds.length > selectedTest.qcFrequency && !hasQc ? `This run has ${selectedSampleIds.length} samples — more than the QC frequency of ${selectedTest.qcFrequency} set for this method. Add a QC check below before saving.` : null;
   function toggleMember(id) {
     setSelectedSampleIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -101,6 +109,25 @@ function TestRunTab({
     setSubmitAttempted(true);
     if (!selectedTestId || !tester.trim() || selectedSampleIds.length === 0) {
       notify("Select a test type, enter a tester name, and pick at least one sample.", "warn");
+      return;
+    }
+    if (isFutureDate(testDate)) {
+      notify("Test Date can't be in the future.", "warn");
+      return;
+    }
+    if (minTestDate && testDate < minTestDate) {
+      notify(`Test Date can't be before ${minTestDate} — that's when the latest selected sample was received/collected.`, "warn");
+      return;
+    }
+
+    // Step 10: Prevent duplicate test attempts (Validation)
+    const duplicates = selectedSampleIds.filter(id => {
+      const sample = samples.find(s => s.id === id);
+      return sample && isTestDoneForSample(sample, selectedTestId, testRecords);
+    });
+    if (duplicates.length > 0) {
+      const dupCodes = duplicates.map(id => samples.find(s => s.id === id)?.sampleCode).join(", ");
+      notify(`Cannot create test run: The following samples already have an active test record for this test type: ${dupCodes}`, "warn");
       return;
     }
     const memberResults = selectedSampleIds.map(sampleId => {
@@ -161,15 +188,22 @@ function TestRunTab({
         });
       }
       if (updatedMembers.length) {
-        // Update local state without triggering per-item server calls
-        updatedMembers.forEach(u => {
-          setSamples(prev => prev.map(s => s.id === u.id ? u : s), null);
-        });
+        // Single state update for all samples
+        setSamples(prev => {
+          const map = new Map(updatedMembers.map(u => [u.id, u]));
+          return prev.map(s => map.get(s.id) || s);
+        }, null);
         
         // Persist all changes in one bulkUpsert call — only these rows,
         // no full-table re-fetch/replace, so it's fast even with a huge
         // samples table and can't race with another bulk action.
-        DataService.bulkUpsert("samples", updatedMembers).then(() => {
+        DataService.bulkUpsert("samples", updatedMembers).then(stamped => {
+          if (Array.isArray(stamped)) {
+            stamped.forEach(st => {
+              const orig = updatedMembers.find(u => u.id === st.id);
+              if (orig) { orig._version = st._version; orig.updatedAt = st.updatedAt; }
+            });
+          }
           // One audit entry summarizing the batch action
           return DataService.appendAudit({
             entity: "sample",
@@ -258,8 +292,11 @@ function TestRunTab({
     simple: true,
     label: "Test Date",
     type: "date",
+    max: todayStr(),
+    min: minTestDate || undefined,
     value: testDate,
-    onChange: v => setTestDate(v)
+    onChange: v => setTestDate(v),
+    error: submitAttempted && isFutureDate(testDate) ? "Test Date can't be in the future." : submitAttempted && minTestDate && testDate < minTestDate ? `Can't be before ${minTestDate}.` : undefined
   }), /*#__PURE__*/React.createElement(SelectField, {
     simple: true,
     label: "Equipment Used",

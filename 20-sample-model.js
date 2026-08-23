@@ -135,6 +135,74 @@ function rollupSampleStatus(sample) {
   return RANK_TO_SAMPLE_STATUS[Math.min(...ranks)];
 }
 
+// ============================================================================
+// CENTRALIZED PARAMETER/TEST STATUS TRANSITION VALIDATION — a single
+// authoritative answer to "is currentStatus → nextStatus a legal move",
+// used by setRequestedTestStatus() below (the one function that actually
+// writes rt.status — see its own comment) so every caller anywhere in the
+// app is validated the same way, instead of each call site (Analytical
+// Batch save, Return to Analyst, Sub-Batch review, Final Approve, Release,
+// undo-delete...) re-deriving its own ad-hoc precondition check.
+//
+// Two kinds of legal moves:
+//   1) Exactly one rank forward through the normal pipeline (using the
+//      existing TEST_STATUS_RANK ordering above) — pending → in_progress →
+//      results_entered → under_review → approved → released. No skipping
+//      ranks (e.g. pending → approved is never legal, no matter who's
+//      asking).
+//   2) A short, explicit list of backward "reset" moves — each one an
+//      already-existing, already-audited business action in this app
+//      (Return to Analyst, an Approval decision of "rejected", or undoing
+//      an accidental Analytical Batch before/after a Test Record was ever
+//      saved for it). Anything not on this list is blocked.
+// "released" has no FORWARD move (nothing comes after it in the normal
+// pipeline) — but it does have one backward move, straight to
+// "results_entered": editing/re-saving an already-released Test Record
+// resets it for review again, which is pre-existing behavior this table
+// has to allow for (see TEST_STATUS_BACKWARD_TRANSITIONS below). A proper
+// Void/Invalidate action (Phase 1B item #6, still to come) will be its own
+// explicit, reason-required action — this is only the narrow "you edited
+// it, so it needs re-review" case that already goes through this exact
+// function today.
+// ============================================================================
+const TEST_STATUS_BACKWARD_TRANSITIONS = {
+  in_progress: ["pending"],
+  // Analytical Batch deleted before its Test Record was ever saved.
+  results_entered: ["in_progress"],
+  // Return to Analyst (from Awaiting Review), or an orphaned batch's undo.
+  under_review: ["in_progress", "results_entered"],
+  // Return to Analyst (from Awaiting Approval), Approval decision = "rejected",
+  // OR editing/re-saving an already-reviewed Test Record — see the "editing
+  // an existing record resets it to Awaiting Review" note just below.
+  approved: ["in_progress", "results_entered"],
+  // Return to Analyst (from the Approved/Release queue), or editing an
+  // already-approved Test Record — same reset-on-edit reasoning as above.
+  released: ["results_entered"]
+  // Editing an already-released Test Record resets it to Awaiting Review —
+  // this was ALREADY existing, working behavior (see handleSaveInner's
+  // "if (selectedSubBatch...)" branch in 13-testrecords-ui.js: editing a
+  // record repopulates selectedSubBatchId from editingRecord.subBatchId, so
+  // Save/"Update Test Record" runs the exact same setRequestedTestStatus(...,
+  // "results_entered", ...) call a brand-new record does, REGARDLESS of how
+  // far the parameter had already progressed) that this table's first
+  // version missed — "released" was wrongly modeled as a dead end here,
+  // which silently blocked every edit-and-reset of a released record (the
+  // parameter stayed frozen at "released" instead of resetting, while the
+  // Sub-Batch's own status still flipped to "tested" underneath it — the
+  // mismatch that looked like a batch "auto-releasing" itself on save).
+  // A real Void/Invalidate action (later step) is still a SEPARATE thing
+  // from this edit-reset — this isn't reopening "released" for the normal
+  // pipeline, only for the one case that already goes through this exact
+  // function today.
+};
+function canTransitionTestStatus(currentStatus, nextStatus) {
+  if (currentStatus === nextStatus) return true; // no-op — setRequestedTestStatus() already short-circuits this before it ever reaches here, kept as a safe default for any other caller.
+  const curRank = TEST_STATUS_RANK[currentStatus];
+  const nextRank = TEST_STATUS_RANK[nextStatus];
+  if (curRank != null && nextRank != null && nextRank === curRank + 1) return true;
+  return (TEST_STATUS_BACKWARD_TRANSITIONS[currentStatus] || []).includes(nextStatus);
+}
+
 // Pure updater: move ONE requestedTest to a new status, then re-sync the
 // whole-sample `status` field as a rollup. Every place that changes a
 // parameter's status (test-record save, Sub-Batch review, single-parameter
@@ -143,6 +211,15 @@ function rollupSampleStatus(sample) {
 function setRequestedTestStatus(sample, testTypeId, newStatus, user, note) {
   const target = (sample.requestedTests || []).find(rt => rt.testTypeId === testTypeId);
   if (!target || target.status === newStatus) return sample; // no-op, nothing to log
+  if (!canTransitionTestStatus(target.status, newStatus)) {
+    // Fails safe — returns the sample UNCHANGED rather than half-applying
+    // an illegal jump. This should never fire from the app's own UI (every
+    // real call site only ever asks for a move that's already in the
+    // allowed table above); if it does, that's a bug in the calling code
+    // to fix, not a transition to force through.
+    console.error(`Blocked invalid parameter-status transition on sample ${sample.sampleCode || sample.id} (${target.testTypeName || testTypeId}): "${target.status}" → "${newStatus}" is not an allowed move. See TEST_STATUS_BACKWARD_TRANSITIONS/TEST_STATUS_RANK in 20-sample-model.js.`);
+    return sample;
+  }
   const nextRequestedTests = sample.requestedTests.map(rt => rt.testTypeId === testTypeId ? {
     ...rt,
     status: newStatus
@@ -235,23 +312,45 @@ function syncRequestedTestsToStage(sample, fromStatuses, toStatus, user, note) {
 //                   currently carries it), the sample becomes eligible for
 //                   a brand-new Analytical Batch again — i.e. it behaves
 //                   exactly like a newly registered sample, per parameter.
+//                   A REASON IS REQUIRED (Workflow/Data-Integrity Upgrade
+//                   Step 2) — this is a destructive-ish action (it voids a
+//                   real result) so it needs to say why. The reason, who
+//                   did it, when, the previous result, and which Test
+//                   Record it came from are all kept on the sample itself
+//                   in `returnEvents[]` (same pattern as `approvals[]`
+//                   below) so the full history travels with the record —
+//                   not just in the separate auditLog collection, which
+//                   the caller (see RowHoldReturnActions in
+//                   22-results-workflow-ui.js) additionally writes a
+//                   structured entry to.
 // ============================================================================
 function isTestOnHold(sample, testTypeId) {
   const rt = (sample.requestedTests || []).find(r => r.testTypeId === testTypeId);
   return !!(rt && rt.onHold);
 }
+// `note` is REQUIRED as of Workflow/Data-Integrity Upgrade Step 8 — same
+// fail-safe contract as returnRequestedTestToAnalyst below: an empty/
+// whitespace-only reason is rejected, logged, and the sample is returned
+// UNCHANGED rather than half-applying the hold. The UI-level gate lives in
+// RowHoldReturnActions' ReasonRequiredModal (22-results-workflow-ui.js);
+// this is the model-layer backstop so the rule holds regardless of caller.
 function holdRequestedTestForSample(sample, testTypeId, testTypeName, user, note) {
   const rt = (sample.requestedTests || []).find(r => r.testTypeId === testTypeId);
   if (!rt) return sample;
+  const trimmedNote = (note || "").trim();
+  if (!trimmedNote) {
+    console.error(`Blocked On Hold for "${testTypeName}" on sample ${sample.sampleCode || sample.id}: a reason is required and none was given.`);
+    return sample;
+  }
   const flagged = {
     ...sample,
     requestedTests: sample.requestedTests.map(r => r.testTypeId === testTypeId ? { ...r, onHold: true } : r)
   };
-  const stepped = rt.status === "results_entered" ? flagged : setRequestedTestStatus(flagged, testTypeId, "results_entered", user, note);
+  const stepped = rt.status === "results_entered" ? flagged : setRequestedTestStatus(flagged, testTypeId, "results_entered", user, trimmedNote);
   return addCustodyEvent(stepped, {
     action: `On Hold: ${testTypeName}`,
     toUser: user?.name,
-    notes: note || `${testTypeName} put on hold pending resolution.`
+    notes: `${testTypeName} put on hold: ${trimmedNote}`
   }, user);
 }
 function resumeRequestedTestForSample(sample, testTypeId, testTypeName, user, note) {
@@ -267,14 +366,38 @@ function resumeRequestedTestForSample(sample, testTypeId, testTypeName, user, no
     notes: note || `${testTypeName} taken off hold — back in the normal queue.`
   }, user);
 }
-function returnRequestedTestToAnalyst(sample, testTypeId, testTypeName, user, note) {
+// `reason` is REQUIRED — empty/whitespace-only is rejected (fails safe: logs
+// and returns `sample` unchanged, same no-op contract as an invalid status
+// transition in setRequestedTestStatus above, never a half-applied return).
+// `resultContext` is optional ({ previousResult, testRecordId }) — pass
+// whatever getSampleResultForTest() returned BEFORE voiding, so the event
+// on the sample keeps a record of what the result actually was.
+function returnRequestedTestToAnalyst(sample, testTypeId, testTypeName, user, reason, resultContext) {
   const rt = (sample.requestedTests || []).find(r => r.testTypeId === testTypeId);
   if (!rt) return sample;
+  const trimmedReason = (reason || "").trim();
+  if (!trimmedReason) {
+    console.error(`Blocked Return to Analyst for "${testTypeName}" on sample ${sample.sampleCode || sample.id}: a reason is required and none was given.`);
+    return sample;
+  }
+  const returnEvent = {
+    id: uid("ret"),
+    type: "RETURN_TO_ANALYST",
+    testTypeId,
+    testTypeName,
+    reason: trimmedReason,
+    returnedBy: user?.name || null,
+    returnedByRole: user?.role || null,
+    returnedAt: new Date().toISOString(),
+    previousResult: resultContext?.previousResult ?? null,
+    testRecordId: resultContext?.testRecordId ?? null
+  };
   const cleared = {
     ...sample,
-    requestedTests: sample.requestedTests.map(r => r.testTypeId === testTypeId ? { ...r, onHold: false } : r)
+    requestedTests: sample.requestedTests.map(r => r.testTypeId === testTypeId ? { ...r, onHold: false } : r),
+    returnEvents: [...(sample.returnEvents || []), returnEvent]
   };
-  return setRequestedTestStatus(cleared, testTypeId, "in_progress", user, note || `Returned to analyst for ${testTypeName}.`);
+  return setRequestedTestStatus(cleared, testTypeId, "in_progress", user, `Returned to analyst for ${testTypeName}: ${trimmedReason}`);
 }
 
 
@@ -629,6 +752,61 @@ function linkTestRecord(sample, testRecordId) {
   };
 }
 
+// ============================================================================
+// IMMUTABLE APPROVAL SNAPSHOT (Workflow/Data-Integrity Upgrade Step 7) —
+// freezes exactly what was actually approved, at the moment it was approved,
+// onto the approval record itself (approval.approvalSnapshot). This is
+// deliberately NOT a live pointer/lookup — it's a plain-data copy — so it
+// stays correct and meaningful even if the underlying Test Type/Parameter
+// config, or even the Test Record, changes or is superseded later (e.g. by
+// a subsequent Void/Correction Request — see doVoid in 13-testrecords-ui.js
+// and Step 5/6 above). Six months from now, if a method's config changes,
+// this still shows exactly what the approver actually signed off on.
+//
+// This app's data model has no per-parameter "reference limit"/"detection
+// limit" fields (checked across 12a-parameters-ui.js, 19-reference-model.js,
+// 15-qc-module.js) — those were illustrative in the spec, not real fields
+// here — so the snapshot captures what genuinely exists and genuinely
+// matters: the actual reported value(s) + unit, the method, the equipment
+// used, the tester, the QC outcome for that run, and which attempt this was.
+// If per-parameter limits are added later, extend this snapshot then.
+// ============================================================================
+function buildApprovalSnapshot(sample, testTypeId, testTypeName, testRecords, testTypes) {
+  const resultInfo = typeof getSampleResultForTest === "function" ? getSampleResultForTest(sample, testTypeId, testRecords) : null;
+  const testType = (testTypes || []).find(t => t.id === testTypeId) || null;
+  const record = resultInfo ? (testRecords || []).find(r => r.id === resultInfo.recordId) : null;
+  const member = record && Array.isArray(record.memberResults) ? record.memberResults.find(m => m.sampleId === sample.id) : null;
+  return {
+    testTypeId,
+    testTypeName,
+    method: testType?.method || "",
+    results: (resultInfo?.results || []).map(r => ({
+      paramId: r.paramId,
+      name: r.name,
+      unit: r.unit,
+      value: r.value
+    })),
+    equipmentName: record?.equipmentName || "",
+    tester: record?.tester || "",
+    date: resultInfo?.date || null,
+    testRecordId: resultInfo?.recordId || null,
+    attemptNo: (member && member.attemptNo) || (record && record.attemptNo) || 1,
+    qcCheck: record?.qcCheck ? {
+      qcType: record.qcCheck.qcType,
+      label: record.qcCheck.label,
+      pass: record.qcCheck.pass,
+      message: record.qcCheck.message
+    } : null,
+    sampleCode: sample.sampleCode,
+    referenceId: sample.referenceId || null,
+    // When this snapshot was actually taken — distinct from `ts` on the
+    // approval record itself only in that this is what a future reader
+    // should trust as "frozen at", even if the approval object is ever
+    // migrated/re-serialized.
+    snapshotTakenAt: new Date().toISOString()
+  };
+}
+
 // e-signature: this is a WORKFLOW-level attestation (typed name + explicit
 // checkbox + server/local timestamp), matching what most LIMS call a "type 1"
 // signature. It is not a cryptographic signature — flagged clearly in the UI
@@ -694,7 +872,7 @@ function bulkDecideParameter(samples, testTypeId, testTypeName, {
   comment,
   signedName,
   attested
-}, user) {
+}, user, testRecords, testTypes) {
   if (!attested || !signedName || signedName.trim().length < 2) {
     throw new Error("Electronic signature requires the approver's typed full name and the attestation checkbox.");
   }
@@ -718,7 +896,11 @@ function bulkDecideParameter(samples, testTypeId, testTypeName, {
       signature: {
         signedName: signedName.trim(),
         attested: true
-      }
+      },
+      // Step 7 — Immutable Approval Snapshot. Only taken on an actual
+      // approval; a reject has nothing to freeze (the result is going back
+      // to the analyst, see setRequestedTestStatus below).
+      approvalSnapshot: decision === "approved" ? buildApprovalSnapshot(sample, testTypeId, testTypeName, testRecords, testTypes) : null
     };
     let next = {
       ...sample,
