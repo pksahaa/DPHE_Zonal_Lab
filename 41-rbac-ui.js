@@ -666,7 +666,10 @@ function UsersAdminTab({
   async function handleSaveUser(payload) {
     if (payload.id) {
       const existingUser = users.find(u => u.id === payload.id);
-      if (!existingUser) return;
+      if (!existingUser) {
+        notify("Couldn't find that user anymore — please close this and try again from the list.", "warn");
+        throw new Error("User not found in local list.");
+      }
       const patched = {
         ...existingUser,
         username: payload.username.trim(),
@@ -676,7 +679,12 @@ function UsersAdminTab({
         role: payload.role,
         permissionOverrides: payload.permissionOverrides || {}
       };
-      await DataService.save("users", patched);
+      try {
+        await DataService.save("users", patched);
+      } catch (err) {
+        notify(`Could not save changes: ${err && err.message || "unknown error"}`, "warn");
+        throw err; // let UserFormModal keep the modal open and show the error inline
+      }
       setUsers(prev => prev.map(u => u.id === payload.id ? patched : u));
       const overrideCount = Object.keys(patched.permissionOverrides).length;
       DataService.appendAudit({
@@ -706,7 +714,7 @@ function UsersAdminTab({
           await DataService.setUserPassword(newUser.id, payload.password, newUser);
         } catch (err) {
           notify(`Failed to create user: ${err && err.message || "unknown error"}`, "warn");
-          return; // don't update local state or audit log if it failed
+          throw err; // don't update local state or audit log if it failed; let the modal show the error inline
         }
       } else {
         const passwordHash = await hashPassword(payload.password);
@@ -732,7 +740,7 @@ function UsersAdminTab({
         await DataService.setUserPassword(id, newPassword);
       } catch (err) {
         notify(`Could not reset password: ${err && err.message || "unknown error"}`, "warn");
-        return;
+        throw err; // let ResetPasswordModal keep itself open and show the error inline
       }
     } else {
       // Local (no backend) demo mode only.
@@ -771,7 +779,12 @@ function UsersAdminTab({
       designation: newDesignation || target.designation,
       transferHistory: [...(target.transferHistory || []), historyEntry]
     };
-    await DataService.save("users", patched);
+    try {
+      await DataService.save("users", patched);
+    } catch (err) {
+      notify(`Could not transfer this officer: ${err && err.message || "unknown error"}`, "warn");
+      return;
+    }
     setUsers(prev => prev.map(u => u.id === target.id ? patched : u));
     DataService.appendAudit({
       entity: "user",
@@ -791,7 +804,12 @@ function UsersAdminTab({
       return;
     }
     const patched = { ...u, active: nextActive };
-    await DataService.save("users", patched);
+    try {
+      await DataService.save("users", patched);
+    } catch (err) {
+      notify(`Could not ${nextActive ? "reactivate" : "deactivate"} "${u.username}": ${err && err.message || "unknown error"}`, "warn");
+      return;
+    }
     setUsers(prev => prev.map(x => x.id === u.id ? patched : x));
     DataService.appendAudit({
       entity: "user",
@@ -813,7 +831,13 @@ function UsersAdminTab({
       setDeleteTarget(null);
       return;
     }
-    await DataService.remove("users", u.id);
+    try {
+      await DataService.remove("users", u.id);
+    } catch (err) {
+      notify(`Could not delete "${u.username}": ${err && err.message || "unknown error"}`, "warn");
+      setDeleteTarget(null);
+      return;
+    }
     setUsers(prev => prev.filter(x => x.id !== u.id));
     DataService.appendAudit({
       entity: "user",
@@ -1283,17 +1307,29 @@ function UserFormModal({
     }
     setError("");
     setSaving(true);
-    await onSave({
-      id: initial.id,
-      username: cleanUsername,
-      name,
-      designation,
-      email: email.trim(),
-      role,
-      password,
-      permissionOverrides: cleanOverrides(overrides)
-    });
-    setSaving(false);
+    try {
+      await onSave({
+        id: initial.id,
+        username: cleanUsername,
+        name,
+        designation,
+        email: email.trim(),
+        role,
+        password,
+        permissionOverrides: cleanOverrides(overrides)
+      });
+      // onSave resolved without throwing => the save actually succeeded and
+      // UsersAdminTab has already closed this modal (setFormUser(null)).
+      // If onSave throws instead (backend rejected the write, session
+      // expired, network drop, etc.) we land in the catch below and keep
+      // the modal open with the real error visible, instead of the modal
+      // silently doing nothing and the person not knowing whether it
+      // worked or not.
+    } catch (err) {
+      setError(err && err.message ? err.message : "Could not save this user. Please try again.");
+    } finally {
+      setSaving(false);
+    }
   }
   const roleOptions = rolesFromMatrix(permissionMatrix).map(r => ({
     value: r,
@@ -1402,8 +1438,13 @@ function ResetPasswordModal({
     }
     setError("");
     setSaving(true);
-    await onSave(password);
-    setSaving(false);
+    try {
+      await onSave(password);
+    } catch (err) {
+      setError(err && err.message ? err.message : "Could not reset the password. Please try again.");
+    } finally {
+      setSaving(false);
+    }
   }
   return React.createElement(Modal, {
     title: `Reset Password — ${user.username}`,
