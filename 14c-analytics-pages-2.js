@@ -2560,6 +2560,1029 @@ function EquipmentUsageReportPage({ equipment, testRecords, session }) {
   ); // end outer div
 }
 
+// ==================================== GLASSWARE INVENTORY & USAGE REPORT ====================================
+function GlasswareUsageReportPage({ glassware, session }) {
+  var today = todayStr();
+  var firstOfMonth = today.slice(0, 7) + "-01";
+  var [startDate, setStartDate] = React.useState(firstOfMonth);
+  var [endDate,   setEndDate]   = React.useState(today);
+  var [designation, setDesignation] = React.useState("Senior Chemist");
+  var [signLine2, setSignLine2] = React.useState("");
+  var [selectedGlassId, setSelectedGlassId] = React.useState("ALL");
+  var [reportData, setReportData] = React.useState(null);
+
+  React.useEffect(function() {
+    setReportData(null);
+  }, [startDate, endDate, selectedGlassId]);
+
+  var allGlass = (glassware || []).slice().sort(function(a, b) {
+    return (a.name || "").localeCompare(b.name || "");
+  });
+  var displayGlass = selectedGlassId === "ALL"
+    ? allGlass
+    : allGlass.filter(function(g) { return g.id === selectedGlassId; });
+
+  function generateReportData() {
+    var stats = {}; // glassId -> { item, inStore, breakageRate, periodBreakage, events }
+    (glassware || []).forEach(function(g) {
+      var inStore = g.totalQuantity - (g.inUse || 0) - (g.broken || 0);
+      var bRate = g.totalQuantity > 0 ? +((g.broken / g.totalQuantity) * 100).toFixed(1) : 0;
+      var bLog = (g.brokenLog || []).filter(function(b) {
+        var d = b.date || "";
+        return d >= startDate && d <= endDate;
+      });
+      var periodBroken = bLog.reduce(function(s, b) { return s + (Number(b.count) || 1); }, 0);
+      stats[g.id] = {
+        item: g,
+        inStore: inStore < 0 ? 0 : inStore,
+        inUse: g.inUse || 0,
+        totalQuantity: g.totalQuantity || 0,
+        broken: g.broken || 0,
+        breakageRate: bRate,
+        periodBroken: periodBroken,
+        brokenLog: bLog
+      };
+    });
+    setReportData(stats);
+  }
+
+  var th = function(extra) {
+    return Object.assign({
+      padding: "5px 8px", fontSize: 11, fontWeight: 700,
+      background: "#f0fdf4", borderBottom: "2px solid " + C.border,
+      borderRight: "1px solid " + C.border, whiteSpace: "nowrap", textAlign: "center"
+    }, extra || {});
+  };
+  var td = function(extra) {
+    return Object.assign({
+      padding: "4px 8px", fontSize: 12,
+      borderBottom: "1px solid " + C.border,
+      borderRight: "1px solid " + C.border, textAlign: "center"
+    }, extra || {});
+  };
+  var tdL = function(extra) { return td(Object.assign({ textAlign: "left" }, extra)); };
+
+  var exportRows = [];
+
+  async function generateAndPrint() {
+    var htmlStr = "";
+    var tableStyle = "width:100%; border-collapse:collapse; border:1px solid #111; margin-bottom: 14px;";
+    var thStyle = "padding:5px 8px; font-size:11px; font-weight:bold; background:#f0fdf4; border:1px solid #111; text-align:center;";
+    var tdStyle = "padding:4px 8px; font-size:12px; border:1px solid #111; text-align:center;";
+    var tdLeft = tdStyle + "text-align:left;";
+
+    // Table 1: Inventory Summary Table
+    htmlStr += `<div style="font-size:12px; font-weight:bold; margin-bottom:6px;">1. Glassware Inventory Register & Distribution Summary:</div>`;
+    htmlStr += `<table style="${tableStyle}"><thead><tr>
+      <th style="${thStyle}">Glassware Item Name</th>
+      <th style="${thStyle}">Date Received</th>
+      <th style="${thStyle}">Origin / Make</th>
+      <th style="${thStyle}">Received From</th>
+      <th style="${thStyle}">Total Received</th>
+      <th style="${thStyle}">In Store (Available)</th>
+      <th style="${thStyle}">In Analysis Room</th>
+      <th style="${thStyle}">Total Broken</th>
+      <th style="${thStyle}">Breakage Rate (%)</th>
+    </tr></thead><tbody>`;
+
+    var sumTotal = 0, sumStore = 0, sumUse = 0, sumBroken = 0;
+    displayGlass.forEach(function(g) {
+      var st = (reportData && reportData[g.id]) || { inStore: 0, inUse: 0, totalQuantity: 0, broken: 0, breakageRate: 0, brokenLog: [] };
+      sumTotal += st.totalQuantity;
+      sumStore += st.inStore;
+      sumUse += st.inUse;
+      sumBroken += st.broken;
+      htmlStr += `<tr>
+        <td style="${tdLeft}font-weight:bold;">${g.name}</td>
+        <td style="${tdStyle}">${g.dateReceived || "—"}</td>
+        <td style="${tdStyle}">${g.origin || "—"}</td>
+        <td style="${tdStyle}">${g.receivedFrom || "—"}</td>
+        <td style="${tdStyle}">${st.totalQuantity}</td>
+        <td style="${tdStyle}font-weight:600; color:#16a34a;">${st.inStore}</td>
+        <td style="${tdStyle}font-weight:600; color:#1d4ed8;">${st.inUse}</td>
+        <td style="${tdStyle}font-weight:600; color:${st.broken > 0 ? '#dc2626' : '#111'};">${st.broken}</td>
+        <td style="${tdStyle}">${st.breakageRate}%</td>
+      </tr>`;
+    });
+    htmlStr += `<tr style="background:#f0f9ff; font-weight:bold;">
+      <td colspan="4" style="${tdLeft}">TOTAL GLASSWARE UNITS</td>
+      <td style="${tdStyle}">${sumTotal}</td>
+      <td style="${tdStyle}">${sumStore}</td>
+      <td style="${tdStyle}">${sumUse}</td>
+      <td style="${tdStyle}">${sumBroken}</td>
+      <td style="${tdStyle}">${sumTotal > 0 ? ((sumBroken / sumTotal) * 100).toFixed(1) : 0}%</td>
+    </tr></tbody></table>`;
+
+    // Table 2: Breakage & Damage Log in Period
+    htmlStr += `<div style="font-size:12px; font-weight:bold; margin:14px 0 6px;">2. Breakage, Damage & Movement Log in Selected Period:</div>`;
+    var hasAnyBreakage = displayGlass.some(function(g) {
+      var st = reportData && reportData[g.id];
+      return st && st.brokenLog && st.brokenLog.length > 0;
+    });
+
+    if (!hasAnyBreakage) {
+      htmlStr += `<div style="font-size:11px; font-style:italic; color:#64748b; margin-bottom:12px;">No breakage or damage events logged in the selected period.</div>`;
+    } else {
+      htmlStr += `<table style="${tableStyle}"><thead><tr>
+        <th style="${thStyle}">Date</th>
+        <th style="${thStyle}">Glassware Item</th>
+        <th style="${thStyle}">Units Damaged</th>
+        <th style="${thStyle}">Reported By</th>
+        <th style="${thStyle}">Reason / Incident Note</th>
+      </tr></thead><tbody>`;
+      displayGlass.forEach(function(g) {
+        var st = reportData && reportData[g.id];
+        if (st && st.brokenLog) {
+          st.brokenLog.forEach(function(b) {
+            htmlStr += `<tr>
+              <td style="${tdStyle}">${b.date || "—"}</td>
+              <td style="${tdLeft}font-weight:bold;">${g.name}</td>
+              <td style="${tdStyle}font-weight:bold; color:#dc2626;">${b.count || 1}</td>
+              <td style="${tdStyle}">${b.by || "—"}</td>
+              <td style="${tdLeft}">${b.note || "—"}</td>
+            </tr>`;
+          });
+        }
+      });
+      htmlStr += `</tbody></table>`;
+    }
+
+    var html = buildGlasswareReportHtml({
+      labIdentity: session || {},
+      startDate: startDate,
+      endDate: endDate,
+      tableHtml: htmlStr,
+      signatory: { designation: designation, line2: signLine2 }
+    });
+
+    var w = openReportPrintWindow();
+    finishReportPrintWindow(w, html);
+  }
+
+  // ---- Render ----
+  return /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement(SectionCard, {
+      title: "Glassware Inventory & Usage Report",
+      icon: /*#__PURE__*/React.createElement(Icon, { name: "beaker", size: 15 })
+    },
+      /*#__PURE__*/React.createElement("div", {
+        className: "flex flex-wrap gap-3 mb-4 items-end no-print",
+        style: { borderBottom: "1px solid " + C.border, paddingBottom: 12 }
+      },
+        /*#__PURE__*/React.createElement("label", { className: "flex flex-col gap-1 text-xs", style: { color: C.muted } },
+          "From",
+          /*#__PURE__*/React.createElement("input", {
+            type: "date", value: startDate,
+            onChange: function(e) { setStartDate(e.target.value); },
+            className: "border rounded px-2 py-1 text-sm", style: { borderColor: C.border }
+          })
+        ),
+        /*#__PURE__*/React.createElement("label", { className: "flex flex-col gap-1 text-xs", style: { color: C.muted } },
+          "To",
+          /*#__PURE__*/React.createElement("input", {
+            type: "date", value: endDate,
+            onChange: function(e) { setEndDate(e.target.value); },
+            className: "border rounded px-2 py-1 text-sm", style: { borderColor: C.border }
+          })
+        ),
+        /*#__PURE__*/React.createElement("label", { className: "flex flex-col gap-1 text-xs", style: { color: C.muted } },
+          "Glassware Item",
+          /*#__PURE__*/React.createElement("select", {
+            value: selectedGlassId,
+            onChange: function(e) { setSelectedGlassId(e.target.value); },
+            className: "border rounded px-2 py-1 text-sm", style: { borderColor: C.border }
+          },
+            /*#__PURE__*/React.createElement("option", { value: "ALL" }, "All Glassware Items"),
+            allGlass.map(function(g) {
+              return /*#__PURE__*/React.createElement("option", { key: g.id, value: g.id }, g.name);
+            })
+          )
+        ),
+        /*#__PURE__*/React.createElement(Button, {
+          size: "sm", variant: "primary",
+          onClick: generateReportData
+        }, /*#__PURE__*/React.createElement(Icon, { name: "chart", size: 12 }), " Generate Report")
+      ),
+      /*#__PURE__*/React.createElement("div", {
+        className: "grid gap-2 mb-3 no-print",
+        style: { gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }
+      },
+        /*#__PURE__*/React.createElement(TextField, {
+          simple: true,
+          label: "Signatory Designation",
+          value: designation,
+          onChange: function(v) { setDesignation(v); }
+        }),
+        /*#__PURE__*/React.createElement(TextField, {
+          simple: true,
+          label: "Signatory Address Line (optional)",
+          value: signLine2,
+          onChange: function(v) { setSignLine2(v); },
+          placeholder: "e.g. Radha Ballob, Rangpur."
+        })
+      ),
+      reportData && /*#__PURE__*/React.createElement("div", { className: "mb-4 no-print flex justify-end" },
+        /*#__PURE__*/React.createElement(Button, {
+          size: "sm", variant: "outline",
+          onClick: generateAndPrint
+        }, /*#__PURE__*/React.createElement(Icon, { name: "printer", size: 12 }), " Print / PDF (Official Format)")
+      ),
+
+      !reportData ? /*#__PURE__*/React.createElement("div", { className: "text-sm p-4", style: { color: C.muted } }, "Click 'Generate Report' to view glassware inventory balances, room distribution, and breakage records.") :
+      displayGlass.length === 0
+        ? /*#__PURE__*/React.createElement("div", { className: "text-sm p-4", style: { color: C.muted } }, "No glassware items found in inventory.")
+        : (function() {
+            var totItems = displayGlass.length;
+            var totQty = displayGlass.reduce(function(s, g) { return s + (g.totalQuantity || 0); }, 0);
+            var totStore = displayGlass.reduce(function(s, g) {
+              var st = reportData[g.id];
+              return s + (st ? st.inStore : 0);
+            }, 0);
+            var totUse = displayGlass.reduce(function(s, g) { return s + (g.inUse || 0); }, 0);
+            var totBroken = displayGlass.reduce(function(s, g) { return s + (g.broken || 0); }, 0);
+            var totPeriodBroken = displayGlass.reduce(function(s, g) {
+              var st = reportData[g.id];
+              return s + (st ? st.periodBroken : 0);
+            }, 0);
+
+            // Populate exportRows
+            exportRows = [];
+            displayGlass.forEach(function(g) {
+              var st = reportData[g.id] || { inStore: 0, inUse: 0, totalQuantity: 0, broken: 0, breakageRate: 0, periodBroken: 0 };
+              exportRows.push({
+                "Glassware Name":     g.name,
+                "Date Received":      g.dateReceived || "—",
+                "Origin":             g.origin || "—",
+                "Received From":      g.receivedFrom || "—",
+                "Total Quantity":     st.totalQuantity,
+                "In Store":           st.inStore,
+                "In Analysis Room":   st.inUse,
+                "Total Broken":       st.broken,
+                "Breakage Rate (%)":  st.breakageRate + "%",
+                "Broken in Period":   st.periodBroken
+              });
+            });
+
+            return /*#__PURE__*/React.createElement("div", null,
+              // Top KPI cards
+              /*#__PURE__*/React.createElement("div", {
+                className: "grid grid-cols-2 sm:grid-cols-5 gap-2 mb-5"
+              },
+                /*#__PURE__*/React.createElement("div", { className: "p-2.5 rounded border text-center", style: { borderColor: C.border, background: "#f8fafc" } },
+                  /*#__PURE__*/React.createElement("div", { className: "text-xs", style: { color: C.muted } }, "Item Categories"),
+                  /*#__PURE__*/React.createElement("div", { className: "text-base font-bold", style: { color: C.ink } }, totItems)
+                ),
+                /*#__PURE__*/React.createElement("div", { className: "p-2.5 rounded border text-center", style: { borderColor: C.border, background: "#f8fafc" } },
+                  /*#__PURE__*/React.createElement("div", { className: "text-xs", style: { color: C.muted } }, "Total Units"),
+                  /*#__PURE__*/React.createElement("div", { className: "text-base font-bold", style: { color: C.teal } }, totQty)
+                ),
+                /*#__PURE__*/React.createElement("div", { className: "p-2.5 rounded border text-center", style: { borderColor: C.border, background: "#f8fafc" } },
+                  /*#__PURE__*/React.createElement("div", { className: "text-xs", style: { color: C.muted } }, "In Store (Reserve)"),
+                  /*#__PURE__*/React.createElement("div", { className: "text-base font-bold", style: { color: "#16a34a" } }, totStore)
+                ),
+                /*#__PURE__*/React.createElement("div", { className: "p-2.5 rounded border text-center", style: { borderColor: C.border, background: "#f8fafc" } },
+                  /*#__PURE__*/React.createElement("div", { className: "text-xs", style: { color: C.muted } }, "In Analysis Room"),
+                  /*#__PURE__*/React.createElement("div", { className: "text-base font-bold", style: { color: "#1d4ed8" } }, totUse)
+                ),
+                /*#__PURE__*/React.createElement("div", { className: "p-2.5 rounded border text-center", style: { borderColor: C.border, background: "#f8fafc" } },
+                  /*#__PURE__*/React.createElement("div", { className: "text-xs", style: { color: C.muted } }, "Broken (All-time / Period)"),
+                  /*#__PURE__*/React.createElement("div", { className: "text-base font-bold", style: { color: totBroken > 0 ? "#dc2626" : C.ink } }, `${totBroken} / ${totPeriodBroken}`)
+                )
+              ),
+
+              // Table 1: Inventory & Distribution Table
+              /*#__PURE__*/React.createElement("div", { className: "text-xs font-bold mb-2 flex items-center gap-1.5", style: { color: C.ink } },
+                /*#__PURE__*/React.createElement(Icon, { name: "table", size: 13 }), " 1. Glassware Inventory Register & Distribution Summary"
+              ),
+              /*#__PURE__*/React.createElement("div", { style: { overflowX: "auto", marginBottom: 20 } },
+                /*#__PURE__*/React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", border: "1px solid " + C.border } },
+                  /*#__PURE__*/React.createElement("thead", null,
+                    /*#__PURE__*/React.createElement("tr", null,
+                      ["Glassware Item", "Date Received", "Origin", "Received From", "Total Qty", "In Store", "In Analysis Room", "Broken", "Breakage %"].map(function(h) {
+                        return /*#__PURE__*/React.createElement("th", { key: h, style: th() }, h);
+                      })
+                    )
+                  ),
+                  /*#__PURE__*/React.createElement("tbody", null,
+                    displayGlass.map(function(g) {
+                      var st = reportData[g.id] || { inStore: 0, inUse: 0, totalQuantity: 0, broken: 0, breakageRate: 0 };
+                      return /*#__PURE__*/React.createElement("tr", { key: g.id },
+                        /*#__PURE__*/React.createElement("td", { style: tdL({ fontWeight: 600 }) }, g.name),
+                        /*#__PURE__*/React.createElement("td", { style: td() }, g.dateReceived || "—"),
+                        /*#__PURE__*/React.createElement("td", { style: td() }, g.origin || "—"),
+                        /*#__PURE__*/React.createElement("td", { style: td() }, g.receivedFrom || "—"),
+                        /*#__PURE__*/React.createElement("td", { style: td({ fontWeight: 600 }) }, st.totalQuantity),
+                        /*#__PURE__*/React.createElement("td", { style: td({ fontWeight: 600, color: "#16a34a" }) }, st.inStore),
+                        /*#__PURE__*/React.createElement("td", { style: td({ fontWeight: 600, color: "#1d4ed8" }) }, st.inUse),
+                        /*#__PURE__*/React.createElement("td", { style: td({ fontWeight: 600, color: st.broken > 0 ? "#dc2626" : C.ink }) }, st.broken),
+                        /*#__PURE__*/React.createElement("td", { style: td() }, st.breakageRate + "%")
+                      );
+                    }),
+                    /*#__PURE__*/React.createElement("tr", { style: { background: "#f0f9ff", fontWeight: 700 } },
+                      /*#__PURE__*/React.createElement("td", { colSpan: 4, style: tdL({ borderTop: "2px solid " + C.border }) }, "TOTAL UNITS"),
+                      /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) }, totQty),
+                      /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border, color: "#16a34a" }) }, totStore),
+                      /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border, color: "#1d4ed8" }) }, totUse),
+                      /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border, color: totBroken > 0 ? "#dc2626" : C.ink }) }, totBroken),
+                      /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) }, totQty > 0 ? ((totBroken / totQty) * 100).toFixed(1) + "%" : "0%")
+                    )
+                  )
+                )
+              ),
+
+              // Table 2: Breakage in Period
+              /*#__PURE__*/React.createElement("div", { className: "text-xs font-bold mb-2 flex items-center gap-1.5", style: { color: C.ink } },
+                /*#__PURE__*/React.createElement(Icon, { name: "warning", size: 13 }), " 2. Breakage & Damage Log in Selected Period"
+              ),
+              (function() {
+                var breakRows = [];
+                displayGlass.forEach(function(g) {
+                  var st = reportData[g.id];
+                  if (st && st.brokenLog) {
+                    st.brokenLog.forEach(function(b, idx) {
+                      breakRows.push({
+                        key: g.id + "_" + idx,
+                        date: b.date || "—",
+                        name: g.name,
+                        count: b.count || 1,
+                        by: b.by || "—",
+                        note: b.note || "—"
+                      });
+                    });
+                  }
+                });
+
+                if (breakRows.length === 0) {
+                  return /*#__PURE__*/React.createElement("div", { className: "text-xs italic p-3 rounded", style: { background: "#f8fafc", color: C.muted } },
+                    "No breakage or damage events logged for the selected glassware in this period."
+                  );
+                }
+
+                return /*#__PURE__*/React.createElement("div", { style: { overflowX: "auto" } },
+                  /*#__PURE__*/React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", border: "1px solid " + C.border } },
+                    /*#__PURE__*/React.createElement("thead", null,
+                      /*#__PURE__*/React.createElement("tr", null,
+                        ["Date", "Glassware Item", "Units Damaged", "Reported By", "Reason / Incident Note"].map(function(h) {
+                          return /*#__PURE__*/React.createElement("th", { key: h, style: th() }, h);
+                        })
+                      )
+                    ),
+                    /*#__PURE__*/React.createElement("tbody", null,
+                      breakRows.map(function(br) {
+                        return /*#__PURE__*/React.createElement("tr", { key: br.key },
+                          /*#__PURE__*/React.createElement("td", { style: td() }, br.date),
+                          /*#__PURE__*/React.createElement("td", { style: tdL({ fontWeight: 600 }) }, br.name),
+                          /*#__PURE__*/React.createElement("td", { style: td({ fontWeight: 700, color: "#dc2626" }) }, br.count),
+                          /*#__PURE__*/React.createElement("td", { style: td() }, br.by),
+                          /*#__PURE__*/React.createElement("td", { style: tdL() }, br.note)
+                        );
+                      }),
+                      /*#__PURE__*/React.createElement("tr", { style: { background: "#f0f9ff", fontWeight: 700 } },
+                        /*#__PURE__*/React.createElement("td", { colSpan: 2, style: tdL({ borderTop: "2px solid " + C.border }) }, "TOTAL UNITS DAMAGED IN PERIOD"),
+                        /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border, color: "#dc2626" }) },
+                          breakRows.reduce(function(s, r) { return s + (Number(r.count) || 1); }, 0)
+                        ),
+                        /*#__PURE__*/React.createElement("td", { colSpan: 2, style: td({ borderTop: "2px solid " + C.border }) }, "—")
+                      )
+                    )
+                  )
+                );
+              })()
+            );
+          })(),
+
+      // XLSX export
+      reportData && /*#__PURE__*/React.createElement("div", { className: "mt-5 no-print" },
+        exportRows.length > 0
+          ? /*#__PURE__*/React.createElement(DataTable, {
+              exportFilename: "glassware_usage_report_" + startDate + "_to_" + endDate,
+              columns: [
+                { key: "Glassware Name",    label: "Glassware Name"    },
+                { key: "Date Received",     label: "Date Received"     },
+                { key: "Origin",            label: "Origin"            },
+                { key: "Received From",     label: "Received From"     },
+                { key: "Total Quantity",    label: "Total Quantity"    },
+                { key: "In Store",          label: "In Store"          },
+                { key: "In Analysis Room",  label: "In Analysis Room"  },
+                { key: "Total Broken",      label: "Total Broken"      },
+                { key: "Breakage Rate (%)", label: "Breakage Rate (%)" },
+                { key: "Broken in Period",  label: "Broken in Period"  }
+              ],
+              rows: exportRows
+            })
+          : /*#__PURE__*/React.createElement("div", { className: "text-xs p-3", style: { color: C.muted } },
+              "No glassware inventory data available."
+            )
+      )
+    )
+  );
+}
+
+// ==================================== GAS USAGE & CYLINDER EFFICIENCY REPORT ====================================
+function GasUsageReportPage({ gasList, testRecords, session }) {
+  var today = todayStr();
+  var firstOfMonth = today.slice(0, 7) + "-01";
+  var [startDate, setStartDate] = React.useState(firstOfMonth);
+  var [endDate,   setEndDate]   = React.useState(today);
+  var [designation, setDesignation] = React.useState("Senior Chemist");
+  var [signLine2, setSignLine2] = React.useState("");
+  var [selectedGasId, setSelectedGasId] = React.useState("ALL");
+  var [reportData, setReportData] = React.useState(null);
+
+  React.useEffect(function() {
+    setReportData(null);
+  }, [startDate, endDate, selectedGasId]);
+
+  var allGases = (gasList || []).slice().sort(function(a, b) {
+    return (a.name || "").localeCompare(b.name || "");
+  });
+  var displayGases = selectedGasId === "ALL"
+    ? allGases
+    : allGases.filter(function(g) { return g.id === selectedGasId; });
+
+  function fmtNum(v) {
+    var n = Number(v) || 0;
+    return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function generateReportData() {
+    var stats = {}; // gasId -> { gas, cylindersStats: [ { cylinder, cycles: [], periodRuns: [], totalRefillCost: 0, totalGasUsedPeriod: 0, totalSamplesPeriod: 0, avgSamplesPerRefill: 0 } ] }
+
+    (gasList || []).forEach(function(g) {
+      stats[g.id] = {
+        gas: g,
+        cylindersStats: []
+      };
+
+      (g.cylinders || []).forEach(function(c) {
+        var hist = (c.history || []).slice().sort(function(a, b) {
+          return (a.date || "").localeCompare(b.date || "");
+        });
+
+        // 1. Build Refill Cycles
+        var cycles = [];
+        var cycleMarkers = [];
+        hist.forEach(function(h, idx) {
+          if (h.type === "new" || h.type === "refill") {
+            cycleMarkers.push({ event: h, index: idx });
+          }
+        });
+
+        if (cycleMarkers.length === 0) {
+          cycleMarkers.push({
+            event: {
+              type: "new",
+              date: c.dateReceived || "",
+              amount: c.capacity || 0,
+              cost: 0
+            },
+            index: 0
+          });
+        }
+
+        cycleMarkers.forEach(function(cm, cIdx) {
+          var startEvent = cm.event;
+          var nextCm = cycleMarkers[cIdx + 1];
+          var nextEvent = nextCm ? nextCm.event : null;
+
+          // If next event is not a refill, see if there's an 'empty' event before next refill
+          var emptyEvent = null;
+          for (var i = cm.index + 1; i < (nextCm ? nextCm.index : hist.length); i++) {
+            if (hist[i].type === "empty") { emptyEvent = hist[i]; break; }
+          }
+
+          var cycleStartDate = startEvent.date || c.dateReceived || "—";
+          var cycleEndDate = nextEvent ? nextEvent.date : (emptyEvent ? emptyEvent.date : "Current (Active)");
+          var isCycleClosed = !!nextEvent || !!emptyEvent;
+
+          // Find test records that ran in this cycle interval
+          var cycleField = 0, cycleStd = 0, cycleDil = 0, cycleTot = 0, cycleGasUsed = 0, cycleBatches = 0;
+          (testRecords || []).forEach(function(tr) {
+            var d = tr.date || "";
+            if (d < cycleStartDate) return;
+            if (nextEvent && d > nextEvent.date) return;
+            if (emptyEvent && d > emptyEvent.date) return;
+
+            var matchGu = (tr.gasesUsed || []).find(function(u) { return u.cylinderId === c.id || (!u.cylinderId && u.gasId === g.id); });
+            var matchDgu = (tr.dilutionGasesUsed || []).find(function(u) { return u.cylinderId === c.id || (!u.cylinderId && u.gasId === g.id); });
+            var matchGl = (tr.gasLog || []).find(function(u) { return u.cylinderId === c.id || (!u.cylinderId && u.gasId === g.id); });
+
+            if (matchGu || matchDgu || matchGl) {
+              cycleBatches++;
+              var f = tr.numberOfFieldSamples || 0;
+              var s = tr.numberOfStandardSamples || 0;
+              var dil = tr.dilutionRequired ? (Number(tr.numberOfDilutedSamples) || 0) : 0;
+              cycleField += f;
+              cycleStd += s;
+              cycleDil += dil;
+              cycleTot += (f + s + dil);
+              var usedAmt = (matchGu ? Number(matchGu.amount) || 0 : 0) + (matchDgu ? Number(matchDgu.amount) || 0 : 0) + (matchGl ? Number(matchGl.amount) || 0 : 0);
+              cycleGasUsed += usedAmt;
+            }
+          });
+
+          var initialAmt = Number(startEvent.amount) || c.capacity || 0;
+          var cost = Number(startEvent.cost) || 0;
+
+          cycles.push({
+            cycleNo: cIdx + 1,
+            type: startEvent.type === "new" ? "New Cylinder" : "Refill",
+            startDate: cycleStartDate,
+            endDate: cycleEndDate,
+            amount: initialAmt,
+            cost: cost,
+            batches: cycleBatches,
+            fieldSamples: cycleField,
+            stdSamples: cycleStd,
+            dilutedSamples: cycleDil,
+            totalSamples: cycleTot,
+            gasConsumed: cycleGasUsed,
+            isClosed: isCycleClosed,
+            status: isCycleClosed ? (emptyEvent ? "Marked Empty" : "Cycle Completed") : `In Progress (${c.remaining} ${g.unit} left)`
+          });
+        });
+
+        // 2. Find Test Runs in Selected Period (startDate to endDate)
+        var periodRuns = [];
+        (testRecords || []).forEach(function(tr) {
+          var d = tr.date || "";
+          if (d < startDate || d > endDate) return;
+          var matchGu = (tr.gasesUsed || []).find(function(u) { return u.cylinderId === c.id || (!u.cylinderId && u.gasId === g.id); });
+          var matchDgu = (tr.dilutionGasesUsed || []).find(function(u) { return u.cylinderId === c.id || (!u.cylinderId && u.gasId === g.id); });
+          var matchGl = (tr.gasLog || []).find(function(u) { return u.cylinderId === c.id || (!u.cylinderId && u.gasId === g.id); });
+
+          if (matchGu || matchDgu || matchGl) {
+            var f = tr.numberOfFieldSamples || 0;
+            var s = tr.numberOfStandardSamples || 0;
+            var dil = tr.dilutionRequired ? (Number(tr.numberOfDilutedSamples) || 0) : 0;
+            var usedAmt = (matchGu ? Number(matchGu.amount) || 0 : 0) + (matchDgu ? Number(matchDgu.amount) || 0 : 0) + (matchGl ? Number(matchGl.amount) || 0 : 0);
+            periodRuns.push({
+              date: d,
+              label: tr.subBatchLabel || "(individual)",
+              testTypeName: tr.testTypeName || "",
+              fieldSamples: f,
+              stdSamples: s,
+              dilutedSamples: dil,
+              totalSamples: f + s + dil,
+              gasUsed: usedAmt,
+              tester: tr.tester || "—"
+            });
+          }
+        });
+
+        // Calculate averages for this cylinder
+        var closedCycles = cycles.filter(function(cy) { return cy.isClosed; });
+        var avgSamplesPerRefill = closedCycles.length > 0
+          ? Math.round(closedCycles.reduce(function(s, cy) { return s + cy.totalSamples; }, 0) / closedCycles.length)
+          : (cycles[0] ? cycles[0].totalSamples : 0);
+
+        var totRefillCost = hist.reduce(function(s, h) {
+          return s + (h.type === "refill" ? (Number(h.cost) || 0) : 0);
+        }, 0);
+
+        var totGasUsedPeriod = periodRuns.reduce(function(s, r) { return s + r.gasUsed; }, 0);
+        var totSamplesPeriod = periodRuns.reduce(function(s, r) { return s + r.totalSamples; }, 0);
+
+        stats[g.id].cylindersStats.push({
+          cylinder: c,
+          cycles: cycles,
+          periodRuns: periodRuns,
+          totalRefillCost: totRefillCost,
+          avgSamplesPerRefill: avgSamplesPerRefill,
+          totalGasUsedPeriod: totGasUsedPeriod,
+          totalSamplesPeriod: totSamplesPeriod
+        });
+      });
+    });
+
+    setReportData(stats);
+  }
+
+  var th = function(extra) {
+    return Object.assign({
+      padding: "5px 8px", fontSize: 11, fontWeight: 700,
+      background: "#f0fdf4", borderBottom: "2px solid " + C.border,
+      borderRight: "1px solid " + C.border, whiteSpace: "nowrap", textAlign: "center"
+    }, extra || {});
+  };
+  var td = function(extra) {
+    return Object.assign({
+      padding: "4px 8px", fontSize: 12,
+      borderBottom: "1px solid " + C.border,
+      borderRight: "1px solid " + C.border, textAlign: "center"
+    }, extra || {});
+  };
+  var tdL = function(extra) { return td(Object.assign({ textAlign: "left" }, extra)); };
+
+  var exportRows = [];
+
+  async function generateAndPrint() {
+    var htmlStr = "";
+    var tableStyle = "width:100%; border-collapse:collapse; border:1px solid #111; margin-bottom: 14px;";
+    var thStyle = "padding:5px 8px; font-size:11px; font-weight:bold; background:#f0fdf4; border:1px solid #111; text-align:center;";
+    var tdStyle = "padding:4px 8px; font-size:12px; border:1px solid #111; text-align:center;";
+    var tdLeft = tdStyle + "text-align:left;";
+
+    displayGases.forEach(function(g) {
+      var gStat = (reportData && reportData[g.id]) || { cylindersStats: [] };
+
+      htmlStr += `<div style="margin-bottom:28px; page-break-inside:avoid;">`;
+      htmlStr += `<h2 style="font-size:16px; margin:0 0 10px; border-bottom:2px solid #0d9488; padding-bottom:4px;">Gas Type: ${g.name} (Unit: ${g.unit || "kg"})</h2>`;
+
+      gStat.cylindersStats.forEach(function(cs) {
+        var c = cs.cylinder;
+        htmlStr += `<div style="background:#f8fafc; border:1px solid #cbd5e1; padding:8px 12px; margin-bottom:8px; border-left:4px solid #0d9488;">
+          <div style="font-size:13px; font-weight:bold; color:#0f172a;">${c.name || g.name} <span style="font-size:11px; font-weight:normal; color:#475569;">[Status: ${(c.status||"active").toUpperCase()}]</span></div>
+          <div style="font-size:11px; color:#475569; margin-top:2px;">
+            <span>Received: <strong>${c.dateReceived || "—"}</strong></span> | 
+            <span>Capacity: <strong>${fmtNum(c.capacity)} ${g.unit}</strong></span> | 
+            <span>Current Remaining: <strong>${fmtNum(c.remaining)} ${g.unit} (${c.capacity > 0 ? ((c.remaining/c.capacity)*100).toFixed(1) : 0}%)</strong></span> | 
+            <span>Avg Yield: <strong>${cs.avgSamplesPerRefill > 0 ? cs.avgSamplesPerRefill + " Samples / Refill" : "—"}</strong></span>
+          </div>
+        </div>`;
+
+        // Cycle Table
+        htmlStr += `<div style="font-size:11px; font-weight:bold; margin:6px 0 4px;">1. Cylinder Refill Cycles & Sample Yield Efficiency:</div>`;
+        if (cs.cycles.length === 0) {
+          htmlStr += `<div style="font-size:11px; font-style:italic; color:#64748b; margin-bottom:10px;">No refill cycles logged for this cylinder.</div>`;
+        } else {
+          htmlStr += `<table style="${tableStyle}"><thead><tr>
+            <th style="${thStyle}">Cycle #</th>
+            <th style="${thStyle}">Start Date (Refill)</th>
+            <th style="${thStyle}">End Date</th>
+            <th style="${thStyle}">Capacity / Refilled</th>
+            <th style="${thStyle}">Refill Cost (BDT)</th>
+            <th style="${thStyle}">Total Batches</th>
+            <th style="${thStyle}">Total Samples Tested</th>
+            <th style="${thStyle}">Samples / Full Refill</th>
+            <th style="${thStyle}">Cycle Status</th>
+          </tr></thead><tbody>`;
+          cs.cycles.forEach(function(cy) {
+            htmlStr += `<tr>
+              <td style="${tdStyle}">Cycle ${cy.cycleNo}</td>
+              <td style="${tdStyle}">${cy.startDate}</td>
+              <td style="${tdStyle}">${cy.endDate}</td>
+              <td style="${tdStyle}">${fmtNum(cy.amount)} ${g.unit}</td>
+              <td style="${tdStyle}">${cy.cost ? fmtNum(cy.cost) : "0.00"}</td>
+              <td style="${tdStyle}">${cy.batches}</td>
+              <td style="${tdStyle}font-weight:bold;">${cy.totalSamples}</td>
+              <td style="${tdStyle}font-weight:bold; color:#1d4ed8;">${cy.totalSamples > 0 ? cy.totalSamples + " Samples" : "—"}</td>
+              <td style="${tdStyle}">${cy.status}</td>
+            </tr>`;
+          });
+          htmlStr += `</tbody></table>`;
+        }
+
+        // Test Activity in Period
+        htmlStr += `<div style="font-size:11px; font-weight:bold; margin:6px 0 4px;">2. Analytical Tests consuming this Cylinder in Period:</div>`;
+        if (cs.periodRuns.length === 0) {
+          htmlStr += `<div style="font-size:11px; font-style:italic; color:#64748b; margin-bottom:14px;">No test runs logged for this cylinder in the selected period.</div>`;
+        } else {
+          htmlStr += `<table style="${tableStyle}"><thead><tr>
+            <th style="${thStyle}">Date</th><th style="${thStyle}">Sub-Batch</th><th style="${thStyle}">Test Type / Parameter</th>
+            <th style="${thStyle}">Field Samples</th><th style="${thStyle}">Std. Samples</th><th style="${thStyle}">Diluted Samples</th>
+            <th style="${thStyle}">Total Samples</th><th style="${thStyle}">Gas Used</th><th style="${thStyle}">Tester</th>
+          </tr></thead><tbody>`;
+          var sumF = 0, sumS = 0, sumD = 0, sumTot = 0, sumG = 0;
+          cs.periodRuns.forEach(function(r) {
+            sumF += r.fieldSamples;
+            sumS += r.stdSamples;
+            sumD += r.dilutedSamples;
+            sumTot += r.totalSamples;
+            sumG += r.gasUsed;
+            htmlStr += `<tr>
+              <td style="${tdStyle}">${r.date}</td>
+              <td style="${tdLeft}font-family:monospace;">${r.label}</td>
+              <td style="${tdLeft}">${r.testTypeName}</td>
+              <td style="${tdStyle}">${r.fieldSamples}</td>
+              <td style="${tdStyle}">${r.stdSamples}</td>
+              <td style="${tdStyle}">${r.dilutedSamples}</td>
+              <td style="${tdStyle}font-weight:bold;">${r.totalSamples}</td>
+              <td style="${tdStyle}font-weight:bold; color:#1d4ed8;">${fmtNum(r.gasUsed)} ${g.unit}</td>
+              <td style="${tdStyle}">${r.tester}</td>
+            </tr>`;
+          });
+          htmlStr += `<tr style="background:#f0f9ff; font-weight:bold;">
+            <td colspan="3" style="${tdLeft}">TOTAL (PERIOD)</td>
+            <td style="${tdStyle}">${sumF}</td>
+            <td style="${tdStyle}">${sumS}</td>
+            <td style="${tdStyle}">${sumD}</td>
+            <td style="${tdStyle}">${sumTot}</td>
+            <td style="${tdStyle}">${fmtNum(sumG)} ${g.unit}</td>
+            <td style="${tdStyle}">—</td>
+          </tr></tbody></table>`;
+        }
+      });
+
+      htmlStr += `</div>`;
+    });
+
+    var html = buildGasReportHtml({
+      labIdentity: session || {},
+      startDate: startDate,
+      endDate: endDate,
+      tableHtml: htmlStr,
+      signatory: { designation: designation, line2: signLine2 }
+    });
+
+    var w = openReportPrintWindow();
+    finishReportPrintWindow(w, html);
+  }
+
+  // ---- Render ----
+  return /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement(SectionCard, {
+      title: "Gas Usage & Cylinder Efficiency Report",
+      icon: /*#__PURE__*/React.createElement(Icon, { name: "droplet", size: 15 })
+    },
+      /*#__PURE__*/React.createElement("div", {
+        className: "flex flex-wrap gap-3 mb-4 items-end no-print",
+        style: { borderBottom: "1px solid " + C.border, paddingBottom: 12 }
+      },
+        /*#__PURE__*/React.createElement("label", { className: "flex flex-col gap-1 text-xs", style: { color: C.muted } },
+          "From",
+          /*#__PURE__*/React.createElement("input", {
+            type: "date", value: startDate,
+            onChange: function(e) { setStartDate(e.target.value); },
+            className: "border rounded px-2 py-1 text-sm", style: { borderColor: C.border }
+          })
+        ),
+        /*#__PURE__*/React.createElement("label", { className: "flex flex-col gap-1 text-xs", style: { color: C.muted } },
+          "To",
+          /*#__PURE__*/React.createElement("input", {
+            type: "date", value: endDate,
+            onChange: function(e) { setEndDate(e.target.value); },
+            className: "border rounded px-2 py-1 text-sm", style: { borderColor: C.border }
+          })
+        ),
+        /*#__PURE__*/React.createElement("label", { className: "flex flex-col gap-1 text-xs", style: { color: C.muted } },
+          "Gas Type",
+          /*#__PURE__*/React.createElement("select", {
+            value: selectedGasId,
+            onChange: function(e) { setSelectedGasId(e.target.value); },
+            className: "border rounded px-2 py-1 text-sm", style: { borderColor: C.border }
+          },
+            /*#__PURE__*/React.createElement("option", { value: "ALL" }, "All Gas Types"),
+            allGases.map(function(g) {
+              return /*#__PURE__*/React.createElement("option", { key: g.id, value: g.id }, g.name);
+            })
+          )
+        ),
+        /*#__PURE__*/React.createElement(Button, {
+          size: "sm", variant: "primary",
+          onClick: generateReportData
+        }, /*#__PURE__*/React.createElement(Icon, { name: "chart", size: 12 }), " Generate Report")
+      ),
+      /*#__PURE__*/React.createElement("div", {
+        className: "grid gap-2 mb-3 no-print",
+        style: { gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }
+      },
+        /*#__PURE__*/React.createElement(TextField, {
+          simple: true,
+          label: "Signatory Designation",
+          value: designation,
+          onChange: function(v) { setDesignation(v); }
+        }),
+        /*#__PURE__*/React.createElement(TextField, {
+          simple: true,
+          label: "Signatory Address Line (optional)",
+          value: signLine2,
+          onChange: function(v) { setSignLine2(v); },
+          placeholder: "e.g. Radha Ballob, Rangpur."
+        })
+      ),
+      reportData && /*#__PURE__*/React.createElement("div", { className: "mb-4 no-print flex justify-end" },
+        /*#__PURE__*/React.createElement(Button, {
+          size: "sm", variant: "outline",
+          onClick: generateAndPrint
+        }, /*#__PURE__*/React.createElement(Icon, { name: "printer", size: 12 }), " Print / PDF (Official Format)")
+      ),
+
+      !reportData ? /*#__PURE__*/React.createElement("div", { className: "text-sm p-4", style: { color: C.muted } }, "Click 'Generate Report' to view gas consumption, cylinder refill cycles, and sample yield per refill.") :
+      displayGases.length === 0
+        ? /*#__PURE__*/React.createElement("div", { className: "text-sm p-4", style: { color: C.muted } }, "No gas types registered in inventory.")
+        : (function() {
+            exportRows = [];
+            return displayGases.map(function(g) {
+              var gStat = reportData[g.id] || { cylindersStats: [] };
+
+              return /*#__PURE__*/React.createElement("div", {
+                key: g.id,
+                className: "mb-6 p-4 rounded-lg border",
+                style: { borderColor: C.border, background: "#fff" }
+              },
+                /*#__PURE__*/React.createElement("div", {
+                  className: "flex items-center justify-between gap-2 mb-3 pb-2",
+                  style: { borderBottom: "2px solid " + C.teal }
+                },
+                  /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-2" },
+                    /*#__PURE__*/React.createElement(Icon, { name: "droplet", size: 18, color: C.teal }),
+                    /*#__PURE__*/React.createElement("span", { className: "font-bold text-base", style: { color: C.ink } }, g.name),
+                    /*#__PURE__*/React.createElement("span", { className: "text-xs font-normal", style: { color: C.muted } }, `(Unit: ${g.unit || "kg"})`)
+                  ),
+                  /*#__PURE__*/React.createElement("div", { className: "text-xs font-semibold", style: { color: C.muted } },
+                    `${(g.cylinders || []).length} Cylinder(s) in Inventory`
+                  )
+                ),
+
+                gStat.cylindersStats.map(function(cs) {
+                  var c = cs.cylinder;
+                  var low = c.status === "active" && c.capacity > 0 && (c.remaining / c.capacity) < 0.15;
+
+                  // Populate export rows
+                  cs.cycles.forEach(function(cy) {
+                    exportRows.push({
+                      "Gas":                    g.name,
+                      "Unit":                   g.unit || "kg",
+                      "Cylinder":               c.name || g.name,
+                      "Cylinder Capacity":      c.capacity,
+                      "Current Remaining":      c.remaining,
+                      "Cycle #":                cy.cycleNo,
+                      "Cycle Type":             cy.type,
+                      "Cycle Start Date":       cy.startDate,
+                      "Cycle End Date":         cy.endDate,
+                      "Refill Cost (BDT)":      cy.cost,
+                      "Batches in Cycle":       cy.batches,
+                      "Field Samples Tested":   cy.fieldSamples,
+                      "Std. Samples Tested":    cy.stdSamples,
+                      "Diluted Samples Tested": cy.dilutedSamples,
+                      "Total Samples Tested":   cy.totalSamples,
+                      "Cycle Status":           cy.status,
+                      "Avg Samples / Refill":   cs.avgSamplesPerRefill
+                    });
+                  });
+
+                  return /*#__PURE__*/React.createElement("div", {
+                    key: c.id,
+                    className: "mb-5 p-3 rounded border",
+                    style: { borderColor: C.border, background: "#f8fafc" }
+                  },
+                    // Cylinder Header & KPIs
+                    /*#__PURE__*/React.createElement("div", {
+                      className: "flex flex-wrap items-center justify-between gap-2 mb-3 pb-2",
+                      style: { borderBottom: "1px solid " + C.border }
+                    },
+                      /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-2" },
+                        /*#__PURE__*/React.createElement("span", { className: "font-bold text-sm", style: { color: C.ink } }, c.name || g.name),
+                        /*#__PURE__*/React.createElement(Badge, { tone: c.status === "active" ? (low ? "warn" : "ok") : "muted" },
+                          c.status === "active" ? (low ? "Low Stock" : "Active") : "Empty"
+                        )
+                      ),
+                      /*#__PURE__*/React.createElement("div", { className: "flex flex-wrap gap-x-4 gap-y-1 text-xs", style: { color: C.muted } },
+                        /*#__PURE__*/React.createElement("span", null, "Received: ", /*#__PURE__*/React.createElement("strong", { style: { color: C.ink } }, c.dateReceived || "—")),
+                        /*#__PURE__*/React.createElement("span", null, "Capacity: ", /*#__PURE__*/React.createElement("strong", { style: { color: C.ink } }, `${fmtNum(c.capacity)} ${g.unit}`)),
+                        /*#__PURE__*/React.createElement("span", null, "Remaining: ", /*#__PURE__*/React.createElement("strong", { style: { color: low ? "#dc2626" : "#16a34a" } }, `${fmtNum(c.remaining)} ${g.unit} (${c.capacity > 0 ? ((c.remaining/c.capacity)*100).toFixed(1) : 0}%)`))
+                      )
+                    ),
+
+                    // Key Metric Badge Row: Samples per Refill
+                    /*#__PURE__*/React.createElement("div", {
+                      className: "grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3"
+                    },
+                      /*#__PURE__*/React.createElement("div", { className: "p-2 rounded bg-white border text-center", style: { borderColor: C.border } },
+                        /*#__PURE__*/React.createElement("div", { className: "text-xs", style: { color: C.muted } }, "Refill Cycles"),
+                        /*#__PURE__*/React.createElement("div", { className: "text-base font-bold", style: { color: C.ink } }, cs.cycles.length)
+                      ),
+                      /*#__PURE__*/React.createElement("div", { className: "p-2 rounded bg-white border text-center", style: { borderColor: C.border } },
+                        /*#__PURE__*/React.createElement("div", { className: "text-xs", style: { color: C.muted } }, "Avg Samples / Full Refill"),
+                        /*#__PURE__*/React.createElement("div", { className: "text-base font-bold", style: { color: "#1d4ed8" } },
+                          cs.avgSamplesPerRefill > 0 ? `${cs.avgSamplesPerRefill} Samples` : "—"
+                        )
+                      ),
+                      /*#__PURE__*/React.createElement("div", { className: "p-2 rounded bg-white border text-center", style: { borderColor: C.border } },
+                        /*#__PURE__*/React.createElement("div", { className: "text-xs", style: { color: C.muted } }, "Period Gas Consumed"),
+                        /*#__PURE__*/React.createElement("div", { className: "text-base font-bold", style: { color: C.teal } }, `${fmtNum(cs.totalGasUsedPeriod)} ${g.unit}`)
+                      ),
+                      /*#__PURE__*/React.createElement("div", { className: "p-2 rounded bg-white border text-center", style: { borderColor: C.border } },
+                        /*#__PURE__*/React.createElement("div", { className: "text-xs", style: { color: C.muted } }, "Period Samples Tested"),
+                        /*#__PURE__*/React.createElement("div", { className: "text-base font-bold", style: { color: "#16a34a" } }, cs.totalSamplesPeriod)
+                      )
+                    ),
+
+                    // Table 1: Refill Cycles & Efficiency
+                    /*#__PURE__*/React.createElement("div", { className: "text-xs font-bold mb-1.5 flex items-center gap-1.5", style: { color: C.ink } },
+                      /*#__PURE__*/React.createElement(Icon, { name: "chart", size: 13 }), " 1. Refill Cycles & Sample Yield per Full Cylinder"
+                    ),
+                    cs.cycles.length === 0
+                      ? /*#__PURE__*/React.createElement("div", { className: "text-xs italic p-2 rounded mb-3 bg-white", style: { color: C.muted } }, "No refill cycles recorded.")
+                      : /*#__PURE__*/React.createElement("div", { style: { overflowX: "auto", marginBottom: 14 } },
+                          /*#__PURE__*/React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", border: "1px solid " + C.border, background: "#fff" } },
+                            /*#__PURE__*/React.createElement("thead", null,
+                              /*#__PURE__*/React.createElement("tr", null,
+                                ["Cycle #", "Start Date", "End Date", "Capacity / Refill", "Refill Cost", "Batches", "Total Samples Tested", "Samples / Full Refill", "Cycle Status"].map(function(h) {
+                                  return /*#__PURE__*/React.createElement("th", { key: h, style: th() }, h);
+                                })
+                              )
+                            ),
+                            /*#__PURE__*/React.createElement("tbody", null,
+                              cs.cycles.map(function(cy) {
+                                return /*#__PURE__*/React.createElement("tr", { key: cy.cycleNo },
+                                  /*#__PURE__*/React.createElement("td", { style: td({ fontWeight: 600 }) }, `Cycle ${cy.cycleNo}`),
+                                  /*#__PURE__*/React.createElement("td", { style: td() }, cy.startDate),
+                                  /*#__PURE__*/React.createElement("td", { style: td() }, cy.endDate),
+                                  /*#__PURE__*/React.createElement("td", { style: td() }, `${fmtNum(cy.amount)} ${g.unit}`),
+                                  /*#__PURE__*/React.createElement("td", { style: td() }, cy.cost ? `${fmtNum(cy.cost)} BDT` : "0.00"),
+                                  /*#__PURE__*/React.createElement("td", { style: td() }, cy.batches),
+                                  /*#__PURE__*/React.createElement("td", { style: td({ fontWeight: 600 }) }, cy.totalSamples),
+                                  /*#__PURE__*/React.createElement("td", { style: td({ fontWeight: 700, color: "#1d4ed8" }) },
+                                    cy.totalSamples > 0 ? `${cy.totalSamples} Samples` : "—"
+                                  ),
+                                  /*#__PURE__*/React.createElement("td", { style: td() },
+                                    /*#__PURE__*/React.createElement(Badge, { tone: cy.isClosed ? "muted" : "ok" }, cy.status)
+                                  )
+                                );
+                              })
+                            )
+                          )
+                        ),
+
+                    // Table 2: Analytical Tests in Period
+                    /*#__PURE__*/React.createElement("div", { className: "text-xs font-bold mb-1.5 flex items-center gap-1.5", style: { color: C.ink } },
+                      /*#__PURE__*/React.createElement(Icon, { name: "clipboard", size: 13 }), " 2. Analytical Tests Consuming this Cylinder in Selected Period"
+                    ),
+                    cs.periodRuns.length === 0
+                      ? /*#__PURE__*/React.createElement("div", { className: "text-xs italic p-2 rounded bg-white", style: { color: C.muted } }, "No test runs logged for this cylinder in the selected period.")
+                      : /*#__PURE__*/React.createElement("div", { style: { overflowX: "auto" } },
+                          /*#__PURE__*/React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", border: "1px solid " + C.border, background: "#fff" } },
+                            /*#__PURE__*/React.createElement("thead", null,
+                              /*#__PURE__*/React.createElement("tr", null,
+                                ["Date", "Sub-Batch", "Test Type / Parameter", "Field Samples", "Std. Samples", "Diluted Samples", "Total Samples", "Gas Consumed", "Tester"].map(function(h) {
+                                  return /*#__PURE__*/React.createElement("th", { key: h, style: th() }, h);
+                                })
+                              )
+                            ),
+                            /*#__PURE__*/React.createElement("tbody", null,
+                              cs.periodRuns.map(function(r, idx) {
+                                return /*#__PURE__*/React.createElement("tr", { key: idx },
+                                  /*#__PURE__*/React.createElement("td", { style: td() }, r.date),
+                                  /*#__PURE__*/React.createElement("td", { style: tdL({ fontFamily: "monospace", fontSize: 11 }) }, r.label),
+                                  /*#__PURE__*/React.createElement("td", { style: tdL() }, r.testTypeName),
+                                  /*#__PURE__*/React.createElement("td", { style: td() }, r.fieldSamples),
+                                  /*#__PURE__*/React.createElement("td", { style: td() }, r.stdSamples),
+                                  /*#__PURE__*/React.createElement("td", { style: td() }, r.dilutedSamples),
+                                  /*#__PURE__*/React.createElement("td", { style: td({ fontWeight: 600 }) }, r.totalSamples),
+                                  /*#__PURE__*/React.createElement("td", { style: td({ fontWeight: 700, color: "#1d4ed8" }) }, `${fmtNum(r.gasUsed)} ${g.unit}`),
+                                  /*#__PURE__*/React.createElement("td", { style: td() }, r.tester)
+                                );
+                              }),
+                              /*#__PURE__*/React.createElement("tr", { style: { background: "#f0f9ff", fontWeight: 700 } },
+                                /*#__PURE__*/React.createElement("td", { colSpan: 3, style: tdL({ borderTop: "2px solid " + C.border }) }, "TOTAL (PERIOD)"),
+                                /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) },
+                                  cs.periodRuns.reduce(function(s, r) { return s + r.fieldSamples; }, 0)
+                                ),
+                                /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) },
+                                  cs.periodRuns.reduce(function(s, r) { return s + r.stdSamples; }, 0)
+                                ),
+                                /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) },
+                                  cs.periodRuns.reduce(function(s, r) { return s + r.dilutedSamples; }, 0)
+                                ),
+                                /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) }, cs.totalSamplesPeriod),
+                                /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border, color: "#1d4ed8" }) }, `${fmtNum(cs.totalGasUsedPeriod)} ${g.unit}`),
+                                /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) }, "—")
+                              )
+                            )
+                          )
+                        )
+                  );
+                })
+              );
+            });
+          })(),
+
+      // XLSX Export
+      reportData && /*#__PURE__*/React.createElement("div", { className: "mt-5 no-print" },
+        exportRows.length > 0
+          ? /*#__PURE__*/React.createElement(DataTable, {
+              exportFilename: "gas_usage_report_" + startDate + "_to_" + endDate,
+              columns: [
+                { key: "Gas",                     label: "Gas"                     },
+                { key: "Unit",                    label: "Unit"                    },
+                { key: "Cylinder",                label: "Cylinder"                },
+                { key: "Cylinder Capacity",       label: "Cylinder Capacity"       },
+                { key: "Current Remaining",       label: "Current Remaining"       },
+                { key: "Cycle #",                 label: "Cycle #"                 },
+                { key: "Cycle Type",              label: "Cycle Type"              },
+                { key: "Cycle Start Date",        label: "Cycle Start Date"        },
+                { key: "Cycle End Date",          label: "Cycle End Date"          },
+                { key: "Refill Cost (BDT)",       label: "Refill Cost (BDT)"       },
+                { key: "Batches in Cycle",        label: "Batches in Cycle"        },
+                { key: "Field Samples Tested",    label: "Field Samples Tested"    },
+                { key: "Std. Samples Tested",     label: "Std. Samples Tested"     },
+                { key: "Diluted Samples Tested",  label: "Diluted Samples Tested"  },
+                { key: "Total Samples Tested",    label: "Total Samples Tested"    },
+                { key: "Cycle Status",            label: "Cycle Status"            },
+                { key: "Avg Samples / Refill",    label: "Avg Samples / Refill"    }
+              ],
+              rows: exportRows
+            })
+          : /*#__PURE__*/React.createElement("div", { className: "text-xs p-3", style: { color: C.muted } },
+              "No gas inventory data available."
+            )
+      )
+    )
+  );
+}
+
 // ==================================== FORECAST REPORTS ====================================
 // Monthly Progress Report of Water Quality Test — matches the official DPHE
 // Zonal Lab paper format exactly (letterhead, one Exceed/Non-Exceed row-pair
@@ -2983,6 +4006,14 @@ const REPORT_GROUPS = [{
     k: "equipmentUsageReport",
     label: "Equipment Usage Report",
     icon: "wrench"
+  }, {
+    k: "glasswareUsageReport",
+    label: "Glassware Usage Report",
+    icon: "beaker"
+  }, {
+    k: "gasUsageReport",
+    label: "Gas Usage Report",
+    icon: "droplet"
   }]
 }];
 const ALL_REPORT_PAGES = REPORT_GROUPS.flatMap(g => g.pages);
@@ -3213,5 +4244,5 @@ function ReportsTab({
   }, activePage === "executive" && /*#__PURE__*/React.createElement(ExecutiveDashboardPage, shared), activePage === "insights" && /*#__PURE__*/React.createElement(SmartInsightsPage, shared), activePage === "testAnalytics" && /*#__PURE__*/React.createElement(TestAnalyticsPage, shared), activePage === "technician" && /*#__PURE__*/React.createElement(TechnicianPerformancePage, shared), activePage === "revenue" && /*#__PURE__*/React.createElement(RevenueAnalyticsPage, shared), activePage === "chemicalAnalytics" && /*#__PURE__*/React.createElement(ChemicalAnalyticsPage, shared), activePage === "inventoryAnalytics" && /*#__PURE__*/React.createElement(InventoryAnalyticsPage, shared), activePage === "glasswareAnalytics" && /*#__PURE__*/React.createElement(GlasswareAnalyticsPage, shared), activePage === "gasAnalytics" && /*#__PURE__*/React.createElement(GasAnalyticsPage, shared), activePage === "predictiveInventory" && /*#__PURE__*/React.createElement(PredictiveInventoryPage, shared), activePage === "equipmentAnalytics" && /*#__PURE__*/React.createElement(EquipmentAnalyticsPage, shared), activePage === "maintenanceAnalytics" && /*#__PURE__*/React.createElement(MaintenanceAnalyticsPage, shared), activePage === "monthlyTrends" && /*#__PURE__*/React.createElement(MonthlyTrendsPage, shared), activePage === "dailyTrends" && /*#__PURE__*/React.createElement(DailyTrendsPage, shared), activePage === "forecast" && /*#__PURE__*/React.createElement(ForecastPage, shared), activePage === "customReport" && /*#__PURE__*/React.createElement(CustomReportGeneratorPage, shared), activePage === "customReportSingle" && /*#__PURE__*/React.createElement(CustomReportGeneratorPage, {
     ...shared,
     forceMode: "individual"
-  }), activePage === "monthlyProgressReport" && /*#__PURE__*/React.createElement(MonthlyProgressReportPage, shared), activePage === "chemicalUsageReport" && /*#__PURE__*/React.createElement(ChemicalUsageReportPage, shared), activePage === "equipmentUsageReport" && /*#__PURE__*/React.createElement(EquipmentUsageReportPage, shared)));
+  }), activePage === "monthlyProgressReport" && /*#__PURE__*/React.createElement(MonthlyProgressReportPage, shared), activePage === "chemicalUsageReport" && /*#__PURE__*/React.createElement(ChemicalUsageReportPage, shared), activePage === "equipmentUsageReport" && /*#__PURE__*/React.createElement(EquipmentUsageReportPage, shared), activePage === "glasswareUsageReport" && /*#__PURE__*/React.createElement(GlasswareUsageReportPage, shared), activePage === "gasUsageReport" && /*#__PURE__*/React.createElement(GasUsageReportPage, shared)));
 }

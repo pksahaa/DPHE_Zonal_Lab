@@ -27,17 +27,22 @@ function Badge({
       color: C.muted,
       background: C.mutedBg
     },
+    neutral: {
+      color: C.muted,
+      background: C.mutedBg
+    },
     info: {
       color: C.info,
       background: C.infoBg
     }
   };
+  const activeTone = tones[tone] || tones.muted;
   return /*#__PURE__*/React.createElement("span", {
     title: title,
     className: "inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold whitespace-nowrap",
     style: {
-      color: tones[tone].color,
-      background: tones[tone].background
+      color: activeTone.color,
+      background: activeTone.background
     }
   }, children);
 }

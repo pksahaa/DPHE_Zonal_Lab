@@ -1948,3 +1948,108 @@ function buildEquipmentUsageReportHtml({ labIdentity, startDate, endDate, tableH
   </body></html>`;
 }
 
+function buildGlasswareReportHtml({ labIdentity, startDate, endDate, tableHtml, signatory }) {
+  const resolveLogoUrl = src => {
+    if (!src) return src;
+    try { return new URL(src, document.baseURI).href; } catch (e) { return src; }
+  };
+  const logoLeftSrc = resolveLogoUrl(labIdentity.leftLogoDataUrl || labIdentity.leftLogoUrl || "assets/logo_left.png");
+  const logoRightSrc = resolveLogoUrl(labIdentity.rightLogoDataUrl || labIdentity.rightLogoUrl || "assets/logo_right.png");
+  const logoLeft = logoLeftSrc ? `<img src="${logoLeftSrc}" style="height:56px" onerror="this.style.display='none'">` : "";
+  const logoRight = logoRightSrc ? `<img src="${logoRightSrc}" style="height:56px" onerror="this.style.display='none'">` : "";
+  const sig = signatory || {};
+
+  return `<!DOCTYPE html><html><head><title>Glassware Inventory & Usage Report</title><style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Times New Roman', serif; margin: 0; padding: 24px; color: #111; font-size: 13px; }
+    .header-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+    .header-table td { border: 2px solid #111; padding: 6px; vertical-align: middle; }
+    .header-table .logo-cell { width: 70px; text-align: center; }
+    .header-table .org-cell { text-align: center; font-weight: bold; }
+    .org-cell .line1, .org-cell .line2, .org-cell .line3 { margin: 1px 0; }
+    .org-cell .lab-name { margin: 2px 0; }
+    .org-cell .contact { font-weight: normal; font-size: 11px; margin-top: 2px; }
+    .report-title { text-align: center; font-weight: bold; text-decoration: underline; margin: 14px 0 4px; font-size: 14px; }
+    .month-line { text-align: center; font-weight: bold; margin: 0 0 12px; font-size: 13px; }
+    table th, table td { word-break: break-word; }
+    .sign-block { margin-top: 40px; text-align: right; font-size: 12px; line-height: 1.5; }
+    .report-content { margin-top: 20px; }
+    @media print { body { padding: 10px; } }
+  </style></head><body>
+    <table class="header-table"><tr>
+      <td class="logo-cell">${logoLeft}</td>
+      <td class="org-cell">
+        <div class="line1">${labIdentity.orgLine1 || ""}</div>
+        <div class="line2">${labIdentity.orgLine2 || ""}</div>
+        <div class="line3">${labIdentity.orgLine3 || ""}</div>
+        <div class="lab-name">${labIdentity.labName || ""}</div>
+        <div class="contact">${labIdentity.phone ? "Phone: " + labIdentity.phone : ""}${labIdentity.phone && labIdentity.email ? ", " : ""}${labIdentity.email ? "E-mail: " + labIdentity.email : ""}</div>
+      </td>
+      <td class="logo-cell">${logoRight}</td>
+    </tr></table>
+    <div class="report-title">Glassware Inventory & Usage Report</div>
+    <div class="month-line">Period: ${startDate} to ${endDate}</div>
+    <div class="report-content">
+      ${tableHtml}
+    </div>
+    <div class="sign-block">
+      ${sig.designation || "Senior Chemist"}<br>
+      ${sig.line1 || labIdentity.labName || ""}${sig.line2 ? "<br>" + sig.line2 : ""}
+    </div>
+    <script>window.print();</script>
+  </body></html>`;
+}
+
+function buildGasReportHtml({ labIdentity, startDate, endDate, tableHtml, signatory }) {
+  const resolveLogoUrl = src => {
+    if (!src) return src;
+    try { return new URL(src, document.baseURI).href; } catch (e) { return src; }
+  };
+  const logoLeftSrc = resolveLogoUrl(labIdentity.leftLogoDataUrl || labIdentity.leftLogoUrl || "assets/logo_left.png");
+  const logoRightSrc = resolveLogoUrl(labIdentity.rightLogoDataUrl || labIdentity.rightLogoUrl || "assets/logo_right.png");
+  const logoLeft = logoLeftSrc ? `<img src="${logoLeftSrc}" style="height:56px" onerror="this.style.display='none'">` : "";
+  const logoRight = logoRightSrc ? `<img src="${logoRightSrc}" style="height:56px" onerror="this.style.display='none'">` : "";
+  const sig = signatory || {};
+
+  return `<!DOCTYPE html><html><head><title>Gas Usage & Cylinder Efficiency Report</title><style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Times New Roman', serif; margin: 0; padding: 24px; color: #111; font-size: 13px; }
+    .header-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+    .header-table td { border: 2px solid #111; padding: 6px; vertical-align: middle; }
+    .header-table .logo-cell { width: 70px; text-align: center; }
+    .header-table .org-cell { text-align: center; font-weight: bold; }
+    .org-cell .line1, .org-cell .line2, .org-cell .line3 { margin: 1px 0; }
+    .org-cell .lab-name { margin: 2px 0; }
+    .org-cell .contact { font-weight: normal; font-size: 11px; margin-top: 2px; }
+    .report-title { text-align: center; font-weight: bold; text-decoration: underline; margin: 14px 0 4px; font-size: 14px; }
+    .month-line { text-align: center; font-weight: bold; margin: 0 0 12px; font-size: 13px; }
+    table th, table td { word-break: break-word; }
+    .sign-block { margin-top: 40px; text-align: right; font-size: 12px; line-height: 1.5; }
+    .report-content { margin-top: 20px; }
+    @media print { body { padding: 10px; } }
+  </style></head><body>
+    <table class="header-table"><tr>
+      <td class="logo-cell">${logoLeft}</td>
+      <td class="org-cell">
+        <div class="line1">${labIdentity.orgLine1 || ""}</div>
+        <div class="line2">${labIdentity.orgLine2 || ""}</div>
+        <div class="line3">${labIdentity.orgLine3 || ""}</div>
+        <div class="lab-name">${labIdentity.labName || ""}</div>
+        <div class="contact">${labIdentity.phone ? "Phone: " + labIdentity.phone : ""}${labIdentity.phone && labIdentity.email ? ", " : ""}${labIdentity.email ? "E-mail: " + labIdentity.email : ""}</div>
+      </td>
+      <td class="logo-cell">${logoRight}</td>
+    </tr></table>
+    <div class="report-title">Gas Usage & Cylinder Efficiency Report</div>
+    <div class="month-line">Period: ${startDate} to ${endDate}</div>
+    <div class="report-content">
+      ${tableHtml}
+    </div>
+    <div class="sign-block">
+      ${sig.designation || "Senior Chemist"}<br>
+      ${sig.line1 || labIdentity.labName || ""}${sig.line2 ? "<br>" + sig.line2 : ""}
+    </div>
+    <script>window.print();</script>
+  </body></html>`;
+}
+
+
