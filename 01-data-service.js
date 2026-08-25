@@ -149,45 +149,59 @@ const DataService = (() => {
       token
     } = config;
     if (!gasUrl) throw new Error("Google Apps Script URL is not configured (Settings → Backend).");
-    if (action === "list" || action === "ping" || action === "multiList") {
-      const qs = new URLSearchParams({
-        action,
-        token: token || "",
-        // Only meaningful for collections the backend treats as
-        // permission-gated reads (currently just auditLog — see
-        // applyCollectionReadPolicy_ in Code.gs); harmless to send on every
-        // other read.
-        sessionToken: sessionToken || ""
+    try {
+      if (action === "list" || action === "ping" || action === "multiList") {
+        const qs = new URLSearchParams({
+          action,
+          token: token || "",
+          sessionToken: sessionToken || ""
+        });
+        if (collection) qs.set("collection", collection);
+        if (collections) qs.set("collections", collections);
+        const res = await fetch(`${gasUrl}?${qs.toString()}`, {
+          method: "GET"
+        });
+        const rawText = await res.text();
+        let json;
+        try {
+          json = JSON.parse(rawText);
+        } catch (parseErr) {
+          if (rawText && rawText.includes("<!DOCTYPE html>")) {
+            throw new Error("Backend is temporarily unavailable. Retrying...");
+          }
+          throw new Error("Invalid response from backend: " + (rawText ? rawText.slice(0, 100) : "empty"));
+        }
+        if (json.error) throw new Error(json.error);
+        return json.data;
+      }
+      const res = await fetch(gasUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/plain;charset=utf-8"
+        },
+        body: JSON.stringify({
+          action,
+          collection,
+          payload,
+          token,
+          sessionToken
+        })
       });
-      if (collection) qs.set("collection", collection);
-      if (collections) qs.set("collections", collections);
-      const res = await fetch(`${gasUrl}?${qs.toString()}`, {
-        method: "GET"
-      });
-      const json = await res.json();
+      const rawText = await res.text();
+      let json;
+      try {
+        json = JSON.parse(rawText);
+      } catch (parseErr) {
+        if (rawText && rawText.includes("<!DOCTYPE html>")) {
+          throw new Error("Backend is busy. Retrying...");
+        }
+        throw new Error("Invalid response from backend: " + (rawText ? rawText.slice(0, 100) : "empty"));
+      }
       if (json.error) throw new Error(json.error);
       return json.data;
+    } catch (err) {
+      throw err;
     }
-    const res = await fetch(gasUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "text/plain;charset=utf-8"
-      },
-      body: JSON.stringify({
-        action,
-        collection,
-        payload,
-        token,
-        // Every protected write is checked against this on the backend
-        // (see requireSession_ in Code.gs) — login/logout/bootstrapAdmin
-        // are the only actions that don't need it, since they're how a
-        // session gets established in the first place.
-        sessionToken
-      })
-    });
-    const json = await res.json();
-    if (json.error) throw new Error(json.error);
-    return json.data;
   }
   async function gasCall(action, opts) {
     return gasCallWithRetry(action, opts);

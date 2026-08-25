@@ -850,6 +850,11 @@ function LabApp({
           const stamped = await DataService.bulkUpsert(collectionName, upserts);
           if (Array.isArray(stamped)) {
             stamped.forEach(st => {
+              const live = (currentData || []).find(u => u.id === st.id);
+              if (live) {
+                live._version = st._version;
+                live.updatedAt = st.updatedAt;
+              }
               const orig = upserts.find(u => u.id === st.id);
               if (orig) {
                 orig._version = st._version;

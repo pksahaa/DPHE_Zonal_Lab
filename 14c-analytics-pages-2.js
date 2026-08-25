@@ -1594,6 +1594,972 @@ function DailyTrendsPage({
   }))));
 }
 
+// ==================================== CHEMICAL USAGE REPORT ====================================
+// Per-chemical inventory consumption report. For every chemical in inventory it
+// shows: batch details (no., expiry, status), amounts received/used/remaining,
+// and a table of every analytical sub-batch that consumed this chemical in the
+// chosen date range — including the field-sample and standard-sample counts.
+//
+// Design rules to avoid calculation duplication:
+//   - "Used in period"  → summed from testRecord.bottleLog[chemName] entries
+//                         (already deducted when the test record was saved —
+//                          never re-run deductFromChemical()).
+//   - "Current Remaining" → read directly from batch.remaining (live balance).
+//   - "Opening Balance"   → batch.remaining + usedInPeriod + usedAfterPeriod.
+//     Since we can compute usedAfterPeriod (records after period end date) from
+//     bottleLog, we can reconstruct the opening balance without storing it.
+function ChemicalUsageReportPage({ chemicals, testRecords, session }) {
+  // ---- Date range state ----
+  var today = todayStr();
+  var firstOfMonth = today.slice(0, 7) + "-01";
+  var [startDate, setStartDate] = React.useState(firstOfMonth);
+  var [endDate,   setEndDate]   = React.useState(today);
+  var [designation, setDesignation] = React.useState("Senior Chemist");
+  var [signLine2, setSignLine2] = React.useState("");
+  // ---- Chemical filter ----
+  var [selectedChemId, setSelectedChemId] = React.useState("ALL");
+  var [reportData, setReportData] = React.useState(null);
+
+  function generateReportData() {
+    var stats = {}; // chemName → { batches: { batchId → {usedInPeriod, usedAfterPeriod} }, subBatchRows: [] }
+
+    (testRecords || []).forEach(function(tr) {
+      var d = tr.date || "";
+      var inPeriod  = d >= startDate && d <= endDate;
+      var afterPeriod = d > endDate;
+      if (!inPeriod && !afterPeriod) return;
+      var log = tr.bottleLog || {};
+      Object.keys(log).forEach(function(chemName) {
+        var entries = Array.isArray(log[chemName]) ? log[chemName] : [];
+        if (!entries.length) return;
+        if (!stats[chemName]) stats[chemName] = { batches: {}, subBatchRows: [] };
+        var totalUsedThisRecord = 0;
+        entries.forEach(function(e) {
+          var bid = e.batchId || "__unknown__";
+          var amt = Number(e.amount) || 0;
+          if (!stats[chemName].batches[bid]) {
+            stats[chemName].batches[bid] = { usedInPeriod: 0, usedAfterPeriod: 0 };
+          }
+          if (inPeriod) {
+            stats[chemName].batches[bid].usedInPeriod += amt;
+            totalUsedThisRecord += amt;
+          } else {
+            stats[chemName].batches[bid].usedAfterPeriod += amt;
+          }
+        });
+        if (inPeriod && totalUsedThisRecord > 0) {
+          var fSamp = tr.numberOfFieldSamples || 0;
+          var sSamp = tr.numberOfStandardSamples || 0;
+          var dSamp = tr.dilutionRequired ? (Number(tr.numberOfDilutedSamples) || 0) : 0;
+          stats[chemName].subBatchRows.push({
+            date:           d,
+            label:          tr.subBatchLabel || "(individual)",
+            testTypeName:   tr.testTypeName  || "",
+            fieldSamples:   fSamp,
+            stdSamples:     sSamp,
+            dilutedSamples: dSamp,
+            totalSamples:   fSamp + sSamp + dSamp,
+            totalUsed:      totalUsedThisRecord
+          });
+        }
+      });
+    });
+    setReportData(stats);
+  }
+
+  // Clear report data if dates or chemical filter changes
+  React.useEffect(function() {
+    setReportData(null);
+  }, [startDate, endDate, selectedChemId]);
+
+  // ---- Which chemicals to show ----
+  var allChemicals = (chemicals || []).slice().sort(function(a, b) {
+    return (a.name || "").localeCompare(b.name || "");
+  });
+  var displayChemicals = selectedChemId === "ALL"
+    ? allChemicals
+    : allChemicals.filter(function(c) { return c.id === selectedChemId; });
+
+  // ---- Helper: 4dp number formatter ----
+  function fmtAmt(v, unit) {
+    var n = Number(v);
+    if (!n) return "—";
+    var s = n % 1 === 0 ? String(n) : n.toFixed(2);
+    return unit ? s + " " + unit : s;
+  }
+
+  // ---- Shared table header/cell styles ----
+  var th = function(extra) {
+    return Object.assign({
+      padding: "5px 8px", fontSize: 11, fontWeight: 700,
+      background: "#f0fdf4", borderBottom: "2px solid " + C.border,
+      borderRight: "1px solid " + C.border, whiteSpace: "nowrap", textAlign: "center"
+    }, extra || {});
+  };
+  var td = function(extra) {
+    return Object.assign({
+      padding: "4px 8px", fontSize: 12,
+      borderBottom: "1px solid " + C.border,
+      borderRight: "1px solid " + C.border, textAlign: "center"
+    }, extra || {});
+  };
+  var tdL = function(extra) { return td(Object.assign({ textAlign: "left" }, extra)); };
+
+  // ---- Build XLSX export data (flat — one row per batch) ----
+  var exportRows = [];
+
+  async function generateAndPrint() {
+    var htmlStr = "";
+    var tableStyle = "width:100%; border-collapse:collapse; border:1px solid #111; margin-bottom: 8px;";
+    var thStyle = "padding:5px 8px; font-size:11px; font-weight:bold; background:#f0fdf4; border:1px solid #111; text-align:center;";
+    var tdStyle = "padding:4px 8px; font-size:12px; border:1px solid #111; text-align:center;";
+    var tdLeft = tdStyle + "text-align:left;";
+
+    displayChemicals.forEach(function(chem) {
+       var cStats = reportData[chem.name] || { batches: {}, subBatchRows: [] };
+       var unit = chem.unit || "";
+       var batchRows = (chem.batches || []).slice().sort(function(a,b) { return (a.expiryDate || "").localeCompare(b.expiryDate || ""); }).map(function(b) {
+          var bStat = cStats.batches[b.id] || { usedInPeriod: 0, usedAfterPeriod: 0 };
+          var openingBal = +(b.remaining + bStat.usedInPeriod + bStat.usedAfterPeriod).toFixed(4);
+          var closingBal = +(b.remaining + bStat.usedAfterPeriod).toFixed(4);
+          return { batchName: b.batchName||"—", mfgDate: b.manufacturingDate||"—", expiryDate: b.expiryDate||"—", status: b.status||"active", initialAmt: b.initialAmount, openingBal, usedInPeriod: bStat.usedInPeriod, closingBal, remaining: b.remaining, receivedFrom: b.receivedFrom||"—" };
+       });
+       var totUsed = batchRows.reduce(function(s,r) { return s+r.usedInPeriod; }, 0);
+       var totOpening = batchRows.reduce(function(s,r) { return s+r.openingBal; }, 0);
+       var totClosing = batchRows.reduce(function(s,r) { return s+r.closingBal; }, 0);
+       var totRemain = batchRows.reduce(function(s,r) { return s+r.remaining; }, 0);
+       var sbRows = cStats.subBatchRows.slice().sort(function(a,b) { return (a.date||"").localeCompare(b.date||""); });
+       var hasActivity = totUsed > 0 || sbRows.length > 0;
+       
+       htmlStr += `<div style="margin-bottom:24px; page-break-inside:avoid;">`;
+       htmlStr += `<h3 style="margin:0 0 6px; font-size:14px; border-left:4px solid #0d9488; padding-left:8px;">${chem.name} ${chem.grade ? `<span style="font-weight:normal;font-size:11px;">(Grade: ${chem.grade})</span>` : ""} <span style="font-weight:normal;font-size:11px;">(Unit: ${unit||"—"})</span>${!hasActivity ? ` <span style="font-style:italic;color:#666;font-size:11px;">(no usage in period)</span>` : ""}</h3>`;
+       
+       if (batchRows.length > 0) {
+         htmlStr += `<table style="${tableStyle}"><thead><tr>
+           <th style="${thStyle}">Batch No.</th><th style="${thStyle}">Mfg. Date</th><th style="${thStyle}">Expiry Date</th><th style="${thStyle}">Status</th>
+           <th style="${thStyle}">Initial Recd.</th><th style="${thStyle}">Opening Bal.</th><th style="${thStyle}">Used in Period</th><th style="${thStyle}">Closing Bal.</th><th style="${thStyle}">Current Remaining</th>
+         </tr></thead><tbody>`;
+         batchRows.forEach(function(r) {
+            htmlStr += `<tr>
+              <td style="${tdLeft}font-weight:bold;">${r.batchName}</td><td style="${tdStyle}">${r.mfgDate}</td><td style="${tdStyle}">${r.expiryDate}</td><td style="${tdStyle}">${(r.status||"active").toUpperCase()}</td>
+              <td style="${tdStyle}">${fmtAmt(r.initialAmt)}</td><td style="${tdStyle}">${fmtAmt(r.openingBal)}</td><td style="${tdStyle}">${fmtAmt(r.usedInPeriod)}</td><td style="${tdStyle}">${fmtAmt(r.closingBal)}</td><td style="${tdStyle}">${fmtAmt(r.remaining)}</td>
+            </tr>`;
+         });
+         htmlStr += `<tr style="background:#f0f9ff;font-weight:bold;">
+           <td colspan="5" style="${tdLeft}">TOTAL</td><td style="${tdStyle}">${fmtAmt(totOpening)}</td><td style="${tdStyle}">${fmtAmt(totUsed)}</td><td style="${tdStyle}">${fmtAmt(totClosing)}</td><td style="${tdStyle}">${fmtAmt(totRemain)}</td>
+         </tr></tbody></table>`;
+       }
+       
+       if (sbRows.length > 0) {
+         htmlStr += `<div style="font-size:11px;font-weight:bold;margin-bottom:4px;">Analytical Batches consuming this chemical:</div>`;
+         htmlStr += `<table style="${tableStyle}"><thead><tr>
+           <th style="${thStyle}">Date</th><th style="${thStyle}">Sub-Batch</th><th style="${thStyle}">Test Type</th><th style="${thStyle}">Field Samples</th><th style="${thStyle}">Std. Samples</th><th style="${thStyle}">Diluted Samples</th><th style="${thStyle}">Total Samples</th><th style="${thStyle}">Amount Used</th>
+         </tr></thead><tbody>`;
+         sbRows.forEach(function(r) {
+           htmlStr += `<tr>
+             <td style="${tdStyle}">${r.date}</td><td style="${tdLeft}font-family:monospace;">${r.label}</td><td style="${tdLeft}">${r.testTypeName}</td>
+             <td style="${tdStyle}">${r.fieldSamples||0}</td><td style="${tdStyle}">${r.stdSamples||0}</td><td style="${tdStyle}">${r.dilutedSamples||0}</td><td style="${tdStyle}">${r.totalSamples||0}</td>
+             <td style="${tdStyle}font-weight:bold;">${fmtAmt(r.totalUsed)}</td>
+           </tr>`;
+         });
+         var sumField = sbRows.reduce(function(s,r) { return s+(r.fieldSamples||0); }, 0);
+         var sumStd = sbRows.reduce(function(s,r) { return s+(r.stdSamples||0); }, 0);
+         var sumDil = sbRows.reduce(function(s,r) { return s+(r.dilutedSamples||0); }, 0);
+         var sumTot = sbRows.reduce(function(s,r) { return s+(r.totalSamples||0); }, 0);
+         var sumUsed = sbRows.reduce(function(s,r) { return s+(r.totalUsed||0); }, 0);
+         htmlStr += `<tr style="background:#f0f9ff;font-weight:bold;">
+           <td colspan="3" style="${tdLeft}">TOTAL</td><td style="${tdStyle}">${sumField}</td><td style="${tdStyle}">${sumStd}</td><td style="${tdStyle}">${sumDil}</td><td style="${tdStyle}">${sumTot}</td><td style="${tdStyle}">${fmtAmt(sumUsed)}</td>
+         </tr></tbody></table>`;
+       }
+       htmlStr += `</div>`;
+    });
+    
+    var html = buildChemicalUsageReportHtml({
+      labIdentity: session || {},
+      startDate: startDate,
+      endDate: endDate,
+      tableHtml: htmlStr,
+      signatory: { designation: designation, line2: signLine2 }
+    });
+    
+    var w = openReportPrintWindow();
+    finishReportPrintWindow(w, html);
+  }
+
+  // ---- Render ----
+  return /*#__PURE__*/React.createElement("div", null,
+
+    // ── Controls bar ──
+    /*#__PURE__*/React.createElement(SectionCard, {
+      title: "Chemical Inventory Usage Report",
+      icon: /*#__PURE__*/React.createElement(Icon, { name: "flask", size: 15 })
+    },
+      /*#__PURE__*/React.createElement("div", {
+        className: "flex flex-wrap gap-3 mb-4 items-end no-print",
+        style: { borderBottom: "1px solid " + C.border, paddingBottom: 12 }
+      },
+        /*#__PURE__*/React.createElement("label", { className: "flex flex-col gap-1 text-xs", style: { color: C.muted } },
+          "From",
+          /*#__PURE__*/React.createElement("input", {
+            type: "date", value: startDate,
+            onChange: function(e) { setStartDate(e.target.value); },
+            className: "border rounded px-2 py-1 text-sm", style: { borderColor: C.border }
+          })
+        ),
+        /*#__PURE__*/React.createElement("label", { className: "flex flex-col gap-1 text-xs", style: { color: C.muted } },
+          "To",
+          /*#__PURE__*/React.createElement("input", {
+            type: "date", value: endDate,
+            onChange: function(e) { setEndDate(e.target.value); },
+            className: "border rounded px-2 py-1 text-sm", style: { borderColor: C.border }
+          })
+        ),
+        /*#__PURE__*/React.createElement("label", { className: "flex flex-col gap-1 text-xs", style: { color: C.muted } },
+          "Chemical",
+          /*#__PURE__*/React.createElement("select", {
+            value: selectedChemId,
+            onChange: function(e) { setSelectedChemId(e.target.value); },
+            className: "border rounded px-2 py-1 text-sm", style: { borderColor: C.border }
+          },
+            /*#__PURE__*/React.createElement("option", { value: "ALL" }, "All Chemicals"),
+            allChemicals.map(function(c) {
+              return /*#__PURE__*/React.createElement("option", { key: c.id, value: c.id }, c.name);
+            })
+          )
+        ),
+        /*#__PURE__*/React.createElement(Button, {
+          size: "sm", variant: "primary",
+          onClick: generateReportData
+        }, /*#__PURE__*/React.createElement(Icon, { name: "chart", size: 12 }), " Generate Report")
+      ),
+      /*#__PURE__*/React.createElement("div", {
+        className: "grid gap-2 mb-3 no-print",
+        style: { gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }
+      },
+        /*#__PURE__*/React.createElement(TextField, {
+          simple: true,
+          label: "Signatory Designation",
+          value: designation,
+          onChange: function(v) { setDesignation(v); }
+        }),
+        /*#__PURE__*/React.createElement(TextField, {
+          simple: true,
+          label: "Signatory Address Line (optional)",
+          value: signLine2,
+          onChange: function(v) { setSignLine2(v); },
+          placeholder: "e.g. Radha Ballob, Rangpur."
+        })
+      ),
+      reportData && /*#__PURE__*/React.createElement("div", { className: "mb-4 no-print flex justify-end" },
+        /*#__PURE__*/React.createElement(Button, {
+          size: "sm", variant: "outline",
+          onClick: generateAndPrint
+        }, /*#__PURE__*/React.createElement(Icon, { name: "printer", size: 12 }), " Print / PDF (Official Format)")
+      ),
+
+      // ── Per-chemical sections ──
+      !reportData ? /*#__PURE__*/React.createElement("div", { className: "text-sm p-4", style: { color: C.muted } }, "Click 'Generate Report' to view chemical usage for the selected period.") :
+      displayChemicals.length === 0
+        ? /*#__PURE__*/React.createElement("div", { className: "text-sm p-4", style: { color: C.muted } }, "No chemicals in inventory.")
+        : displayChemicals.map(function(chem) {
+            var cStats = reportData[chem.name] || { batches: {}, subBatchRows: [] };
+            var unit = chem.unit || "";
+
+            // ---- Build per-batch rows ----
+            var batchRows = (chem.batches || []).slice().sort(function(a, b) {
+              return (a.expiryDate || "").localeCompare(b.expiryDate || "");
+            }).map(function(b) {
+              var bStat = cStats.batches[b.id] || { usedInPeriod: 0, usedAfterPeriod: 0 };
+              // Opening balance for the period = remaining + usedInPeriod + usedAfterPeriod
+              var openingBal = +(b.remaining + bStat.usedInPeriod + bStat.usedAfterPeriod).toFixed(4);
+              var closingBal = +(b.remaining + bStat.usedAfterPeriod).toFixed(4);
+              return {
+                batchName:    b.batchName || "—",
+                mfgDate:      b.manufacturingDate || "—",
+                expiryDate:   b.expiryDate || "—",
+                status:       b.status || "active",
+                initialAmt:   b.initialAmount,
+                openingBal:   openingBal,
+                usedInPeriod: bStat.usedInPeriod,
+                closingBal:   closingBal,
+                remaining:    b.remaining,
+                receivedFrom: b.receivedFrom || "—"
+              };
+            });
+
+            // Totals for batch table
+            var totUsed    = batchRows.reduce(function(s, r) { return s + r.usedInPeriod; }, 0);
+            var totOpening = batchRows.reduce(function(s, r) { return s + r.openingBal;   }, 0);
+            var totClosing = batchRows.reduce(function(s, r) { return s + r.closingBal;   }, 0);
+            var totRemain  = batchRows.reduce(function(s, r) { return s + r.remaining;    }, 0);
+
+            // Sub-batch rows sorted by date
+            var sbRows = cStats.subBatchRows.slice().sort(function(a, b) {
+              return (a.date || "").localeCompare(b.date || "");
+            });
+
+            // Accumulate export rows
+            batchRows.forEach(function(r) {
+              exportRows.push({
+                "Chemical":          chem.name,
+                "Grade":             chem.grade || "",
+                "Unit":              unit,
+                "Batch No.":         r.batchName,
+                "Mfg. Date":         r.mfgDate,
+                "Expiry Date":       r.expiryDate,
+                "Status":            r.status,
+                "Received From":     r.receivedFrom,
+                "Initial Received":  r.initialAmt,
+                "Opening Balance":   r.openingBal,
+                "Used in Period":    r.usedInPeriod,
+                "Closing Balance":   r.closingBal,
+                "Current Remaining": r.remaining
+              });
+            });
+
+            var statusBadge = function(s) {
+              var col = s === "active" ? "#16a34a" : s === "expired" ? "#dc2626" : "#6b7280";
+              return /*#__PURE__*/React.createElement("span", {
+                style: {
+                  display: "inline-block", padding: "1px 6px", borderRadius: 9,
+                  fontSize: 10, fontWeight: 700, color: "#fff", background: col
+                }
+              }, (s || "active").toUpperCase());
+            };
+
+            var hasActivity = totUsed > 0 || sbRows.length > 0;
+
+            return /*#__PURE__*/React.createElement("div", {
+              key: chem.id,
+              className: "mb-6",
+              style: { pageBreakInside: "avoid" }
+            },
+              // Chemical header
+              /*#__PURE__*/React.createElement("div", {
+                className: "flex items-center gap-3 mb-2 px-1",
+                style: {
+                  borderLeft: "4px solid " + C.teal, paddingLeft: 8
+                }
+              },
+                /*#__PURE__*/React.createElement("span", {
+                  className: "font-bold text-sm", style: { color: C.ink }
+                }, chem.name),
+                chem.grade && /*#__PURE__*/React.createElement("span", {
+                  className: "text-xs px-2 py-0.5 rounded",
+                  style: { background: C.border, color: C.muted }
+                }, "Grade: " + chem.grade),
+                /*#__PURE__*/React.createElement("span", {
+                  className: "text-xs", style: { color: C.muted }
+                }, "Unit: " + (unit || "—")),
+                !hasActivity && /*#__PURE__*/React.createElement("span", {
+                  className: "text-xs italic", style: { color: C.muted }
+                }, "(no usage in selected period)")
+              ),
+
+              // ── Batch summary table ──
+              /*#__PURE__*/React.createElement("div", { style: { overflowX: "auto", marginBottom: 8 } },
+                /*#__PURE__*/React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", border: "1px solid " + C.border } },
+                  /*#__PURE__*/React.createElement("thead", null,
+                    /*#__PURE__*/React.createElement("tr", null,
+                      ["Batch No.", "Mfg. Date", "Expiry Date", "Status", "Initial Recd.", "Opening Bal.", "Used in Period", "Closing Bal.", "Current Remaining"].map(function(h) {
+                        return /*#__PURE__*/React.createElement("th", { key: h, style: th() }, h);
+                      })
+                    )
+                  ),
+                  /*#__PURE__*/React.createElement("tbody", null,
+                    batchRows.length === 0
+                      ? /*#__PURE__*/React.createElement("tr", null,
+                          /*#__PURE__*/React.createElement("td", { colSpan: 9, style: td({ color: C.muted, fontStyle: "italic" }) }, "No batches.")
+                        )
+                      : batchRows.map(function(r, i) {
+                          var rowBg = r.status === "expired" ? "#fef2f2" : r.status === "depleted" ? "#f9fafb" : "transparent";
+                          return /*#__PURE__*/React.createElement("tr", { key: i, style: { background: rowBg } },
+                            /*#__PURE__*/React.createElement("td", { style: tdL({ fontWeight: 600 }) }, r.batchName),
+                            /*#__PURE__*/React.createElement("td", { style: td() }, r.mfgDate),
+                            /*#__PURE__*/React.createElement("td", { style: td() }, r.expiryDate),
+                            /*#__PURE__*/React.createElement("td", { style: td() }, statusBadge(r.status)),
+                            /*#__PURE__*/React.createElement("td", { style: td() }, fmtAmt(r.initialAmt, unit)),
+                            /*#__PURE__*/React.createElement("td", { style: td() }, fmtAmt(r.openingBal, unit)),
+                            /*#__PURE__*/React.createElement("td", { style: td({ fontWeight: r.usedInPeriod > 0 ? 700 : 400, color: r.usedInPeriod > 0 ? "#1d4ed8" : C.muted }) },
+                              fmtAmt(r.usedInPeriod, unit)
+                            ),
+                            /*#__PURE__*/React.createElement("td", { style: td() }, fmtAmt(r.closingBal, unit)),
+                            /*#__PURE__*/React.createElement("td", { style: td({ fontWeight: 600, color: r.remaining < (r.initialAmt * 0.15) ? "#dc2626" : "#16a34a" }) },
+                              fmtAmt(r.remaining, unit)
+                            )
+                          );
+                        }),
+                    // Totals row
+                    batchRows.length > 0 && /*#__PURE__*/React.createElement("tr", { style: { background: "#f0f9ff", fontWeight: 700 } },
+                      /*#__PURE__*/React.createElement("td", { colSpan: 5, style: tdL({ borderTop: "2px solid " + C.border, fontWeight: 700 }) }, "TOTAL"),
+                      /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) }, fmtAmt(totOpening, unit)),
+                      /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border, color: "#1d4ed8" }) }, fmtAmt(totUsed, unit)),
+                      /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) }, fmtAmt(totClosing, unit)),
+                      /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border, color: "#16a34a" }) }, fmtAmt(totRemain, unit))
+                    )
+                  )
+                )
+              ),
+
+              // ── Sub-batch usage table (only shown when there IS usage in period) ──
+              sbRows.length > 0 && /*#__PURE__*/React.createElement("div", { style: { overflowX: "auto", marginBottom: 4 } },
+                /*#__PURE__*/React.createElement("div", {
+                  className: "text-xs font-semibold mb-1 px-1",
+                  style: { color: C.muted }
+                }, "Analytical Batches consuming this chemical — " + startDate + " to " + endDate),
+                /*#__PURE__*/React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", border: "1px solid " + C.border } },
+                  /*#__PURE__*/React.createElement("thead", null,
+                    /*#__PURE__*/React.createElement("tr", null,
+                      ["Date", "Sub-Batch", "Test Type", "Field Samples", "Std. Samples", "Diluted Samples", "Total Samples", "Amount Used"].map(function(h) {
+                        return /*#__PURE__*/React.createElement("th", { key: h, style: th() }, h);
+                      })
+                    )
+                  ),
+                  /*#__PURE__*/React.createElement("tbody", null,
+                    sbRows.map(function(r, i) {
+                      return /*#__PURE__*/React.createElement("tr", { key: i },
+                        /*#__PURE__*/React.createElement("td", { style: td() }, r.date),
+                        /*#__PURE__*/React.createElement("td", { style: tdL({ fontFamily: "monospace", fontSize: 11 }) }, r.label),
+                        /*#__PURE__*/React.createElement("td", { style: tdL() }, r.testTypeName),
+                        /*#__PURE__*/React.createElement("td", { style: td() }, r.fieldSamples || 0),
+                        /*#__PURE__*/React.createElement("td", { style: td() }, r.stdSamples || 0),
+                        /*#__PURE__*/React.createElement("td", { style: td() }, r.dilutedSamples || 0),
+                        /*#__PURE__*/React.createElement("td", { style: td({ fontWeight: 600 }) }, r.totalSamples || 0),
+                        /*#__PURE__*/React.createElement("td", { style: td({ fontWeight: 700, color: "#1d4ed8" }) }, fmtAmt(r.totalUsed, unit))
+                      );
+                    }),
+                    // Sub-batch totals
+                    /*#__PURE__*/React.createElement("tr", { style: { background: "#f0f9ff", fontWeight: 700 } },
+                      /*#__PURE__*/React.createElement("td", { colSpan: 3, style: tdL({ borderTop: "2px solid " + C.border }) }, "TOTAL"),
+                      /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) },
+                        sbRows.reduce(function(s, r) { return s + (r.fieldSamples || 0); }, 0)
+                      ),
+                      /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) },
+                        sbRows.reduce(function(s, r) { return s + (r.stdSamples || 0); }, 0)
+                      ),
+                      /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) },
+                        sbRows.reduce(function(s, r) { return s + (r.dilutedSamples || 0); }, 0)
+                      ),
+                      /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) },
+                        sbRows.reduce(function(s, r) { return s + (r.totalSamples || 0); }, 0)
+                      ),
+                      /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border, color: "#1d4ed8" }) },
+                        fmtAmt(sbRows.reduce(function(s, r) { return s + (r.totalUsed || 0); }, 0), unit)
+                      )
+                    )
+                  )
+                )
+              )
+            ); // end per-chemical div
+          }),
+
+      // ── XLSX export (hidden on print) ──
+      reportData && /*#__PURE__*/React.createElement("div", { className: "mt-5 no-print" },
+        exportRows.length > 0
+          ? /*#__PURE__*/React.createElement(DataTable, {
+              exportFilename: "chemical_usage_report_" + startDate + "_to_" + endDate,
+              columns: [
+                { key: "Chemical",          label: "Chemical"          },
+                { key: "Grade",             label: "Grade"             },
+                { key: "Unit",              label: "Unit"              },
+                { key: "Batch No.",         label: "Batch No."         },
+                { key: "Mfg. Date",         label: "Mfg. Date"        },
+                { key: "Expiry Date",       label: "Expiry Date"       },
+                { key: "Status",            label: "Status"            },
+                { key: "Received From",     label: "Received From"     },
+                { key: "Initial Received",  label: "Initial Received"  },
+                { key: "Opening Balance",   label: "Opening Balance"   },
+                { key: "Used in Period",    label: "Used in Period"    },
+                { key: "Closing Balance",   label: "Closing Balance"   },
+                { key: "Current Remaining", label: "Current Remaining" }
+              ],
+              rows: exportRows
+            })
+          : /*#__PURE__*/React.createElement("div", { className: "text-xs p-3", style: { color: C.muted } },
+              "No chemical usage found in the selected period. The XLSX export will appear here once usage is detected."
+            )
+      )
+    ) // end SectionCard
+  ); // end outer div
+}
+
+// ==================================== EQUIPMENT USAGE & MAINTENANCE REPORT ====================================
+function EquipmentUsageReportPage({ equipment, testRecords, session }) {
+  var today = todayStr();
+  var firstOfMonth = today.slice(0, 7) + "-01";
+  var [startDate, setStartDate] = React.useState(firstOfMonth);
+  var [endDate,   setEndDate]   = React.useState(today);
+  var [designation, setDesignation] = React.useState("Senior Chemist");
+  var [signLine2, setSignLine2] = React.useState("");
+  var [selectedEquipId, setSelectedEquipId] = React.useState("ALL");
+  var [reportData, setReportData] = React.useState(null);
+
+  // Clear report data if filters change
+  React.useEffect(function() {
+    setReportData(null);
+  }, [startDate, endDate, selectedEquipId]);
+
+  var allEquip = (equipment || []).slice().sort(function(a, b) {
+    return (a.name || "").localeCompare(b.name || "");
+  });
+  var displayEquip = selectedEquipId === "ALL"
+    ? allEquip
+    : allEquip.filter(function(e) { return e.id === selectedEquipId; });
+
+  function generateReportData() {
+    var stats = {}; // equipId -> { equipment, testRuns: [], periodEvents: [], periodRepairCost: 0, lifetimeRepairCost: 0, lifetimeBreakdowns: 0, periodBreakdowns: 0 }
+    
+    (equipment || []).forEach(function(eq) {
+      var hist = (eq.history || []).slice().sort(function(a,b) { return (a.date||"").localeCompare(b.date||""); });
+      var periodEvents = hist.filter(function(h) {
+        var d = h.date || "";
+        return d >= startDate && d <= endDate;
+      });
+      var periodCost = periodEvents.reduce(function(s, h) {
+        return s + (h.type === "repair" || h.type === "other" || h.type === "maintenance" ? (Number(h.cost) || 0) : 0);
+      }, 0);
+      var lifetimeCost = hist.reduce(function(s, h) {
+        return s + (h.type === "repair" || h.type === "other" || h.type === "maintenance" ? (Number(h.cost) || 0) : 0);
+      }, 0);
+      var periodBreakdowns = periodEvents.filter(function(h) { return h.type === "breakdown"; }).length;
+      var lifetimeBreakdowns = hist.filter(function(h) { return h.type === "breakdown"; }).length;
+
+      stats[eq.id] = {
+        equipment: eq,
+        testRuns: [],
+        periodEvents: periodEvents,
+        lifetimeEvents: hist,
+        periodRepairCost: periodCost,
+        lifetimeRepairCost: lifetimeCost,
+        periodBreakdowns: periodBreakdowns,
+        lifetimeBreakdowns: lifetimeBreakdowns
+      };
+    });
+
+    (testRecords || []).forEach(function(tr) {
+      var d = tr.date || "";
+      if (d < startDate || d > endDate) return;
+      var eqId = tr.equipmentId;
+      var targetEq = (equipment || []).find(function(e) { return (eqId && e.id === eqId) || (tr.equipmentName && e.name === tr.equipmentName); });
+      if (!targetEq) return;
+      var fSamp = tr.numberOfFieldSamples || 0;
+      var sSamp = tr.numberOfStandardSamples || 0;
+      var dSamp = tr.dilutionRequired ? (Number(tr.numberOfDilutedSamples) || 0) : 0;
+      var totSamp = fSamp + sSamp + dSamp;
+
+      if (!stats[targetEq.id]) {
+        stats[targetEq.id] = {
+          equipment: targetEq,
+          testRuns: [],
+          periodEvents: [],
+          lifetimeEvents: [],
+          periodRepairCost: 0,
+          lifetimeRepairCost: 0,
+          periodBreakdowns: 0,
+          lifetimeBreakdowns: 0
+        };
+      }
+
+      stats[targetEq.id].testRuns.push({
+        date: d,
+        label: tr.subBatchLabel || "(individual)",
+        testTypeName: tr.testTypeName || "",
+        fieldSamples: fSamp,
+        stdSamples: sSamp,
+        dilutedSamples: dSamp,
+        totalSamples: totSamp,
+        tester: tr.tester || "—"
+      });
+    });
+
+    setReportData(stats);
+  }
+
+  function fmtNum(v) {
+    var n = Number(v) || 0;
+    return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  var th = function(extra) {
+    return Object.assign({
+      padding: "5px 8px", fontSize: 11, fontWeight: 700,
+      background: "#f0fdf4", borderBottom: "2px solid " + C.border,
+      borderRight: "1px solid " + C.border, whiteSpace: "nowrap", textAlign: "center"
+    }, extra || {});
+  };
+  var td = function(extra) {
+    return Object.assign({
+      padding: "4px 8px", fontSize: 12,
+      borderBottom: "1px solid " + C.border,
+      borderRight: "1px solid " + C.border, textAlign: "center"
+    }, extra || {});
+  };
+  var tdL = function(extra) { return td(Object.assign({ textAlign: "left" }, extra)); };
+
+  var exportRows = [];
+
+  async function generateAndPrint() {
+    var htmlStr = "";
+    var tableStyle = "width:100%; border-collapse:collapse; border:1px solid #111; margin-bottom: 12px;";
+    var thStyle = "padding:5px 8px; font-size:11px; font-weight:bold; background:#f0fdf4; border:1px solid #111; text-align:center;";
+    var tdStyle = "padding:4px 8px; font-size:12px; border:1px solid #111; text-align:center;";
+    var tdLeft = tdStyle + "text-align:left;";
+
+    displayEquip.forEach(function(eq) {
+      var eStats = (reportData && reportData[eq.id]) || { testRuns: [], periodEvents: [], periodRepairCost: 0, lifetimeRepairCost: 0 };
+      var runs = eStats.testRuns.slice().sort(function(a,b) { return (a.date||"").localeCompare(b.date||""); });
+      var totRuns = runs.length;
+      var totField = runs.reduce(function(s,r){ return s + (r.fieldSamples||0); }, 0);
+      var totStd = runs.reduce(function(s,r){ return s + (r.stdSamples||0); }, 0);
+      var totDil = runs.reduce(function(s,r){ return s + (r.dilutedSamples||0); }, 0);
+      var totSamples = runs.reduce(function(s,r){ return s + (r.totalSamples||0); }, 0);
+      var events = eStats.periodEvents.slice().sort(function(a,b) { return (a.date||"").localeCompare(b.date||""); });
+
+      htmlStr += `<div style="margin-bottom:28px; page-break-inside:avoid;">`;
+      htmlStr += `<div style="background:#f8fafc; border:1px solid #cbd5e1; padding:8px 12px; margin-bottom:8px; border-left:4px solid #0d9488;">
+        <div style="font-size:14px; font-weight:bold; color:#0f172a;">${eq.name} <span style="font-size:11px; font-weight:normal; color:#475569;">[Status: ${eq.functional ? "FUNCTIONAL" : "NOT FUNCTIONAL"}]</span></div>
+        <div style="font-size:11px; color:#475569; margin-top:2px;">
+          <span>Received: <strong>${eq.dateReceived || "—"}</strong></span> | 
+          <span>Origin / Make: <strong>${eq.origin || "—"}</strong></span> | 
+          <span>Received From: <strong>${eq.receivedFrom || "—"}</strong></span> | 
+          <span>Period Maintenance Cost: <strong>${fmtNum(eStats.periodRepairCost)} BDT</strong></span> | 
+          <span>Lifetime Maintenance Cost: <strong>${fmtNum(eStats.lifetimeRepairCost)} BDT</strong></span>
+        </div>
+      </div>`;
+
+      // Table 1: Testing & Sample Utilization
+      htmlStr += `<div style="font-size:11px; font-weight:bold; margin:6px 0 4px;">1. Testing & Sample Utilization Breakdown in Period:</div>`;
+      if (runs.length === 0) {
+        htmlStr += `<div style="font-size:11px; font-style:italic; color:#64748b; margin-bottom:10px;">No test runs logged with this equipment in the selected period.</div>`;
+      } else {
+        htmlStr += `<table style="${tableStyle}"><thead><tr>
+          <th style="${thStyle}">Date</th><th style="${thStyle}">Sub-Batch</th><th style="${thStyle}">Test Type / Parameter</th><th style="${thStyle}">Field Samples</th><th style="${thStyle}">Std. Samples</th><th style="${thStyle}">Diluted Samples</th><th style="${thStyle}">Total Samples</th><th style="${thStyle}">Tester</th>
+        </tr></thead><tbody>`;
+        runs.forEach(function(r) {
+          htmlStr += `<tr>
+            <td style="${tdStyle}">${r.date}</td><td style="${tdLeft}font-family:monospace;">${r.label}</td><td style="${tdLeft}">${r.testTypeName}</td>
+            <td style="${tdStyle}">${r.fieldSamples}</td><td style="${tdStyle}">${r.stdSamples}</td><td style="${tdStyle}">${r.dilutedSamples}</td><td style="${tdStyle}font-weight:bold;">${r.totalSamples}</td><td style="${tdStyle}">${r.tester}</td>
+          </tr>`;
+        });
+        htmlStr += `<tr style="background:#f0f9ff; font-weight:bold;">
+          <td colspan="3" style="${tdLeft}">TOTAL</td><td style="${tdStyle}">${totField}</td><td style="${tdStyle}">${totStd}</td><td style="${tdStyle}">${totDil}</td><td style="${tdStyle}">${totSamples}</td><td style="${tdStyle}">—</td>
+        </tr></tbody></table>`;
+      }
+
+      // Table 2: Maintenance & Repair Log
+      htmlStr += `<div style="font-size:11px; font-weight:bold; margin:6px 0 4px;">2. Maintenance, Calibration & Repair Log in Period:</div>`;
+      if (events.length === 0) {
+        htmlStr += `<div style="font-size:11px; font-style:italic; color:#64748b; margin-bottom:14px;">No maintenance, repair, or breakdown events logged in the selected period.</div>`;
+      } else {
+        htmlStr += `<table style="${tableStyle}"><thead><tr>
+          <th style="${thStyle}">Date</th><th style="${thStyle}">Event Type</th><th style="${thStyle}">Description / Problem</th><th style="${thStyle}">Cost (BDT)</th><th style="${thStyle}">Functional After</th>
+        </tr></thead><tbody>`;
+        events.forEach(function(h) {
+          htmlStr += `<tr>
+            <td style="${tdStyle}">${h.date || "—"}</td>
+            <td style="${tdStyle}">${(h.type || "Event").toUpperCase()}</td>
+            <td style="${tdLeft}">${h.description || h.note || "—"}</td>
+            <td style="${tdStyle}">${h.cost ? fmtNum(h.cost) : "0.00"}</td>
+            <td style="${tdStyle}">${h.functionalAfter ? "Yes (Functional)" : "No (Needs Repair)"}</td>
+          </tr>`;
+        });
+        htmlStr += `<tr style="background:#f0f9ff; font-weight:bold;">
+          <td colspan="3" style="${tdLeft}">TOTAL MAINTENANCE EXPENDITURE (PERIOD)</td>
+          <td style="${tdStyle}">${fmtNum(eStats.periodRepairCost)}</td>
+          <td style="${tdStyle}">—</td>
+        </tr></tbody></table>`;
+      }
+
+      htmlStr += `</div>`;
+    });
+
+    var html = buildEquipmentUsageReportHtml({
+      labIdentity: session || {},
+      startDate: startDate,
+      endDate: endDate,
+      tableHtml: htmlStr,
+      signatory: { designation: designation, line2: signLine2 }
+    });
+
+    var w = openReportPrintWindow();
+    finishReportPrintWindow(w, html);
+  }
+
+  // ---- Render ----
+  return /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement(SectionCard, {
+      title: "Equipment Utilization & Maintenance Report",
+      icon: /*#__PURE__*/React.createElement(Icon, { name: "wrench", size: 15 })
+    },
+      /*#__PURE__*/React.createElement("div", {
+        className: "flex flex-wrap gap-3 mb-4 items-end no-print",
+        style: { borderBottom: "1px solid " + C.border, paddingBottom: 12 }
+      },
+        /*#__PURE__*/React.createElement("label", { className: "flex flex-col gap-1 text-xs", style: { color: C.muted } },
+          "From",
+          /*#__PURE__*/React.createElement("input", {
+            type: "date", value: startDate,
+            onChange: function(e) { setStartDate(e.target.value); },
+            className: "border rounded px-2 py-1 text-sm", style: { borderColor: C.border }
+          })
+        ),
+        /*#__PURE__*/React.createElement("label", { className: "flex flex-col gap-1 text-xs", style: { color: C.muted } },
+          "To",
+          /*#__PURE__*/React.createElement("input", {
+            type: "date", value: endDate,
+            onChange: function(e) { setEndDate(e.target.value); },
+            className: "border rounded px-2 py-1 text-sm", style: { borderColor: C.border }
+          })
+        ),
+        /*#__PURE__*/React.createElement("label", { className: "flex flex-col gap-1 text-xs", style: { color: C.muted } },
+          "Equipment",
+          /*#__PURE__*/React.createElement("select", {
+            value: selectedEquipId,
+            onChange: function(e) { setSelectedEquipId(e.target.value); },
+            className: "border rounded px-2 py-1 text-sm", style: { borderColor: C.border }
+          },
+            /*#__PURE__*/React.createElement("option", { value: "ALL" }, "All Equipment"),
+            allEquip.map(function(e) {
+              return /*#__PURE__*/React.createElement("option", { key: e.id, value: e.id }, e.name);
+            })
+          )
+        ),
+        /*#__PURE__*/React.createElement(Button, {
+          size: "sm", variant: "primary",
+          onClick: generateReportData
+        }, /*#__PURE__*/React.createElement(Icon, { name: "chart", size: 12 }), " Generate Report")
+      ),
+      /*#__PURE__*/React.createElement("div", {
+        className: "grid gap-2 mb-3 no-print",
+        style: { gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }
+      },
+        /*#__PURE__*/React.createElement(TextField, {
+          simple: true,
+          label: "Signatory Designation",
+          value: designation,
+          onChange: function(v) { setDesignation(v); }
+        }),
+        /*#__PURE__*/React.createElement(TextField, {
+          simple: true,
+          label: "Signatory Address Line (optional)",
+          value: signLine2,
+          onChange: function(v) { setSignLine2(v); },
+          placeholder: "e.g. Radha Ballob, Rangpur."
+        })
+      ),
+      reportData && /*#__PURE__*/React.createElement("div", { className: "mb-4 no-print flex justify-end" },
+        /*#__PURE__*/React.createElement(Button, {
+          size: "sm", variant: "outline",
+          onClick: generateAndPrint
+        }, /*#__PURE__*/React.createElement(Icon, { name: "printer", size: 12 }), " Print / PDF (Official Format)")
+      ),
+
+      // ── Per-Equipment sections ──
+      !reportData ? /*#__PURE__*/React.createElement("div", { className: "text-sm p-4", style: { color: C.muted } }, "Click 'Generate Report' to view equipment utilization & maintenance records for the selected period.") :
+      displayEquip.length === 0
+        ? /*#__PURE__*/React.createElement("div", { className: "text-sm p-4", style: { color: C.muted } }, "No equipment found.")
+        : displayEquip.map(function(eq) {
+            var eStats = reportData[eq.id] || { testRuns: [], periodEvents: [], periodRepairCost: 0, lifetimeRepairCost: 0 };
+            var runs = eStats.testRuns.slice().sort(function(a,b) { return (a.date||"").localeCompare(b.date||""); });
+            var totRuns = runs.length;
+            var totField = runs.reduce(function(s,r){ return s + (r.fieldSamples||0); }, 0);
+            var totStd = runs.reduce(function(s,r){ return s + (r.stdSamples||0); }, 0);
+            var totDil = runs.reduce(function(s,r){ return s + (r.dilutedSamples||0); }, 0);
+            var totSamples = runs.reduce(function(s,r){ return s + (r.totalSamples||0); }, 0);
+            var events = eStats.periodEvents.slice().sort(function(a,b) { return (a.date||"").localeCompare(b.date||""); });
+
+            // Accumulate export rows
+            runs.forEach(function(r) {
+              exportRows.push({
+                "Equipment":              eq.name,
+                "Status":                 eq.functional ? "Functional" : "Not Functional",
+                "Date Received":          eq.dateReceived || "—",
+                "Origin":                 eq.origin || "—",
+                "Received From":          eq.receivedFrom || "—",
+                "Test Date":              r.date,
+                "Sub-Batch":              r.label,
+                "Test Type / Parameter":  r.testTypeName,
+                "Field Samples":          r.fieldSamples,
+                "Std. Samples":           r.stdSamples,
+                "Diluted Samples":        r.dilutedSamples,
+                "Total Samples":          r.totalSamples,
+                "Tester":                 r.tester,
+                "Period Maint. Cost":     eStats.periodRepairCost,
+                "Lifetime Maint. Cost":   eStats.lifetimeRepairCost
+              });
+            });
+            if (runs.length === 0) {
+              exportRows.push({
+                "Equipment":              eq.name,
+                "Status":                 eq.functional ? "Functional" : "Not Functional",
+                "Date Received":          eq.dateReceived || "—",
+                "Origin":                 eq.origin || "—",
+                "Received From":          eq.receivedFrom || "—",
+                "Test Date":              "—",
+                "Sub-Batch":              "—",
+                "Test Type / Parameter":  "— (No runs)",
+                "Field Samples":          0,
+                "Std. Samples":           0,
+                "Diluted Samples":        0,
+                "Total Samples":          0,
+                "Tester":                 "—",
+                "Period Maint. Cost":     eStats.periodRepairCost,
+                "Lifetime Maint. Cost":   eStats.lifetimeRepairCost
+              });
+            }
+
+            return /*#__PURE__*/React.createElement("div", {
+              key: eq.id,
+              className: "mb-6 p-4 rounded-lg border",
+              style: { borderColor: C.border, background: "#fff" }
+            },
+              // Header & metadata
+              /*#__PURE__*/React.createElement("div", {
+                className: "flex flex-wrap items-center justify-between gap-2 mb-3 pb-2",
+                style: { borderBottom: "1px solid " + C.border }
+              },
+                /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-2" },
+                  /*#__PURE__*/React.createElement("span", { className: "font-bold text-base", style: { color: C.ink } }, eq.name),
+                  /*#__PURE__*/React.createElement(Badge, { tone: eq.functional ? "ok" : "warn" }, eq.functional ? "Functional" : "Not Functional")
+                ),
+                /*#__PURE__*/React.createElement("div", { className: "flex flex-wrap gap-x-4 gap-y-1 text-xs", style: { color: C.muted } },
+                  /*#__PURE__*/React.createElement("span", null, "Received: ", /*#__PURE__*/React.createElement("strong", { style: { color: C.ink } }, eq.dateReceived || "—")),
+                  /*#__PURE__*/React.createElement("span", null, "Origin: ", /*#__PURE__*/React.createElement("strong", { style: { color: C.ink } }, eq.origin || "—")),
+                  /*#__PURE__*/React.createElement("span", null, "Received From: ", /*#__PURE__*/React.createElement("strong", { style: { color: C.ink } }, eq.receivedFrom || "—"))
+                )
+              ),
+
+              // KPI Metric Cards
+              /*#__PURE__*/React.createElement("div", {
+                className: "grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4"
+              },
+                /*#__PURE__*/React.createElement("div", { className: "p-2.5 rounded border text-center", style: { borderColor: C.border, background: "#f8fafc" } },
+                  /*#__PURE__*/React.createElement("div", { className: "text-xs", style: { color: C.muted } }, "Analytical Batches"),
+                  /*#__PURE__*/React.createElement("div", { className: "text-base font-bold", style: { color: C.teal } }, totRuns)
+                ),
+                /*#__PURE__*/React.createElement("div", { className: "p-2.5 rounded border text-center", style: { borderColor: C.border, background: "#f8fafc" } },
+                  /*#__PURE__*/React.createElement("div", { className: "text-xs", style: { color: C.muted } }, "Total Samples Tested"),
+                  /*#__PURE__*/React.createElement("div", { className: "text-base font-bold", style: { color: "#1d4ed8" } }, totSamples),
+                  /*#__PURE__*/React.createElement("div", { className: "text-[10px]", style: { color: C.muted } }, `Field: ${totField} | Std: ${totStd} | Dil: ${totDil}`)
+                ),
+                /*#__PURE__*/React.createElement("div", { className: "p-2.5 rounded border text-center", style: { borderColor: C.border, background: "#f8fafc" } },
+                  /*#__PURE__*/React.createElement("div", { className: "text-xs", style: { color: C.muted } }, "Period Maint. Cost"),
+                  /*#__PURE__*/React.createElement("div", { className: "text-base font-bold", style: { color: eStats.periodRepairCost > 0 ? "#dc2626" : C.ink } }, fmtNum(eStats.periodRepairCost) + " BDT")
+                ),
+                /*#__PURE__*/React.createElement("div", { className: "p-2.5 rounded border text-center", style: { borderColor: C.border, background: "#f8fafc" } },
+                  /*#__PURE__*/React.createElement("div", { className: "text-xs", style: { color: C.muted } }, "Lifetime Maint. Cost"),
+                  /*#__PURE__*/React.createElement("div", { className: "text-base font-bold", style: { color: C.ink } }, fmtNum(eStats.lifetimeRepairCost) + " BDT")
+                )
+              ),
+
+              // Table 1: Testing & Sample Utilization Breakdown
+              /*#__PURE__*/React.createElement("div", { className: "text-xs font-bold mb-1.5 flex items-center gap-1.5", style: { color: C.ink } },
+                /*#__PURE__*/React.createElement(Icon, { name: "clipboard", size: 13 }), " 1. Testing & Sample Utilization Breakdown in Period"
+              ),
+              runs.length === 0
+                ? /*#__PURE__*/React.createElement("div", { className: "text-xs italic p-2 mb-3 rounded", style: { background: "#f8fafc", color: C.muted } }, "No test records found for this equipment in the selected period.")
+                : /*#__PURE__*/React.createElement("div", { style: { overflowX: "auto", marginBottom: 16 } },
+                    /*#__PURE__*/React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", border: "1px solid " + C.border } },
+                      /*#__PURE__*/React.createElement("thead", null,
+                        /*#__PURE__*/React.createElement("tr", null,
+                          ["Date", "Sub-Batch", "Test Type / Parameter", "Field Samples", "Std. Samples", "Diluted Samples", "Total Samples", "Tester"].map(function(h) {
+                            return /*#__PURE__*/React.createElement("th", { key: h, style: th() }, h);
+                          })
+                        )
+                      ),
+                      /*#__PURE__*/React.createElement("tbody", null,
+                        runs.map(function(r, i) {
+                          return /*#__PURE__*/React.createElement("tr", { key: i },
+                            /*#__PURE__*/React.createElement("td", { style: td() }, r.date),
+                            /*#__PURE__*/React.createElement("td", { style: tdL({ fontFamily: "monospace", fontSize: 11 }) }, r.label),
+                            /*#__PURE__*/React.createElement("td", { style: tdL() }, r.testTypeName),
+                            /*#__PURE__*/React.createElement("td", { style: td() }, r.fieldSamples),
+                            /*#__PURE__*/React.createElement("td", { style: td() }, r.stdSamples),
+                            /*#__PURE__*/React.createElement("td", { style: td() }, r.dilutedSamples),
+                            /*#__PURE__*/React.createElement("td", { style: td({ fontWeight: 700, color: "#1d4ed8" }) }, r.totalSamples),
+                            /*#__PURE__*/React.createElement("td", { style: td() }, r.tester)
+                          );
+                        }),
+                        /*#__PURE__*/React.createElement("tr", { style: { background: "#f0f9ff", fontWeight: 700 } },
+                          /*#__PURE__*/React.createElement("td", { colSpan: 3, style: tdL({ borderTop: "2px solid " + C.border }) }, "TOTAL SAMPLES"),
+                          /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) }, totField),
+                          /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) }, totStd),
+                          /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) }, totDil),
+                          /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border, color: "#1d4ed8" }) }, totSamples),
+                          /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) }, "—")
+                        )
+                      )
+                    )
+                  ),
+
+              // Table 2: Maintenance, Calibration & Repair Log
+              /*#__PURE__*/React.createElement("div", { className: "text-xs font-bold mb-1.5 flex items-center gap-1.5", style: { color: C.ink } },
+                /*#__PURE__*/React.createElement(Icon, { name: "wrench", size: 13 }), " 2. Maintenance, Calibration & Repair Log in Period"
+              ),
+              events.length === 0
+                ? /*#__PURE__*/React.createElement("div", { className: "text-xs italic p-2 rounded", style: { background: "#f8fafc", color: C.muted } }, "No maintenance or repair events recorded in the selected period.")
+                : /*#__PURE__*/React.createElement("div", { style: { overflowX: "auto" } },
+                    /*#__PURE__*/React.createElement("table", { style: { width: "100%", borderCollapse: "collapse", border: "1px solid " + C.border } },
+                      /*#__PURE__*/React.createElement("thead", null,
+                        /*#__PURE__*/React.createElement("tr", null,
+                          ["Date", "Event Type", "Description / Problem", "Cost (BDT)", "Functional After"].map(function(h) {
+                            return /*#__PURE__*/React.createElement("th", { key: h, style: th() }, h);
+                          })
+                        )
+                      ),
+                      /*#__PURE__*/React.createElement("tbody", null,
+                        events.map(function(h, i) {
+                          return /*#__PURE__*/React.createElement("tr", { key: i },
+                            /*#__PURE__*/React.createElement("td", { style: td() }, h.date || "—"),
+                            /*#__PURE__*/React.createElement("td", { style: td() }, /*#__PURE__*/React.createElement(Badge, { tone: h.type === "breakdown" ? "warn" : h.type === "repair" ? "info" : "neutral" }, (h.type || "Event").toUpperCase())),
+                            /*#__PURE__*/React.createElement("td", { style: tdL() }, h.description || h.note || "—"),
+                            /*#__PURE__*/React.createElement("td", { style: td({ fontWeight: h.cost > 0 ? 600 : 400 }) }, h.cost ? fmtNum(h.cost) : "0.00"),
+                            /*#__PURE__*/React.createElement("td", { style: td() }, h.functionalAfter ? /*#__PURE__*/React.createElement(Badge, { tone: "ok" }, "Yes") : /*#__PURE__*/React.createElement(Badge, { tone: "warn" }, "No"))
+                          );
+                        }),
+                        /*#__PURE__*/React.createElement("tr", { style: { background: "#f0f9ff", fontWeight: 700 } },
+                          /*#__PURE__*/React.createElement("td", { colSpan: 3, style: tdL({ borderTop: "2px solid " + C.border }) }, "TOTAL MAINTENANCE EXPENDITURE (PERIOD)"),
+                          /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border, color: "#dc2626" }) }, fmtNum(eStats.periodRepairCost) + " BDT"),
+                          /*#__PURE__*/React.createElement("td", { style: td({ borderTop: "2px solid " + C.border }) }, "—")
+                        )
+                      )
+                    )
+                  )
+            );
+          }),
+
+      // ── XLSX export (hidden on print) ──
+      reportData && /*#__PURE__*/React.createElement("div", { className: "mt-5 no-print" },
+        exportRows.length > 0
+          ? /*#__PURE__*/React.createElement(DataTable, {
+              exportFilename: "equipment_usage_report_" + startDate + "_to_" + endDate,
+              columns: [
+                { key: "Equipment",              label: "Equipment"              },
+                { key: "Status",                 label: "Status"                 },
+                { key: "Date Received",          label: "Date Received"          },
+                { key: "Origin",                 label: "Origin"                 },
+                { key: "Received From",          label: "Received From"          },
+                { key: "Test Date",              label: "Test Date"              },
+                { key: "Sub-Batch",              label: "Sub-Batch"              },
+                { key: "Test Type / Parameter",  label: "Test Type / Parameter"  },
+                { key: "Field Samples",          label: "Field Samples"          },
+                { key: "Std. Samples",           label: "Std. Samples"           },
+                { key: "Diluted Samples",        label: "Diluted Samples"        },
+                { key: "Total Samples",          label: "Total Samples"          },
+                { key: "Tester",                 label: "Tester"                 },
+                { key: "Period Maint. Cost",     label: "Period Maint. Cost"     },
+                { key: "Lifetime Maint. Cost",   label: "Lifetime Maint. Cost"   }
+              ],
+              rows: exportRows
+            })
+          : /*#__PURE__*/React.createElement("div", { className: "text-xs p-3", style: { color: C.muted } },
+              "No equipment activity found in the selected period."
+            )
+      )
+    ) // end SectionCard
+  ); // end outer div
+}
+
 // ==================================== FORECAST REPORTS ====================================
 // Monthly Progress Report of Water Quality Test — matches the official DPHE
 // Zonal Lab paper format exactly (letterhead, one Exceed/Non-Exceed row-pair
@@ -2009,6 +2975,14 @@ const REPORT_GROUPS = [{
     k: "monthlyProgressReport",
     label: "Monthly Progress Report",
     icon: "chart"
+  }, {
+    k: "chemicalUsageReport",
+    label: "Chemical Usage Report",
+    icon: "flask"
+  }, {
+    k: "equipmentUsageReport",
+    label: "Equipment Usage Report",
+    icon: "wrench"
   }]
 }];
 const ALL_REPORT_PAGES = REPORT_GROUPS.flatMap(g => g.pages);
@@ -2239,5 +3213,5 @@ function ReportsTab({
   }, activePage === "executive" && /*#__PURE__*/React.createElement(ExecutiveDashboardPage, shared), activePage === "insights" && /*#__PURE__*/React.createElement(SmartInsightsPage, shared), activePage === "testAnalytics" && /*#__PURE__*/React.createElement(TestAnalyticsPage, shared), activePage === "technician" && /*#__PURE__*/React.createElement(TechnicianPerformancePage, shared), activePage === "revenue" && /*#__PURE__*/React.createElement(RevenueAnalyticsPage, shared), activePage === "chemicalAnalytics" && /*#__PURE__*/React.createElement(ChemicalAnalyticsPage, shared), activePage === "inventoryAnalytics" && /*#__PURE__*/React.createElement(InventoryAnalyticsPage, shared), activePage === "glasswareAnalytics" && /*#__PURE__*/React.createElement(GlasswareAnalyticsPage, shared), activePage === "gasAnalytics" && /*#__PURE__*/React.createElement(GasAnalyticsPage, shared), activePage === "predictiveInventory" && /*#__PURE__*/React.createElement(PredictiveInventoryPage, shared), activePage === "equipmentAnalytics" && /*#__PURE__*/React.createElement(EquipmentAnalyticsPage, shared), activePage === "maintenanceAnalytics" && /*#__PURE__*/React.createElement(MaintenanceAnalyticsPage, shared), activePage === "monthlyTrends" && /*#__PURE__*/React.createElement(MonthlyTrendsPage, shared), activePage === "dailyTrends" && /*#__PURE__*/React.createElement(DailyTrendsPage, shared), activePage === "forecast" && /*#__PURE__*/React.createElement(ForecastPage, shared), activePage === "customReport" && /*#__PURE__*/React.createElement(CustomReportGeneratorPage, shared), activePage === "customReportSingle" && /*#__PURE__*/React.createElement(CustomReportGeneratorPage, {
     ...shared,
     forceMode: "individual"
-  }), activePage === "monthlyProgressReport" && /*#__PURE__*/React.createElement(MonthlyProgressReportPage, shared)));
+  }), activePage === "monthlyProgressReport" && /*#__PURE__*/React.createElement(MonthlyProgressReportPage, shared), activePage === "chemicalUsageReport" && /*#__PURE__*/React.createElement(ChemicalUsageReportPage, shared), activePage === "equipmentUsageReport" && /*#__PURE__*/React.createElement(EquipmentUsageReportPage, shared)));
 }
