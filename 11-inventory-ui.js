@@ -265,36 +265,19 @@ function InventoryTab({
     notify("Batch deleted from inventory");
   }
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "flex gap-2 mb-5"
-  }, [{
-    k: "equipment",
-    label: "Equipment",
-    icon: "wrench"
-  }, {
-    k: "glassware",
-    label: "Glassware",
-    icon: "beaker"
-  }, {
-    k: "chemicals",
-    label: "Chemicals",
-    icon: "flask"
-  }, {
-    k: "gas",
-    label: "Gas",
-    icon: "flask"
-  }].map(t => /*#__PURE__*/React.createElement("button", {
-    key: t.k,
-    onClick: () => setInvTab(t.k),
-    className: "flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium",
-    style: {
-      background: invTab === t.k ? C.teal : "#fff",
-      color: invTab === t.k ? "#fff" : C.muted,
-      border: `1px solid ${invTab === t.k ? C.teal : C.border}`
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: t.icon,
-    size: 14
-  }), t.label))), invTab === "chemicals" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "no-print"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "inline-flex p-1 rounded-xl bg-slate-100 border border-slate-200 shadow-sm mb-3"
+  }, [{ k: "equipment", label: "Equipment", icon: "wrench" }, { k: "glassware", label: "Glassware", icon: "beaker" }, { k: "chemicals", label: "Chemicals", icon: "flask" }, { k: "gas", label: "Gas", icon: "flask" }].map(function(t) {
+    var isActive = invTab === t.k;
+    return /*#__PURE__*/React.createElement("button", {
+      key: t.k,
+      type: "button",
+      onClick: function() { setInvTab(t.k); },
+      className: "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all " + (isActive ? "bg-white shadow-sm" : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/60"),
+      style: isActive ? { color: C.teal } : {}
+    }, /*#__PURE__*/React.createElement(Icon, { name: t.icon, size: 14, color: isActive ? C.teal : C.muted }), t.label);
+  }))), invTab === "chemicals" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "flex justify-end gap-2 mb-3 flex-wrap"
   }, /*#__PURE__*/React.createElement("input", {
     ref: chemUploadRef,

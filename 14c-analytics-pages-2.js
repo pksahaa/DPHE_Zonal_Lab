@@ -4022,70 +4022,68 @@ const ALL_REPORT_PAGES = REPORT_GROUPS.flatMap(g => g.pages);
 // Top-level group pills — same rounded-full pill style as the Inventory
 // tab's Equipment/Glassware/Chemicals/Gas nav (see InventoryTab in
 // 11-inventory-ui.js), applied here instead of a dropdown-per-group menu.
-function ReportGroupPills({
+// ---------------- Report navigation: Top-level Segmented Tabs & Sub-report Dropdown ----------------
+function ReportGroupTabs({
   activeGroup,
   onSelectGroup
 }) {
   return /*#__PURE__*/React.createElement("div", {
-    className: "flex gap-2 mb-3 flex-wrap"
-  }, REPORT_GROUPS.map(grp => /*#__PURE__*/React.createElement("button", {
-    key: grp.group,
-    type: "button",
-    onClick: () => onSelectGroup(grp),
-    className: "flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium",
-    style: {
-      background: activeGroup === grp.group ? C.teal : "#fff",
-      color: activeGroup === grp.group ? "#fff" : C.muted,
-      border: `1px solid ${activeGroup === grp.group ? C.teal : C.border}`
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: grp.group === "Custom Report" ? "printer" : "chart",
-    size: 14
-  }), grp.group)));
+    className: "flex items-center gap-2 mb-3 no-print"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "inline-flex p-1 rounded-xl bg-slate-100 border border-slate-200 shadow-sm"
+  }, REPORT_GROUPS.map(grp => {
+    const isActive = activeGroup === grp.group;
+    return /*#__PURE__*/React.createElement("button", {
+      key: grp.group,
+      type: "button",
+      onClick: () => onSelectGroup(grp),
+      className: `flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+        isActive
+          ? "bg-white text-teal-800 shadow-sm"
+          : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/60"
+      }`
+    }, /*#__PURE__*/React.createElement(Icon, {
+      name: grp.group === "Custom Report" ? "printer" : "chart",
+      size: 15,
+      color: isActive ? C.teal : C.muted
+    }), grp.group);
+  })));
 }
-// Second-level page pills — used for Custom Report (only 3 pages, fits
-// the same pill style cleanly). Report & Analytics has 15 pages, which
-// doesn't fit a pill row — ReportPagePicker below handles that one with a
-// compact dropdown instead.
-function ReportPagePills({
+
+function ReportSubNav({
   pages,
   activePage,
-  setReportTab
+  setReportTab,
+  isCustomReport,
+  onPrint
 }) {
   return /*#__PURE__*/React.createElement("div", {
-    className: "flex gap-2 mb-4 flex-wrap"
-  }, pages.map(p => /*#__PURE__*/React.createElement("button", {
-    key: p.k,
-    type: "button",
-    onClick: () => setReportTab(p.k),
-    className: "flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium",
-    style: {
-      background: activePage === p.k ? C.teal : "#fff",
-      color: activePage === p.k ? "#fff" : C.muted,
-      border: `1px solid ${activePage === p.k ? C.teal : C.border}`
-    }
+    className: "flex flex-wrap items-center justify-between gap-3 mb-4 bg-white p-3 rounded-xl border border-slate-200 shadow-sm no-print"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2.5 min-w-0"
   }, /*#__PURE__*/React.createElement(Icon, {
-    name: p.icon,
-    size: 14
-  }), p.label)));
-}
-function ReportPagePicker({
-  pages,
-  activePage,
-  setReportTab
-}) {
-  return /*#__PURE__*/React.createElement("select", {
-    className: "border rounded-md px-3 py-1.5 text-sm mb-4",
-    style: {
-      borderColor: C.border
-    },
+    name: isCustomReport ? "printer" : "chart",
+    size: 16,
+    color: C.teal
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-bold uppercase tracking-wider text-slate-500 hidden sm:inline"
+  }, isCustomReport ? "Select Custom Report:" : "Select Analytics Dashboard:"), /*#__PURE__*/React.createElement("select", {
+    className: "bg-slate-50 hover:bg-slate-100 border border-slate-300 text-slate-800 text-sm font-semibold rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-teal-500 focus:border-teal-500 outline-none transition-all cursor-pointer",
     value: activePage,
     onChange: e => setReportTab(e.target.value)
   }, pages.map(p => /*#__PURE__*/React.createElement("option", {
     key: p.k,
     value: p.k
-  }, p.label)));
+  }, p.label)))), !isCustomReport && /*#__PURE__*/React.createElement(Button, {
+    size: "sm",
+    variant: "outline",
+    onClick: onPrint
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "printer",
+    size: 13
+  }), "Print / Save as PDF"));
 }
+
 function rangeDaysCount(filters, testRecords) {
   if (filters.dateFrom && filters.dateTo) return Math.max(1, daysBetweenD(filters.dateFrom, filters.dateTo) + 1);
   if (testRecords.length) {
@@ -4143,10 +4141,6 @@ function ReportsTab({
     return false;
   }, [filters.suppliers, equipment, chemicals]);
   const filteredRecords = React.useMemo(() => testRecords.filter(r => {
-    // Voided records (Void/Invalidate — see 13-testrecords-ui.js) are kept
-    // in the database for audit purposes but must never count toward
-    // revenue, consumption, or performance analytics — the test never
-    // produced a valid result, so it shouldn't inflate anyone's numbers.
     if (r.voided) return false;
     if (!inDateRange(r.date)) return false;
     if (filters.technicians.length && !filters.technicians.includes(r.tester)) return false;
@@ -4211,38 +4205,29 @@ function ReportsTab({
   }
   const activePageDef = ALL_REPORT_PAGES.find(p => p.k === activePage);
   const activeGroupDef = REPORT_GROUPS.find(grp => grp.pages.some(p => p.k === activePage));
-  // Per request: no page-level "Reports & Analytics" heading/subtitle and no
-  // "Report & Analytics / Executive Dashboard" breadcrumb — the group pills
-  // below (ReportGroupPills / ReportPagePills) are the navigation, shown
-  // right away instead of underneath descriptive text.
-  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-end mb-4 no-print flex-wrap gap-2"
-  }, /*#__PURE__*/React.createElement(Button, {
-    size: "sm",
-    variant: "outline",
-    onClick: printReport
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: "printer",
-    size: 13
-  }), "Print / Save as PDF")), /*#__PURE__*/React.createElement(FilterPanel, {
-    filters: filters,
-    setFilters: setFilters,
-    facets: facets
-  }), /*#__PURE__*/React.createElement(ReportGroupPills, {
-    activeGroup: activeGroupDef?.group,
-    onSelectGroup: grp => setReportTab(grp.pages[0].k)
-  }), activeGroupDef?.group === "Custom Report" ? /*#__PURE__*/React.createElement(ReportPagePills, {
-    pages: activeGroupDef.pages,
-    activePage: activePage,
-    setReportTab: setReportTab
-  }) : /*#__PURE__*/React.createElement(ReportPagePicker, {
-    pages: activeGroupDef?.pages || [],
-    activePage: activePage,
-    setReportTab: setReportTab
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "mt-4"
-  }, activePage === "executive" && /*#__PURE__*/React.createElement(ExecutiveDashboardPage, shared), activePage === "insights" && /*#__PURE__*/React.createElement(SmartInsightsPage, shared), activePage === "testAnalytics" && /*#__PURE__*/React.createElement(TestAnalyticsPage, shared), activePage === "technician" && /*#__PURE__*/React.createElement(TechnicianPerformancePage, shared), activePage === "revenue" && /*#__PURE__*/React.createElement(RevenueAnalyticsPage, shared), activePage === "chemicalAnalytics" && /*#__PURE__*/React.createElement(ChemicalAnalyticsPage, shared), activePage === "inventoryAnalytics" && /*#__PURE__*/React.createElement(InventoryAnalyticsPage, shared), activePage === "glasswareAnalytics" && /*#__PURE__*/React.createElement(GlasswareAnalyticsPage, shared), activePage === "gasAnalytics" && /*#__PURE__*/React.createElement(GasAnalyticsPage, shared), activePage === "predictiveInventory" && /*#__PURE__*/React.createElement(PredictiveInventoryPage, shared), activePage === "equipmentAnalytics" && /*#__PURE__*/React.createElement(EquipmentAnalyticsPage, shared), activePage === "maintenanceAnalytics" && /*#__PURE__*/React.createElement(MaintenanceAnalyticsPage, shared), activePage === "monthlyTrends" && /*#__PURE__*/React.createElement(MonthlyTrendsPage, shared), activePage === "dailyTrends" && /*#__PURE__*/React.createElement(DailyTrendsPage, shared), activePage === "forecast" && /*#__PURE__*/React.createElement(ForecastPage, shared), activePage === "customReport" && /*#__PURE__*/React.createElement(CustomReportGeneratorPage, shared), activePage === "customReportSingle" && /*#__PURE__*/React.createElement(CustomReportGeneratorPage, {
-    ...shared,
-    forceMode: "individual"
-  }), activePage === "monthlyProgressReport" && /*#__PURE__*/React.createElement(MonthlyProgressReportPage, shared), activePage === "chemicalUsageReport" && /*#__PURE__*/React.createElement(ChemicalUsageReportPage, shared), activePage === "equipmentUsageReport" && /*#__PURE__*/React.createElement(EquipmentUsageReportPage, shared), activePage === "glasswareUsageReport" && /*#__PURE__*/React.createElement(GlasswareUsageReportPage, shared), activePage === "gasUsageReport" && /*#__PURE__*/React.createElement(GasUsageReportPage, shared)));
+  const isCustomReport = activeGroupDef?.group === "Custom Report";
+
+  return /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement(ReportGroupTabs, {
+      activeGroup: activeGroupDef?.group,
+      onSelectGroup: grp => setReportTab(grp.pages[0].k)
+    }),
+    /*#__PURE__*/React.createElement(ReportSubNav, {
+      pages: activeGroupDef?.pages || [],
+      activePage: activePage,
+      setReportTab: setReportTab,
+      isCustomReport: isCustomReport,
+      onPrint: printReport
+    }),
+    !isCustomReport && /*#__PURE__*/React.createElement(FilterPanel, {
+      filters: filters,
+      setFilters: setFilters,
+      facets: facets
+    }),
+    /*#__PURE__*/React.createElement("div", {
+      className: "mt-4"
+    }, activePage === "executive" && /*#__PURE__*/React.createElement(ExecutiveDashboardPage, shared), activePage === "insights" && /*#__PURE__*/React.createElement(SmartInsightsPage, shared), activePage === "testAnalytics" && /*#__PURE__*/React.createElement(TestAnalyticsPage, shared), activePage === "technician" && /*#__PURE__*/React.createElement(TechnicianPerformancePage, shared), activePage === "revenue" && /*#__PURE__*/React.createElement(RevenueAnalyticsPage, shared), activePage === "chemicalAnalytics" && /*#__PURE__*/React.createElement(ChemicalAnalyticsPage, shared), activePage === "inventoryAnalytics" && /*#__PURE__*/React.createElement(InventoryAnalyticsPage, shared), activePage === "glasswareAnalytics" && /*#__PURE__*/React.createElement(GlasswareAnalyticsPage, shared), activePage === "gasAnalytics" && /*#__PURE__*/React.createElement(GasAnalyticsPage, shared), activePage === "predictiveInventory" && /*#__PURE__*/React.createElement(PredictiveInventoryPage, shared), activePage === "equipmentAnalytics" && /*#__PURE__*/React.createElement(EquipmentAnalyticsPage, shared), activePage === "maintenanceAnalytics" && /*#__PURE__*/React.createElement(MaintenanceAnalyticsPage, shared), activePage === "monthlyTrends" && /*#__PURE__*/React.createElement(MonthlyTrendsPage, shared), activePage === "dailyTrends" && /*#__PURE__*/React.createElement(DailyTrendsPage, shared), activePage === "forecast" && /*#__PURE__*/React.createElement(ForecastPage, shared), activePage === "customReport" && /*#__PURE__*/React.createElement(CustomReportGeneratorPage, shared), activePage === "customReportSingle" && /*#__PURE__*/React.createElement(CustomReportGeneratorPage, {
+      ...shared,
+      forceMode: "individual"
+    }), activePage === "monthlyProgressReport" && /*#__PURE__*/React.createElement(MonthlyProgressReportPage, shared), activePage === "chemicalUsageReport" && /*#__PURE__*/React.createElement(ChemicalUsageReportPage, shared), activePage === "equipmentUsageReport" && /*#__PURE__*/React.createElement(EquipmentUsageReportPage, shared), activePage === "glasswareUsageReport" && /*#__PURE__*/React.createElement(GlasswareUsageReportPage, shared), activePage === "gasUsageReport" && /*#__PURE__*/React.createElement(GasUsageReportPage, shared)));
 }

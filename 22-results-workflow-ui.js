@@ -930,18 +930,20 @@ function ResultsWorkflowTab({
         "Upload → Review → Approve → Release — one place, filtered to what your role can act on."
       )
     ),
-    E("div", { className: "flex gap-2 mb-4 flex-wrap" }, visible.map(s =>
-      E("button", {
-        key: s.k,
-        onClick: () => setActive(s.k),
-        className: "flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium",
-        style: {
-          background: active === s.k ? C.teal : "#fff",
-          color: active === s.k ? "#fff" : C.muted,
-          border: `1px solid ${active === s.k ? C.teal : C.border}`
-        }
-      }, E(Icon, { name: s.icon, size: 14 }), s.label)
-    )),
+    E("div", { className: "no-print" },
+      E("div", { className: "inline-flex p-1 rounded-xl bg-slate-100 border border-slate-200 shadow-sm mb-4" },
+        visible.map(function(s) {
+          var isActive = active === s.k;
+          return E("button", {
+            key: s.k,
+            type: "button",
+            onClick: function() { setActive(s.k); },
+            className: "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all " + (isActive ? "bg-white shadow-sm" : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/60"),
+            style: isActive ? { color: C.teal } : {}
+          }, E(Icon, { name: s.icon, size: 14, color: isActive ? C.teal : C.muted }), s.label);
+        })
+      )
+    ),
     active === "upload" && E(PendingUploadQueue, { subBatches, samples, testRecords, testTypes, references, goToTestEntry }),
     active === "review" && E(ReviewQueue, { samples, setSamples, testRecords, setTestRecords, subBatches, testTypes, parameters, references, session, notify, goToSample, stageGate: reviewGate }),
     active === "approve" && E(ApproveQueue, { samples, setSamples, testRecords, setTestRecords, subBatches, testTypes, parameters, references, session, notify, goToSample, stageGate: approveGate }),

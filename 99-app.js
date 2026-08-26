@@ -956,12 +956,7 @@ function LabApp({
     style: {
       color: C.headerTextMuted
     }
-  }, t("appSub")), /*#__PURE__*/React.createElement("div", {
-    className: "text-[10px] opacity-60",
-    style: {
-      color: C.headerTextMuted
-    }
-  }, "Build ", APP_BUILD))), /*#__PURE__*/React.createElement("div", {
+  }, t("appSub")))), /*#__PURE__*/React.createElement("div", {
     className: "flex items-center gap-2 text-xs no-print relative flex-shrink-0",
     style: {
       color: C.headerText

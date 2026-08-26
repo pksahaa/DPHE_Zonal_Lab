@@ -2927,7 +2927,9 @@ function SamplesTab({
     }, activeColumns.map(c => /*#__PURE__*/React.cloneElement(cellByKey[c.key], { key: c.key })));
   }
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "flex gap-2 mb-4 flex-wrap"
+    className: "no-print"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "inline-flex p-1 rounded-xl bg-slate-100 border border-slate-200 shadow-sm mb-4"
   }, [{
     k: "samples",
     label: "Sample Registration",
@@ -2940,19 +2942,16 @@ function SamplesTab({
     k: "resultsWorkflow",
     label: "Results Workflow",
     icon: "check"
-  }].map(t => /*#__PURE__*/React.createElement("button", {
-    key: t.k,
-    onClick: () => setSampleSubTab(t.k),
-    className: "flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium",
-    style: {
-      background: sampleSubTab === t.k ? C.teal : "#fff",
-      color: sampleSubTab === t.k ? "#fff" : C.muted,
-      border: `1px solid ${sampleSubTab === t.k ? C.teal : C.border}`
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    name: t.icon,
-    size: 14
-  }), t.label))), sampleSubTab === "samples" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }].map(function(t) {
+    var isActive = sampleSubTab === t.k;
+    return /*#__PURE__*/React.createElement("button", {
+      key: t.k,
+      type: "button",
+      onClick: function() { setSampleSubTab(t.k); },
+      className: "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all " + (isActive ? "bg-white shadow-sm" : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/60"),
+      style: isActive ? { color: C.teal } : {}
+    }, /*#__PURE__*/React.createElement(Icon, { name: t.icon, size: 14, color: isActive ? C.teal : C.muted }), t.label);
+  }))), sampleSubTab === "samples" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "flex items-start justify-between mb-3 flex-wrap gap-3"
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h2", {
     className: "text-base font-bold",

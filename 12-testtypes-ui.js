@@ -1767,18 +1767,19 @@ function TestConfigurationTab({
   notify
 }) {
   return /*#__PURE__*/React.createElement("div", null,
-    /*#__PURE__*/React.createElement("div", { className: "flex gap-2 mb-5" },
-      [{ k: "parameters", label: "Parameters", icon: "list" }, { k: "testTypes", label: "Test Types", icon: "beaker" }].map(s =>
-        /*#__PURE__*/React.createElement("button", {
+    /*#__PURE__*/React.createElement("div", { className: "no-print" },
+      /*#__PURE__*/React.createElement("div", {
+        className: "inline-flex p-1 rounded-xl bg-slate-100 border border-slate-200 shadow-sm mb-3"
+      }, [{ k: "parameters", label: "Parameters", icon: "list" }, { k: "testTypes", label: "Test Types", icon: "beaker" }].map(function(s) {
+        var isActive = testConfigTab === s.k;
+        return /*#__PURE__*/React.createElement("button", {
           key: s.k,
-          onClick: () => setTestConfigTab(s.k),
-          className: "flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium",
-          style: {
-            background: testConfigTab === s.k ? C.teal : "#fff",
-            color: testConfigTab === s.k ? "#fff" : C.muted,
-            border: `1px solid ${testConfigTab === s.k ? C.teal : C.border}`
-          }
-        }, /*#__PURE__*/React.createElement(Icon, { name: s.icon, size: 14 }), s.label))
+          type: "button",
+          onClick: function() { setTestConfigTab(s.k); },
+          className: "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all " + (isActive ? "bg-white shadow-sm" : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/60"),
+          style: isActive ? { color: C.teal } : {}
+        }, /*#__PURE__*/React.createElement(Icon, { name: s.icon, size: 14, color: isActive ? C.teal : C.muted }), s.label);
+      }))
     ),
     testConfigTab === "parameters" && /*#__PURE__*/React.createElement(ParametersTab, {
       parameters: parameters,
