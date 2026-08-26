@@ -332,7 +332,7 @@ function AddTestTab({
       testTypeName: test?.name || "",
       memberSampleIds: batchModeSamples.map(s => s.id),
       assignedTester: tester
-    }, subBatches);
+    }, subBatches, samples, references);
     setSubBatches(prev => [sb, ...prev]);
     // Bulk mode (see setSamples() in 99-app.js / markMembersInProgress()
     // in 21-sample-ui.js) — one pass + one persisted call instead of one

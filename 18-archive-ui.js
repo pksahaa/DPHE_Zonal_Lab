@@ -397,7 +397,7 @@ function ArchiveTab({
     label: "Sample ID",
     value: filters.sampleId,
     onChange: e => patchFilter("sampleId", e.target.value),
-    placeholder: "e.g. WQ-2026-014"
+    placeholder: "e.g. RNP-2026-000014"
   }), /*#__PURE__*/React.createElement(TextField, {
     label: "Client Name",
     value: filters.clientName,

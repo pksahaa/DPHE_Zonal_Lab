@@ -3623,6 +3623,13 @@ function MonthlyProgressReportPage({
   var [designation, setDesignation] = React.useState("Senior Chemist");
   var [signLine2, setSignLine2] = React.useState("");
   var [generating, setGenerating] = React.useState(false);
+  // Report only appears once the user clicks "Generate Report" — same
+  // click-to-generate pattern as the Chemical Usage Report — instead of
+  // auto-populating for whatever month happens to be selected.
+  var [reportGenerated, setReportGenerated] = React.useState(false);
+  React.useEffect(function() {
+    setReportGenerated(false);
+  }, [selectedMonth]);
 
   var stats = React.useMemo(function() {
     return computeMonthlyProgressStats({
@@ -3694,9 +3701,15 @@ function MonthlyProgressReportPage({
         })),
         /*#__PURE__*/React.createElement(Button, {
           size: "sm",
+          variant: "primary",
+          onClick: function() { setReportGenerated(true); }
+        }, /*#__PURE__*/React.createElement(Icon, { name: "chart", size: 13 }), "Generate Report"),
+        reportGenerated && /*#__PURE__*/React.createElement(Button, {
+          size: "sm",
+          variant: "outline",
           onClick: generateAndPrint,
           disabled: generating
-        }, /*#__PURE__*/React.createElement(Icon, { name: "printer", size: 13 }), generating ? "Preparing…" : "Generate & Print Report")
+        }, /*#__PURE__*/React.createElement(Icon, { name: "printer", size: 13 }), generating ? "Preparing…" : "Print / PDF (Official Format)")
       )
     },
       /*#__PURE__*/React.createElement("div", { className: "text-xs mb-3 p-2 rounded no-print", style: { background: C.infoBg, color: C.info } },
@@ -3720,12 +3733,16 @@ function MonthlyProgressReportPage({
           placeholder: "e.g. Radha Ballob, Rangpur."
         })
       ),
-      /*#__PURE__*/React.createElement("div", {
-        style: { overflowX: "auto" },
-        dangerouslySetInnerHTML: { __html: tableHtml }
-      })
+      !reportGenerated
+        ? /*#__PURE__*/React.createElement("div", { className: "text-sm p-4 no-print", style: { color: C.muted } },
+            "Click 'Generate Report' to view the Monthly Progress Report for the selected month."
+          )
+        : /*#__PURE__*/React.createElement("div", {
+            style: { overflowX: "auto" },
+            dangerouslySetInnerHTML: { __html: tableHtml }
+          })
     ),
-    /*#__PURE__*/React.createElement("div", { className: "mt-4 no-print" },
+    reportGenerated && /*#__PURE__*/React.createElement("div", { className: "mt-4 no-print" },
       /*#__PURE__*/React.createElement(DataTable, {
         exportFilename: "monthly_progress_report_" + selectedMonth,
         columns: Object.keys(exportRows[0] || { "Client Type": "" }).map(function(k) { return { key: k, label: k }; }),

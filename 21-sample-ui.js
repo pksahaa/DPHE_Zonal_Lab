@@ -253,6 +253,10 @@ function ClientPartFields({
   // submitted, and no longer blocks on a repeated Tracking No. either).
   const [trackingTouched, setTrackingTouched] = React.useState(false);
   const [showDupInfoModal, setShowDupInfoModal] = React.useState(false);
+  // Set when [Generate] is clicked but Settings ▸ Lab Identity ▸ District
+  // Code is still blank — generateTrackingNo() (19-reference-model.js)
+  // returns null rather than a placeholder in that case.
+  const [trackingGenError, setTrackingGenError] = React.useState("");
   function set(field, value) {
     setForm(prev => ({
       ...prev,
@@ -358,7 +362,13 @@ function ClientPartFields({
     type: "button",
     title: "Auto-generate a Tracking No.",
     onClick: () => {
-      set("trackingNo", generateTrackingNo(references, form.letterDate));
+      const generated = generateTrackingNo(references, form.letterDate);
+      if (!generated) {
+        setTrackingGenError("District Code isn't set yet — go to Settings ▸ Lab Identity and fill in District Code before generating a Tracking No.");
+        return;
+      }
+      setTrackingGenError("");
+      set("trackingNo", generated);
       setTrackingTouched(false);
     },
     className: "px-2.5 py-1.5 rounded text-xs font-medium border whitespace-nowrap shrink-0",
@@ -367,7 +377,10 @@ function ClientPartFields({
       color: C.ink,
       background: C.card
     }
-  }, "Generate")), trackingNoInfo ? /*#__PURE__*/React.createElement("span", {
+  }, "Generate")), trackingGenError ? /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] w-full",
+    style: { color: C.warn }
+  }, trackingGenError) : null, trackingNoInfo ? /*#__PURE__*/React.createElement("span", {
     className: "text-[11px] flex items-center gap-1",
     style: { color: C.teal }
   }, /*#__PURE__*/React.createElement(Icon, { name: "info", size: 11 }), trackingNoInfo) : !trackingNoError && /*#__PURE__*/React.createElement("span", {
@@ -2395,6 +2408,10 @@ function SamplesTab({
   });
   async function handleCreate(fields) {
     const sample = createSample(fields, samples, session);
+    if (!sample) {
+      notify?.("District Code isn't set yet — go to Settings ▸ Lab Identity and fill in District Code before registering samples.", "warn");
+      return;
+    }
     await setSamples(prev => [sample, ...prev], sample);
     setShowForm(false);
     notify?.(`${sample.sampleCode} registered.`, "ok");
@@ -2426,6 +2443,10 @@ function SamplesTab({
   // one source), instead of each row auto-creating its own Reference from
   // a BatchRef column.
   async function confirmImportSamples(requestedTests, ref, batchDefaults) {
+    if (!getDistrictCode()) {
+      notify?.("District Code isn't set yet — go to Settings ▸ Lab Identity and fill in District Code before importing samples.", "warn");
+      return;
+    }
     let runningSamples = [...samples];
     const newSamples = [];
     for (const row of pendingImportRows) {
@@ -2643,6 +2664,10 @@ function SamplesTab({
     }
   }
   async function handleBatchCreate(shared, rows, ref) {
+    if (!getDistrictCode()) {
+      notify?.("District Code isn't set yet — go to Settings ▸ Lab Identity and fill in District Code before registering samples.", "warn");
+      return;
+    }
     let runningSamples = [...samples];
     const newSamples = [];
     const { collectionDateFrom, collectionDateTo, ...sharedRest } = shared;
@@ -3396,6 +3421,11 @@ function SubBatchBuilder({
   const [splitBatchCount, setSplitBatchCount] = React.useState("");
   const [editingSubBatchId, setEditingSubBatchId] = React.useState(null);
   const [deleteSubBatchId, setDeleteSubBatchId] = React.useState(null);
+  // Which sub-batch's "combined from: X, Y, Z" tracking/batch-code panel is
+  // currently expanded — toggled by clicking the sub-batch's label in
+  // renderSubBatchRow() below. Only meaningful for a sub-batch whose
+  // sourceTrackingCodes has more than one entry (see 16-sub-batch.js).
+  const [expandedSourcesId, setExpandedSourcesId] = React.useState(null);
 
   // Samples eligible for the chosen Test Type — ignoring the sub-batch's own
   // current membership while it's being edited (otherwise its members would
@@ -3497,7 +3527,7 @@ function SubBatchBuilder({
         testTypeName: test?.name || "",
         memberSampleIds: chunk.map(s => s.id),
         assignedTester
-      }, runningSubBatches);
+      }, runningSubBatches, samples, references);
       runningSubBatches = [...runningSubBatches, sb];
       createdLabels.push(`${sb.label} (${chunk.length})`);
     }
@@ -3592,12 +3622,19 @@ function SubBatchBuilder({
     }
     const test = testTypes.find(t => t.id === selectedTestId);
     if (editingSubBatchId) {
+      // Membership can change on edit (samples added/removed), so the
+      // source tracking codes shown on click (renderSubBatchRow below) are
+      // re-derived here too — otherwise they'd keep pointing at whichever
+      // batch/tracking no. the Sub-Batch happened to be created from.
+      const { primaryCode, allCodes } = deriveSubBatchSourceCodes(selectedSampleIds, samples, references);
       setSubBatches(prev => prev.map(sb => sb.id === editingSubBatchId ? {
         ...sb,
         label: label.trim() || sb.label,
         testTypeId: selectedTestId,
         testTypeName: test?.name || sb.testTypeName,
         memberSampleIds: selectedSampleIds,
+        primaryTrackingCode: primaryCode,
+        sourceTrackingCodes: allCodes,
         assignedTester
       } : sb));
       markMembersInProgress(selectedSampleIds, selectedTestId);
@@ -3617,7 +3654,7 @@ function SubBatchBuilder({
         testTypeName: test?.name || "",
         memberSampleIds: selectedSampleIds,
         assignedTester
-      }, subBatches);
+      }, subBatches, samples, references);
       setSubBatches(prev => [sb, ...prev]);
       markMembersInProgress(selectedSampleIds, selectedTestId);
       DataService.appendAudit({
@@ -4078,9 +4115,16 @@ function SubBatchBuilder({
         color: C.muted
       }
     }, sb.assignedTester || "—");
-    const hasPanel = deleteSubBatchId === sb.id;
     const sbOrphaned = isOrphanedTestedSubBatch(sb);
     const sbDeletable = sb.status === "pending" || sbOrphaned;
+    // A sub-batch built from members with more than one distinct
+    // batch/tracking no. (see deriveSubBatchSourceCodes() in
+    // 16-sub-batch.js) shows its label as clickable — click reveals every
+    // batch/tracking no. actually combined into it, not just the first one
+    // its own code was taken from.
+    const hasMultipleSources = Array.isArray(sb.sourceTrackingCodes) && sb.sourceTrackingCodes.length > 1;
+    const sourcesExpanded = expandedSourcesId === sb.id;
+    const hasPanel = deleteSubBatchId === sb.id || (sourcesExpanded && hasMultipleSources);
     // Recomputed from the members' real current stage, not read straight
     // off sb.status — see effectiveSubBatchStatus() in 16-sub-batch.js for
     // why sb.status alone can lag behind (e.g. showing "Awaiting Review"
@@ -4093,11 +4137,20 @@ function SubBatchBuilder({
     }, /*#__PURE__*/React.createElement("td", {
       className: "px-3 py-2"
     }, /*#__PURE__*/React.createElement("div", {
-      className: "text-xs font-semibold",
+      className: "text-xs font-semibold flex items-center gap-1 flex-wrap",
       style: {
-        color: C.ink
-      }
-    }, sb.label, " · ", sb.testTypeName), /*#__PURE__*/React.createElement("div", {
+        color: C.ink,
+        cursor: hasMultipleSources ? "pointer" : "default"
+      },
+      title: hasMultipleSources ? "Click to see every batch/tracking no. combined into this sub-batch" : undefined,
+      onClick: hasMultipleSources ? () => setExpandedSourcesId(prev => prev === sb.id ? null : sb.id) : undefined
+    }, sb.label, " · ", sb.testTypeName, hasMultipleSources && /*#__PURE__*/React.createElement(Icon, {
+      name: "chevronDown",
+      size: 11,
+      color: C.muted
+    }), hasMultipleSources && /*#__PURE__*/React.createElement(Badge, {
+      tone: "info"
+    }, `${sb.sourceTrackingCodes.length} batches`)), /*#__PURE__*/React.createElement("div", {
       className: "text-[11px]",
       style: {
         color: C.muted
@@ -4152,7 +4205,18 @@ function SubBatchBuilder({
     const panelRow = !hasPanel ? null : /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
       colSpan: 6,
       className: "px-3 pb-3"
-    }, deleteSubBatchId === sb.id && /*#__PURE__*/React.createElement(ConfirmBar, {
+    }, sourcesExpanded && hasMultipleSources && /*#__PURE__*/React.createElement("div", {
+      className: "text-xs p-2.5 rounded mb-2",
+      style: { background: C.bg, border: `1px solid ${C.border}` }
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "font-semibold mb-1",
+      style: { color: C.ink }
+    }, `Combined from ${sb.sourceTrackingCodes.length} batch/tracking no.(s):`), /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-wrap gap-1.5"
+    }, sb.sourceTrackingCodes.map(code => /*#__PURE__*/React.createElement(Badge, {
+      key: code,
+      tone: code === sb.primaryTrackingCode ? "info" : "neutral"
+    }, code === sb.primaryTrackingCode ? `${code} (used for this batch's code)` : code)))), deleteSubBatchId === sb.id && /*#__PURE__*/React.createElement(ConfirmBar, {
       text: sbOrphaned ? `Delete sub-batch "${sb.label}"? Its test record was never actually saved to the backend (likely too large a batch) — its ${sb.memberSampleIds.length} member sample(s) will be returned to in-progress testing so you can re-enter results in a smaller batch.` : `Delete sub-batch "${sb.label}"? Its ${sb.memberSampleIds.length} member sample(s) become available for another sub-batch again.`,
       onConfirm: () => doDeleteSubBatch(sb),
       onCancel: () => setDeleteSubBatchId(null)

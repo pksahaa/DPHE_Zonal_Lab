@@ -679,6 +679,17 @@ function getLabIdentity() {
     labName: "",
     phone: "",
     email: "",
+    // District Name/Code — single source of truth for the auto-generated
+    // Sample Code, Tracking No. and Sub-Batch (Analytical Batch) code
+    // prefixes (see generateSampleCode() in 20-sample-model.js,
+    // generateTrackingNo() in 19-reference-model.js, and
+    // generateSubBatchLabel() in 16-sub-batch.js). Left blank on a fresh
+    // install on purpose — those generators refuse to produce a code until
+    // districtCode is filled in here, so every code this lab ever issues is
+    // stamped with the right district from day one instead of silently
+    // defaulting to something wrong.
+    districtName: "",
+    districtCode: "",
     leftLogoDataUrl: "",
     rightLogoDataUrl: "",
     leftLogoUrl: "assets/logo_left.png",
@@ -687,6 +698,14 @@ function getLabIdentity() {
 }
 function saveLabIdentity(identity) {
   saveKey("labIdentity", identity);
+}
+// ---- District Code helper — trims + uppercases whatever was saved in Lab
+// Identity settings, so "rnp " and "Rnp" and "RNP" all behave identically
+// everywhere it's used as a code prefix. Returns "" (falsy) when not yet
+// configured, which every generator below treats as "can't generate a code
+// yet" rather than guessing. ----
+function getDistrictCode() {
+  return (getLabIdentity().districtCode || "").trim().toUpperCase();
 }
 function LabIdentityModal({
   onClose,
@@ -720,6 +739,11 @@ function LabIdentityModal({
       color: C.muted
     }
   }, "Set this once per lab/office. It's used as the header on every generated report — so this same app can be reused by any Zonal Lab, each with its own letterhead."), /*#__PURE__*/React.createElement("div", {
+    className: "text-xs mb-3",
+    style: {
+      color: C.warn
+    }
+  }, "District Code is required before Sample Registration can auto-generate a Sample Code, Tracking No. or Sub-Batch code — fill it in (e.g. \"RNP\" for Rangpur) before registering samples."), /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-2 gap-3"
   }, /*#__PURE__*/React.createElement(TextField, {
     simple: true,
@@ -757,6 +781,24 @@ function LabIdentityModal({
       labName: v
     }),
     placeholder: "e.g. Rangpur Zonal Lab, Radha Ballob, Rangpur."
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "District Name",
+    value: id_.districtName,
+    onChange: v => setId({
+      ...id_,
+      districtName: v
+    }),
+    placeholder: "e.g. Rangpur"
+  }), /*#__PURE__*/React.createElement(TextField, {
+    simple: true,
+    label: "District Code",
+    value: id_.districtCode,
+    onChange: v => setId({
+      ...id_,
+      districtCode: v.toUpperCase()
+    }),
+    placeholder: "e.g. RNP"
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
     label: "Phone",

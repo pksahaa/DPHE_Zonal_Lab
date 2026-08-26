@@ -19,28 +19,69 @@
 // (sample, testTypeId) pair instead. Kept here only in case older code
 // elsewhere still imports it; do not use for new eligibility checks.
 const SUBBATCH_ELIGIBLE_STATUSES = ["registered", "received", "assigned", "in_progress"];
-// Generates a human-friendly "Analytical Batch No" like SB-Tracking-001, -002, -003 …
-// The counter is global (not year-scoped) so the number always grows and is
-// unambiguous even across fiscal-year boundaries.
-function generateSubBatchLabel(existingSubBatches) {
-  const all = (existingSubBatches || []);
-  // Match both the new SB-Tracking-NNN format and the legacy SB-YEAR-NNNN format
-  const nums = all.map(sb => {
-    const m = (sb.label || "").match(/SB-Tracking-(\d+)$/i)
-           || (sb.label || "").match(/SB-\d{4}-(\d+)$/);
-    return m ? (Number(m[1]) || 0) : 0;
+
+// ---- Sub-Batch source codes — Sample Registration (Reference.trackingNo,
+// see 19-reference-model.js) is the single source of truth for which
+// batch/tracking no. a sample belongs to, so a Sub-Batch's own code is
+// derived from ITS MEMBERS' tracking numbers rather than an independent
+// counter. A Sub-Batch built from samples that came in under several
+// different References/tracking numbers (or plain batchRef, or — for a
+// walk-in sample with neither — its own Sample Code) still needs one code
+// to be its own label: that's the FIRST member's code (by registration
+// order in `samples`), matching "1st batch/tracking no. becomes the
+// Sub-Batch's tracking no." Every distinct code among the members is kept
+// in `allCodes` so the UI can show "combined from: X, Y, Z" on click
+// (see renderSubBatchRow() in 21-sample-ui.js) without losing the fact
+// that more than one batch fed this Sub-Batch. ----
+function sourceCodeForSample(sample, references) {
+  if (!sample) return "";
+  const ref = sample.referenceId ? (references || []).find(r => r.id === sample.referenceId) : null;
+  return (ref && ref.trackingNo) || sample.batchRef || sample.sampleCode || "";
+}
+function deriveSubBatchSourceCodes(memberSampleIds, samples, references) {
+  const codes = [];
+  (memberSampleIds || []).forEach(sid => {
+    const sample = (samples || []).find(s => s.id === sid);
+    const code = sourceCodeForSample(sample, references);
+    if (code && !codes.includes(code)) codes.push(code);
   });
+  return {
+    primaryCode: codes[0] || "UNBATCHED",
+    allCodes: codes
+  };
+}
+// Generates a human-friendly Analytical Batch code like
+// SB-<primaryCode>-001, -002, -003 … The counter is scoped PER primaryCode
+// (i.e. per batch/tracking no.) so a brand-new tracking no. always starts
+// its own Sub-Batches back at 001, rather than continuing a single global
+// count across every batch/tracking no. this lab has ever used.
+function generateSubBatchLabel(existingSubBatches, primaryCode) {
+  const code = primaryCode || "UNBATCHED";
+  const prefix = `SB-${code}-`;
+  const all = (existingSubBatches || []);
+  const nums = all.filter(sb => (sb.label || "").startsWith(prefix)).map(sb => Number((sb.label || "").slice(prefix.length)) || 0);
+  // Legacy SB-Tracking-NNN / SB-YEAR-NNNN sub-batches (created before this
+  // per-code scheme existed) don't match any real primaryCode prefix and so
+  // are simply never counted here — they keep their old label untouched
+  // and don't interfere with the new per-code sequence.
   const next = (nums.length ? Math.max(...nums) : 0) + 1;
-  return `SB-Tracking-${String(next).padStart(3, "0")}`;
+  return `${prefix}${String(next).padStart(3, "0")}`;
 }
 
-function createSubBatch(fields, existingSubBatches) {
+function createSubBatch(fields, existingSubBatches, samples, references) {
+  const memberSampleIds = fields.memberSampleIds || [];
+  const { primaryCode, allCodes } = deriveSubBatchSourceCodes(memberSampleIds, samples, references);
   return {
     id: uid("sb"),
-    label: fields.label || generateSubBatchLabel(existingSubBatches),
+    label: fields.label || generateSubBatchLabel(existingSubBatches, primaryCode),
+    // Which batch/tracking no. this Sub-Batch's code was taken from, and
+    // every distinct batch/tracking no. actually represented among its
+    // member samples — see comment above deriveSubBatchSourceCodes().
+    primaryTrackingCode: primaryCode,
+    sourceTrackingCodes: allCodes,
     testTypeId: fields.testTypeId,
     testTypeName: fields.testTypeName,
-    memberSampleIds: fields.memberSampleIds || [],
+    memberSampleIds,
     assignedTester: fields.assignedTester || "",
     status: "pending",
     // pending -> tested (Add Test Record flips this on save)

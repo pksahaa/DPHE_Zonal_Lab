@@ -700,6 +700,23 @@ function LabApp({
     });
   }, [loadReloadNonce]);
 
+  // BUGFIX: records handed to state by the poll below used to look, to
+  // useDiffSync, exactly like a local edit — because useDiffSync detects
+  // "changed" records purely by object identity (`prevById.get(id) !== rec`),
+  // and every poll fetch produces brand-new objects even for records whose
+  // content nobody actually touched. That meant every 30s poll could trigger
+  // spurious echo-writes of records straight back to the backend — and if a
+  // real edit (e.g. clicking into Awaiting Review and reviewing a result)
+  // landed on the server a moment before that echo, the echo's _version was
+  // now stale, so the OCC check correctly rejected it with a CONFLICT error.
+  // The user never actually lost anything (their real save had already won),
+  // but they'd see an immediate "Could not save" toast that then vanished —
+  // exactly the "error right away, but it's saved a moment later" pattern.
+  // Fix: tag every record this poll hands to state in `pollOriginRef`, and
+  // have useDiffSync skip anything still in that set — poll-origin data is
+  // never something that needs echoing back.
+  const pollOriginRef = useRef(new WeakSet());
+
   // Background polling — every 30 seconds, silently re-fetch just samples
   // and active testRecords so changes made by OTHER users (e.g. an analyzer
   // saving a test record that moves samples to "Awaiting Review") are visible
@@ -724,6 +741,7 @@ function LabApp({
             freshMap.forEach((srv, id) => {
               const local = localMap.get(id);
               if (!local || (srv.updatedAt || "") > (local.updatedAt || "")) {
+                pollOriginRef.current.add(srv);
                 merged.push(srv);
               } else {
                 merged.push(local);
@@ -742,6 +760,7 @@ function LabApp({
             freshMap.forEach((srv, id) => {
               const local = localMap.get(id);
               if (!local || (srv.updatedAt || "") > (local.updatedAt || "")) {
+                pollOriginRef.current.add(srv);
                 merged.push(srv);
               } else {
                 merged.push(local);
@@ -838,7 +857,10 @@ function LabApp({
       const upserts = [];
       currentData.forEach(rec => {
         nextIds.add(rec.id);
-        if (prevById.get(rec.id) !== rec) upserts.push(rec);
+        // Poll-origin records get a fresh object identity every fetch even
+        // when nothing about them changed — that's not a local edit, so it
+        // must never be queued as one (see pollOriginRef above).
+        if (prevById.get(rec.id) !== rec && !pollOriginRef.current.has(rec)) upserts.push(rec);
       });
       const removedIds = [];
       prevById.forEach((_, id) => {

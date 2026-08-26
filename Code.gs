@@ -477,22 +477,53 @@ function bulkUpsertRows_(collection, records) {
   const sheet = getSheet_(collection);
   const lastRow = sheet.getLastRow();
   const now = new Date().toISOString();
+
+  // BUGFIX (perf): this used to read the id column once but then still
+  // call sheet.getRange(rowIndex, 1, 1, 3).setValues(...) SEPARATELY for
+  // every updated row inside the forEach below — i.e. one Sheets API
+  // round-trip per record. Each round-trip carries ~100-500ms of fixed
+  // overhead, all of it serialized behind the single global write lock
+  // (see WRITE_ACTIONS_ in doPost) — so approving a ~20-sample Sub-Batch
+  // meant ~20 sequential round-trips, with every OTHER pending write
+  // (including someone else's single-sample approve) queued up behind the
+  // lock the whole time. That surfaced as "Backend is busy" on bulk
+  // approve, and as slow single approves shortly after.
+  //
+  // A first pass at fixing this rewrote the WHOLE existing sheet block in
+  // one setValues() call regardless of how many rows actually changed —
+  // fine for the bulk-approve case, but it meant every SINGLE Test Record
+  // save (by far the common case) now rewrote the entire testRecords
+  // sheet — every row, every month of history, each row's JSON blob up to
+  // ~50,000 chars (see the per-cell size guard in the Test Record save
+  // form) — just to persist one changed row. On a sheet with months of
+  // data that single-record save became slower than the original N-writes
+  // version it replaced, slow enough to hit the write lock/execution
+  // ceiling — which is exactly the "shows an error, but reload shows it
+  // actually saved" symptom: the big setValues() had already committed on
+  // Google's side by the time the response came back too late/malformed.
+  //
+  // Correct fix: only ever write the rows that actually changed. Track
+  // which in-memory row indices were touched, group the touched indices
+  // into contiguous runs (rows created/approved together as a batch are
+  // usually adjacent, so this naturally collapses back down to few big
+  // writes for a bulk approve), and issue one setValues() call per run.
+  // A lone Test Record save is one run of size 1 — one small, fast,
+  // targeted write, same as before this whole optimization started. A
+  // 20-row contiguous Sub-Batch approve is still one run — one big write.
+  // Only genuinely scattered updates cost more than one call, and even
+  // then never more calls than there are separate runs.
+  let existingRows = lastRow >= 2 ? sheet.getRange(2, 1, lastRow - 1, 3).getValues() : [];
   const idIndex = {};
-  const existingJsonMap = {};
-  if (lastRow >= 2) {
-    sheet.getRange(2, 1, lastRow - 1, 2).getValues().forEach(([id, json], i) => {
-      if (id) {
-        idIndex[id] = i + 2; // sheet row number
-        existingJsonMap[id] = json;
-      }
-    });
-  }
-  
+  existingRows.forEach((row, i) => {
+    if (row[0]) idIndex[row[0]] = i;
+  });
+
   // OCC check first before modifying anything
   (records || []).forEach(record => {
-    if (idIndex[record.id] && typeof record._version === "number") {
+    const idx = idIndex[record.id];
+    if (idx !== undefined && typeof record._version === "number") {
       let existingRecord;
-      try { existingRecord = JSON.parse(existingJsonMap[record.id]); } catch (e) {}
+      try { existingRecord = JSON.parse(existingRows[idx][1]); } catch (e) {}
       if (existingRecord && typeof existingRecord._version === "number") {
         if (existingRecord._version !== record._version) {
           throw new Error(`CONFLICT: Record ${record.id} was modified by another user. Please reload the latest version before saving.`);
@@ -503,18 +534,40 @@ function bulkUpsertRows_(collection, records) {
 
   const toAppend = [];
   const stampedRecords = [];
+  const dirtyIdx = new Set();
   (records || []).forEach(record => {
     const newVersion = typeof record._version === "number" ? record._version + 1 : 1;
     const stamped = Object.assign({}, record, { updatedAt: now, _version: newVersion });
     stampedRecords.push(stamped);
     const rowValues = [stamped.id, JSON.stringify(stamped), now];
-    const rowIndex = idIndex[record.id];
-    if (rowIndex) {
-      sheet.getRange(rowIndex, 1, 1, 3).setValues([rowValues]);
+    const idx = idIndex[record.id];
+    if (idx !== undefined) {
+      existingRows[idx] = rowValues;
+      dirtyIdx.add(idx);
     } else {
       toAppend.push(rowValues);
     }
   });
+
+  if (dirtyIdx.size) {
+    const sortedIdx = Array.from(dirtyIdx).sort((a, b) => a - b);
+    let runStart = sortedIdx[0];
+    let runPrev = sortedIdx[0];
+    const flushRun = (start, end) => {
+      sheet.getRange(start + 2, 1, end - start + 1, 3).setValues(existingRows.slice(start, end + 1));
+    };
+    for (let i = 1; i < sortedIdx.length; i++) {
+      const cur = sortedIdx[i];
+      if (cur === runPrev + 1) {
+        runPrev = cur;
+        continue;
+      }
+      flushRun(runStart, runPrev);
+      runStart = cur;
+      runPrev = cur;
+    }
+    flushRun(runStart, runPrev);
+  }
   if (toAppend.length) {
     sheet.getRange(sheet.getLastRow() + 1, 1, toAppend.length, 3).setValues(toAppend);
   }
@@ -817,7 +870,8 @@ function enforceSampleApprovalIntegrity_(record, existing, auth, testRecordsAll)
     if (approval.testTypeId) {
       const tester = findTesterForTestType_(record, approval.testTypeId, testRecordsAll);
       if (tester && auth.user.name && tester === auth.user.name) {
-}
+        throw new Error("SECURITY: Segregation of duties violation — you cannot review or approve a result you personally tested.");
+      }
     }
   });
 }

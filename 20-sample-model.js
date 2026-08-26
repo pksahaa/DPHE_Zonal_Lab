@@ -575,20 +575,36 @@ function sampleActionGate(perms, actionKey, session, notify, actionLabel) {
   };
 }
 
-// ---- sample code generator: WQ-<year>-###### sequential per year ----
+// ---- sample code generator: <DistrictCode>-<year>-###### sequential per
+// year. DistrictCode comes from Settings ▸ Lab Identity (getDistrictCode(),
+// 01-data-service.js) — the single source of truth for which district a
+// sample code, tracking no. or sub-batch code belongs to. Returns null
+// (instead of ever falling back to a placeholder like "WQ") when that
+// field hasn't been filled in yet, so callers can block registration and
+// point the user at Settings rather than silently issuing a wrong code. ----
 function generateSampleCode(existingSamples, dateStr) {
+  const districtCode = getDistrictCode();
+  if (!districtCode) return null;
   const year = (dateStr || todayStr()).slice(0, 4);
-  const nums = existingSamples.filter(s => (s.sampleCode || "").startsWith(`WQ-${year}-`)).map(s => Number(s.sampleCode.split("-")[2]) || 0);
+  const prefix = `${districtCode}-${year}-`;
+  const nums = (existingSamples || []).filter(s => (s.sampleCode || "").startsWith(prefix)).map(s => Number((s.sampleCode || "").slice(prefix.length)) || 0);
   const next = (nums.length ? Math.max(...nums) : 0) + 1;
-  return `WQ-${year}-${String(next).padStart(6, "0")}`;
+  return `${prefix}${String(next).padStart(6, "0")}`;
 }
 
 // ---- factory ----
+// Returns null (instead of a half-built sample) when generateSampleCode()
+// can't produce a code yet — i.e. Settings ▸ Lab Identity ▸ District Code
+// is still blank. Every caller (Register Sample, Register Batch, Bulk
+// Upload — see 21-sample-ui.js) must check for that null and notify the
+// user instead of pushing an uncoded sample into state.
 function createSample(fields, existingSamples, user) {
+  const sampleCode = generateSampleCode(existingSamples, fields.collectionDate);
+  if (!sampleCode) return null;
   const now = new Date().toISOString();
   const sample = {
     id: uid("smp"),
-    sampleCode: generateSampleCode(existingSamples, fields.collectionDate),
+    sampleCode,
     clientName: fields.clientName || "",
     siteLocation: fields.siteLocation || "",
     // Administrative address hierarchy + caretaker/source — needed for the

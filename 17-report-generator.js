@@ -630,6 +630,11 @@ function CustomReportGeneratorPage({
     }]
   });
   const [selectionMode, setSelectionMode] = React.useState(forceMode || "individual"); // "individual" | "batch" | "subbatch"
+  // Batch mode's "Selected Samples" side panel — collapsed by default once it
+  // has more than a handful of samples so a big Reference doesn't dump dozens
+  // of chips down the page; the little up/down arrow lets the user expand it
+  // back out on demand.
+  const [batchSamplesPanelOpen, setBatchSamplesPanelOpen] = React.useState(true);
   const [reportReferenceIds, setReportReferenceIds] = React.useState([]);
   const [reportSubBatchIds, setReportSubBatchIds] = React.useState([]);
   // ============================================================================
@@ -1092,7 +1097,9 @@ function CustomReportGeneratorPage({
       return next;
     });
   }
-  const batchModeBlock = selectionMode !== "batch" ? null : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  const referencePickerBox = /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 min-w-0"
+  }, /*#__PURE__*/React.createElement("div", {
     className: "flex gap-2 mb-2"
   }, /*#__PURE__*/React.createElement(Button, {
     variant: "ghost",
@@ -1128,18 +1135,42 @@ function CustomReportGeneratorPage({
     checked: reportReferenceIds.includes(ref.id),
     onChange: () => toggleReference(ref.id),
     onClick: e => e.stopPropagation()
-  }), /*#__PURE__*/React.createElement("span", null, `${referenceSourceMeta(ref.sourceType).label} — ${referenceDisplayLabel(ref)} (${releasedSamples.filter(s => s.referenceId === ref.id).length} samples)`)))), selectedSampleIds.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "flex flex-wrap gap-1.5 mb-2"
+  }), /*#__PURE__*/React.createElement("span", null, `${referenceSourceMeta(ref.sourceType).label} — ${referenceDisplayLabel(ref)} (${releasedSamples.filter(s => s.referenceId === ref.id).length} samples)`)))));
+  // ── Selected Samples side panel ──────────────────────────────────────────
+  // Right-hand collapsible panel instead of dumping every selected sample as
+  // an ever-growing wrap of chips under the Reference list. The header's
+  // up/down chevron toggles it open/closed; the body (when open) scrolls
+  // internally so even a large Reference/batch stays contained.
+  const selectedSamplesPanel = selectedSampleIds.length === 0 ? null : /*#__PURE__*/React.createElement("div", {
+    className: "w-full md:w-64 md:shrink-0 rounded",
+    style: { border: `1px solid ${C.border}` }
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setBatchSamplesPanelOpen(o => !o),
+    className: "w-full flex items-center justify-between gap-2 px-2.5 py-1.5 text-xs font-semibold",
+    style: { color: C.ink, background: C.bg }
+  }, /*#__PURE__*/React.createElement("span", null, `Selected Samples (${selectedSampleIds.length})`), /*#__PURE__*/React.createElement("span", {
+    style: { display: "inline-flex", transform: batchSamplesPanelOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform .15s" }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "chevronDown",
+    size: 13,
+    color: C.muted
+  }))), batchSamplesPanelOpen && /*#__PURE__*/React.createElement("div", {
+    className: "max-h-56 overflow-y-auto p-1.5 flex flex-col gap-1",
+    style: { borderTop: `1px solid ${C.border}` }
   }, selectedSamples.map(s => /*#__PURE__*/React.createElement("span", {
     key: s.id,
-    className: "text-[11px] pl-2 pr-1 py-0.5 rounded-full flex items-center gap-1",
+    className: "text-[11px] pl-2 pr-1 py-1 rounded-full flex items-center justify-between gap-1",
     style: { background: C.bg, color: C.ink }
-  }, `${s.sampleCode} · ${s.clientName}`, /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("span", { className: "truncate" }, `${s.sampleCode} · ${s.clientName}`), /*#__PURE__*/React.createElement("button", {
     type: "button",
     title: "Remove this sample from the report",
     onClick: () => removeSelectedSample(s.id),
-    style: { color: C.muted, lineHeight: 1 }
+    style: { color: C.muted, lineHeight: 1, flexShrink: 0 }
   }, "×")))));
+  const batchModeBlock = selectionMode !== "batch" ? null : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col md:flex-row gap-3 items-start mb-2"
+  }, referencePickerBox, selectedSamplesPanel));
 
   function applySubBatchSelection(ids) {
     const selected = (subBatches || []).filter(sb => ids.includes(sb.id));
@@ -1160,7 +1191,14 @@ function CustomReportGeneratorPage({
       return next;
     });
   }
-  const subBatchModeBlock = selectionMode !== "subbatch" ? null : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  // Same right-hand collapsible "Selected Samples" panel as Batch mode
+  // (selectedSamplesPanel, defined above) reused here instead of the old
+  // wrap-of-chips row, so a large Analytical Batch selection doesn't dump
+  // dozens of chips down the page either — it sits beside the batch list
+  // and scrolls internally when expanded.
+  const subBatchPickerBox = /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 min-w-0"
+  }, /*#__PURE__*/React.createElement("div", {
     className: "flex gap-2 mb-2"
   }, /*#__PURE__*/React.createElement(Button, {
     variant: "ghost",
@@ -1197,18 +1235,10 @@ function CustomReportGeneratorPage({
     checked: reportSubBatchIds.includes(sb.id),
     onChange: () => toggleSubBatch(sb.id),
     onClick: e => e.stopPropagation()
-  }), /*#__PURE__*/React.createElement("span", null, `${sb.label} — ${sb.testTypeName} (${(sb.memberSampleIds || []).length} samples) · ${sb.status}`)))), selectedReportSubBatches.length > 0 && /*#__PURE__*/React.createElement("div", {
-    className: "flex flex-wrap gap-1.5 mb-2"
-  }, selectedSamples.map(s => /*#__PURE__*/React.createElement("span", {
-    key: s.id,
-    className: "text-[11px] pl-2 pr-1 py-0.5 rounded-full flex items-center gap-1",
-    style: { background: C.bg, color: C.ink }
-  }, `${s.sampleCode} · ${s.clientName}`, /*#__PURE__*/React.createElement("button", {
-    type: "button",
-    title: "Remove this sample from the report",
-    onClick: () => removeSelectedSample(s.id),
-    style: { color: C.muted, lineHeight: 1 }
-  }, "×")))));
+  }), /*#__PURE__*/React.createElement("span", null, `${sb.label} — ${sb.testTypeName} (${(sb.memberSampleIds || []).length} samples) · ${sb.status}`)))));
+  const subBatchModeBlock = selectionMode !== "subbatch" ? null : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-col md:flex-row gap-3 items-start mb-2"
+  }, subBatchPickerBox, selectedSamplesPanel));
 
   const sampleSelectionSummaryLine = /*#__PURE__*/React.createElement("div", {
     className: "text-xs mt-2 font-semibold",
