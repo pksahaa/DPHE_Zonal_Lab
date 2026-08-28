@@ -3612,13 +3612,58 @@ function MonthlyProgressReportPage({
     }).catch(function() {});
   }, []);
 
-  // Cumulative baseline: from FY 2025-26 onward (July 2025+)
-  var BASELINE_FY_START_YEAR = 2025;
+  // Fiscal Year + Month-within-FY picker — replaces the old single Month
+  // dropdown (which was capped at "today", so a future month could never
+  // be selected, and had no separate Fiscal Year control at all). Both
+  // controls now range across past AND future fiscal years; if there's no
+  // data for whatever's picked, the table below just says so (see
+  // buildMonthlyProgressReportTableHtml()'s "No released samples found for
+  // ..." row) instead of the dropdown blocking the choice up front.
   var currentMonthKey = mprMonthKey(todayStr());
-  var monthOptions = React.useMemo(function() {
-    return mprMonthOptions(BASELINE_FY_START_YEAR, currentMonthKey);
-  }, [currentMonthKey]);
-  var [selectedMonth, setSelectedMonth] = React.useState(currentMonthKey);
+  var currentFY = getFiscalYear(todayStr());
+  // Fiscal years selectable: every FY that appears in the data, widened by
+  // a few years on both ends so a lab planning ahead (or backfilling old
+  // paper records) always has room to pick a year with no data yet.
+  var fyOptions = React.useMemo(function() {
+    var dataFYs = fiscalYearsFromSamples(samples); // ascending, from 30-dashboard.js
+    var dataStart = dataFYs.length ? Number(dataFYs[0].split("-")[0]) : Number(currentFY.split("-")[0]);
+    var curStart = Number(currentFY.split("-")[0]);
+    var minStart = Math.min(dataStart, curStart - 2);
+    var maxStart = Math.max(curStart + 3, dataStart);
+    var out = [];
+    for (var y = minStart; y <= maxStart; y++) out.push(y + "-" + String(y + 1).slice(-2));
+    return out.reverse(); // most recent first
+  }, [samples, currentFY]);
+  var [selectedFY, setSelectedFY] = React.useState(fyOptions.indexOf(currentFY) !== -1 ? currentFY : fyOptions[0]);
+  // The 12 months of the selected FY (July through June) — always all 12,
+  // not filtered by whether data exists for them.
+  var fyMonthOptions = React.useMemo(function() {
+    var fyStartYear = Number(selectedFY.split("-")[0]);
+    var out = [];
+    for (var i = 0; i < 12; i++) {
+      var y = fyStartYear + (i < 6 ? 0 : 1);
+      var m = ((6 + i) % 12) + 1; // 7,8,9,10,11,12,1,2,...,6
+      out.push(y + "-" + String(m).padStart(2, "0"));
+    }
+    return out;
+  }, [selectedFY]);
+  var [selectedMonth, setSelectedMonth] = React.useState(
+    fyMonthOptions.indexOf(currentMonthKey) !== -1 ? currentMonthKey : fyMonthOptions[0]
+  );
+  // Changing the Fiscal Year resets the month to that FY's July by default,
+  // unless the current real-world month happens to fall inside the newly
+  // picked FY (keeps "today" selected when just glancing at the FY list).
+  function changeFY(fy) {
+    setSelectedFY(fy);
+    var fyStartYear = Number(fy.split("-")[0]);
+    var months = [];
+    for (var i = 0; i < 12; i++) {
+      var y = fyStartYear + (i < 6 ? 0 : 1);
+      var m = ((6 + i) % 12) + 1;
+      months.push(y + "-" + String(m).padStart(2, "0"));
+    }
+    setSelectedMonth(months.indexOf(currentMonthKey) !== -1 ? currentMonthKey : months[0]);
+  }
 
   var [designation, setDesignation] = React.useState("Senior Chemist");
   var [signLine2, setSignLine2] = React.useState("");
@@ -3673,15 +3718,15 @@ function MonthlyProgressReportPage({
     var r = {};
     r["Client Type"] = row.clientType;
     r["Samples — During " + stats.monthLabel] = row.duringMonth.samples;
-    r["Samples — " + stats.fyStartLabel] = row.cumulative.samples;
+    r["Samples — Up to " + stats.cumulativeAsOfLabel] = row.cumulative.samples;
     MPR_CATEGORIES.forEach(function(cat) {
       r[cat + " Exceed — During Month"] = row.duringMonth.byCat[cat].exceed;
       r[cat + " Non-Exceed — During Month"] = row.duringMonth.byCat[cat].nonExceed;
     });
     r["Total Parameters — During " + stats.monthLabel] = row.duringMonth.total;
-    r["Total Parameters — " + stats.fyStartLabel] = row.cumulative.total;
+    r["Total Parameters — Up to " + stats.cumulativeAsOfLabel] = row.cumulative.total;
     r["Revenue (TK.) — During Month"] = row.duringMonth.revenue;
-    r["Revenue (TK.) — " + stats.fyStartLabel] = row.cumulative.revenue;
+    r["Revenue (TK.) — Up to " + stats.cumulativeAsOfLabel] = row.cumulative.revenue;
     return r;
   });
 
@@ -3690,13 +3735,22 @@ function MonthlyProgressReportPage({
       title: "Monthly Progress Report of Water Quality Test",
       icon: /*#__PURE__*/React.createElement(Icon, { name: "chart", size: 15 }),
       right: /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-2 no-print flex-wrap" },
+        /*#__PURE__*/React.createElement("label", { className: "text-xs", style: { color: C.muted } }, "Fiscal Year:"),
+        /*#__PURE__*/React.createElement("select", {
+          className: "border rounded px-2 py-1 text-xs",
+          style: { borderColor: C.border },
+          value: selectedFY,
+          onChange: function(e) { changeFY(e.target.value); }
+        }, fyOptions.map(function(fy) {
+          return /*#__PURE__*/React.createElement("option", { key: fy, value: fy }, "FY " + fy);
+        })),
         /*#__PURE__*/React.createElement("label", { className: "text-xs", style: { color: C.muted } }, "Month:"),
         /*#__PURE__*/React.createElement("select", {
           className: "border rounded px-2 py-1 text-xs",
           style: { borderColor: C.border },
           value: selectedMonth,
           onChange: function(e) { setSelectedMonth(e.target.value); }
-        }, monthOptions.map(function(mk) {
+        }, fyMonthOptions.map(function(mk) {
           return /*#__PURE__*/React.createElement("option", { key: mk, value: mk }, mprMonthLabel(mk));
         })),
         /*#__PURE__*/React.createElement(Button, {
@@ -3713,7 +3767,7 @@ function MonthlyProgressReportPage({
       )
     },
       /*#__PURE__*/React.createElement("div", { className: "text-xs mb-3 p-2 rounded no-print", style: { background: C.infoBg, color: C.info } },
-        "\"During this month\" shows data for ", /*#__PURE__*/React.createElement("strong", null, stats.monthLabel), ". \"", stats.fyStartLabel, "\" is cumulative since the start of FY ", stats.fiscalYear, " through the end of the selected month. Every released, valued parameter counts toward the Total; it's judged Exceed vs Non-Exceed against that Parameter's Reference Limit Min/Max (Test Configuration \u203a Parameters \u203a Limits) when configured, and counted as Non-Exceed by default when no limit is set (nothing to have exceeded). Only results with nothing entered yet are excluded."
+        "\"During this month\" shows data for ", /*#__PURE__*/React.createElement("strong", null, stats.monthLabel), ". \"Up to ", stats.cumulativeAsOfLabel, "\" is cumulative from the start of FY ", stats.fiscalYear, " through the END OF THE PRIOR MONTH — it deliberately does NOT include ", stats.monthLabel, " itself, so the two columns are two non-overlapping pieces of the fiscal year (add them together for the FY-to-date total). Every released, valued parameter counts toward the Total; it's judged Exceed vs Non-Exceed against that Parameter's Reference Limit Min/Max (Test Configuration \u203a Parameters \u203a Limits) when configured, and counted as Non-Exceed by default when no limit is set (nothing to have exceeded). Only results with nothing entered yet are excluded."
       ),
       /*#__PURE__*/React.createElement("div", {
         className: "grid gap-2 mb-3 no-print",

@@ -1220,3 +1220,387 @@ pass unchanged.
 
 The full Role-Based Access Control (RBAC) and Security Architecture implementation details, including the API protection model, session management, segregation of duties, and security testing matrix, can be found in the [RBAC Security Report](./RBAC_Security_Report.md).
 
+## Dashboard — Sample Life Cycle KPIs (v2, dynamic period filter)
+
+**File:** `30-dashboard.js` (`DashboardTab`, plus the helper functions just
+above it: `fiscalYearsFromSamples`, `buildLifecyclePeriodMatcher`,
+`computeSampleLifecycleV2`). Nothing else was touched — the Monthly
+Progress Report, the 5-fiscal-year charts further down this same page, the
+pie chart, and every other screen keep their existing logic untouched.
+
+### The bug this replaced
+
+The old "Sample Life Cycle" cards computed **Total Samples** as
+`activeSamples.length + archivedSampleTotal`, where `activeSamples` came
+from the live `samples` collection and `archivedSampleTotal` came from a
+*separate* `archived_records` collection. Archiving
+(`archiveReleasedMembers()` in `13-testrecords-ui.js`) never deletes a
+sample's own record — it only sets `archived: true` on it, once every
+requested test on it is done, and *also* writes a lightweight snapshot of
+it into `archived_records` for the Archive tab. So a fully-archived sample
+was being counted **twice**: once in `activeSamples.length` (the archived
+flag wasn't filtered out) and again in `archivedSampleTotal`. The same
+double-count applied to "Tested & Released". This is why the Dashboard's
+numbers didn't match the Monthly Progress Report or reality.
+
+### The deeper issue found while fixing it
+
+Even after removing the double-count, using `sample.status` to decide "is
+this Tested & Released / still In Testing / etc." is itself unreliable,
+because `sample.status` is a **rollup**, not raw data
+(`rollupSampleStatus()`, `20-sample-model.js`): *"the least-advanced
+(bottleneck) parameter decides where the sample as a whole shows up... a
+sample isn't 'Approved' until every parameter it requested is."*
+
+Concretely: a sample with 3 requested parameters — 1 already `released`,
+2 still `in_progress` — has `sample.status === "in_progress"` as a whole.
+Counting by `sample.status` would hide the 1 already-released parameter
+completely; it would never show up in "Tested & Released" until the other
+2 catch up.
+
+### The fix — two counting units, on purpose
+
+- **Total Samples Received** is counted **per sample** (one physical water
+  sample = 1). This is inherently a sample-level question.
+- **Every other figure** (Total Parameters Requested, Tested & Released, In
+  Testing, Awaiting Review/Approval/Release, Rejected & Cancelled) is
+  counted **per parameter** — one entry in a sample's `requestedTests[]` =
+  1 — reading each parameter's own `status` field rather than the sample's
+  rolled-up `status`. This is what correctly captures partial releases (the
+  3-parameter example above now contributes 1 to "Tested & Released" and 2
+  to "In Testing", instead of being entirely hidden in one bucket).
+
+Sample-level `status` (`registered`, `received`, `on_hold`, `rejected`,
+`cancelled`) is still used first, *before* looking at individual parameter
+statuses — these five are custody decisions about the physical sample
+(the sample hasn't been assigned yet, or has been paused/rejected/cancelled
+as a whole), not something the parameter rollup governs, so every one of
+that sample's requested parameters is bulk-assigned to the matching bucket
+in those cases. Only once a sample is past that point (`assigned` through
+`released`, i.e. inside the rollup range) does the function look at each
+`requestedTests[i].status` individually.
+
+**Identity that always holds** (verified by construction, not just by
+testing — see the code comment on `computeSampleLifecycleV2`):
+
+```
+Total Parameters Requested  =  In Testing + Awaiting Review/Approval/Release
+                                + Tested & Released + Rejected & Cancelled
+```
+
+No sample or parameter is ever skipped or counted twice, because every
+`requestedTests[]` entry across the whole `samples` array is classified
+into *exactly one* of those four buckets.
+
+`Overdue (TAT Breached)` is **not** part of that sum — it's a cross-cutting
+alert over samples already counted in In Testing / Awaiting Review that
+have also breached turnaround time (Urgent priority > 1 day, others > 5
+days, measured from `collectionDate`). It can and will overlap with those
+two cards; that's intentional, not a bug — it was the confusing part of
+the old "Active Samples" card, now made explicit as its own labeled thing.
+
+`On Hold` samples are folded into **In Testing** (their sub-label shows
+"incl. N on hold" when relevant) rather than getting a 5th card, since the
+whole-sample pause has the same practical meaning ("not yet done, not
+released") as the rest of that bucket.
+
+### Archived samples: included, not excluded
+
+Archiving never strips `requestedTests[]`, `status`, or `collectionDate`
+off a sample — it only adds `archived: true`/`archivedAt`. So
+`computeSampleLifecycleV2()` reads straight from the raw `samples` prop
+with **no archived filter at all**; archived and live samples are counted
+identically, exactly once each. The `archived_records` collection (used
+only for the Archive tab's own list and the "N archived batches" link next
+to this section's header) is never consulted for any of these counts
+anymore, which is what makes the double-count structurally impossible now
+rather than just patched over.
+
+The "Tested & Released" card shows a `live · archived` sub-line purely for
+transparency — it's a breakdown of the one number, not two numbers added
+together.
+
+### Dynamic period filter
+
+A "Period" control above the cards lets you pick:
+- **All Time** (default) — no filtering, same as the old unfiltered view.
+- **Month** — any calendar month (native month list, all months from the
+  earliest fiscal year present in the data through the current month).
+- **Fiscal Year** — a single fiscal year (July–June, e.g. "2025-26"),
+  consistent with the fiscal-year charts already on this same page and
+  with the Monthly Progress Report's own fiscal-year convention.
+- **Fiscal Year Range** — an inclusive `From FY` → `To FY` range.
+
+Fiscal year dropdown options are generated from the actual data
+(`fiscalYearsFromSamples()`, keyed off `receivedDate`) — earliest fiscal
+year with any sample through the current one — so old data is always
+reachable and the dropdown is never empty on a fresh install.
+
+## Dashboard — v3: matching the Monthly Progress Report exactly
+
+The v2 design above used one date field (`collectionDate`) for everything.
+Two follow-up problems came up in practice and both are fixed now:
+
+### 1. Wrong date field for "Total Samples Received"
+
+`collectionDate` is when a sample was **collected in the field**;
+`receivedDate` (a separate field, entered at registration) is when it
+**arrived at the lab**. "Total Samples Received" now reads `receivedDate`,
+not `collectionDate`. `fiscalYearsFromSamples()` was updated to match (its
+Year/Range dropdowns are now built from `receivedDate` too).
+
+### 2. The Monthly Progress Report's own date bug
+
+`computeMonthlyProgressStats()` (17-report-generator.js) used to bucket an
+entire sample into a month/FY using `mprSampleDate()`, which looks for
+`requestedTests[i].updatedAt` — a field that **is never actually written
+anywhere in the codebase**. That filter always comes back empty, so every
+report was silently falling back to `sample.updatedAt` (the sample
+document's last-saved timestamp, bumped by *any* edit to *any* field, not
+specifically a release) or `sample.collectionDate`. This has now been
+fixed: each released parameter is dated by **its own test record's `date`
+field** (the "Test Date" entered on Add Test Record, resolved via the
+existing `getSampleResultForTest()` helper, which already returned
+`date: r.date` — it just wasn't being used for date-bucketing before).
+This is also more correct on its own terms: two parameters on the same
+sample tested in different batches on different days now land in their
+own correct months instead of being blended under one sample-wide date.
+The "samples" headcount inside each MPR bucket is still counted once per
+sample (not once per parameter) by tracking whether that sample has
+already been counted for the current month/cumulative window.
+
+Because the 5-fiscal-year Revenue and Samples-vs-Parameters charts on this
+same Dashboard page already call `computeMonthlyProgressStats()` directly,
+they inherited this fix automatically — no separate change was needed for
+them. The "Test Type" bar chart further down this file had the same
+`rt.updatedAt`-based bug independently and was fixed the same way (now
+uses `getSampleResultForTest()`'s `date` too).
+
+### 3. Dashboard's pipeline cards now use the same per-parameter test date
+
+`computeSampleLifecycleV2()` was restructured so **each parameter carries
+its own anchor date** instead of the whole sample sharing one:
+
+- A parameter that has reached `results_entered` / `under_review` /
+  `approved` / `released` is dated by its own test record's `date` (same
+  field, same resolution as the MPR fix above) — so "Tested & Released"
+  for a given period now matches MPR's "Total Parameters Tested" for that
+  same period **exactly**, by construction.
+- A parameter still `pending`/`in_progress`, or one that never got tested
+  because its sample is `rejected`/`cancelled`/`on_hold`/`registered`/
+  `received`, has no test record yet — the only date available for it is
+  the sample's `receivedDate`.
+
+The identity from v2 still holds, now on this mixed-but-per-parameter-
+consistent date rule:
+
+```
+Total Parameters Requested  =  In Testing + Awaiting Review/Approval/Release
+                                + Tested & Released + Rejected & Cancelled
+```
+
+**Trade-off, stated plainly:** "Total Samples Received" (dated by
+`receivedDate`) and "Total Parameters Requested" (dated per-parameter, by
+test date once tested) can now disagree on *which* samples they're
+counting once a period narrower than All Time is selected — e.g. a
+parameter from a sample received in February but tested in March counts
+toward March here, not February. This is intentional: the two cards are
+answering different questions ("what arrived in this period" vs. "what
+had pipeline/release activity dated to this period", the latter being the
+one MPR itself answers), not a bug. `Overdue` is judged against the
+`receivedDate`-in-period sample set, same as "Total Samples Received", not
+against the per-parameter set.
+
+### Unspecified rows in the Monthly Progress Report
+
+Checked for a bug here — there isn't one in the calculation. `references`,
+`samples`, and `testRecords` all load together in a single
+`DataService.multiList()` call and the whole app is blocked behind one
+`loaded` flag until that call returns (99-app.js), so `references` cannot
+be missing/incomplete by the time the Reports tab renders — an async
+load-order race was ruled out. `mprClientType()` itself is also correct.
+
+The real cause: a sample shows "Unspecified" whenever its linked
+Reference's `clientType` field is blank. Two ways that happens:
+- **Legacy migration** — `migrateBatchRefsToReferences()`
+  (19-reference-model.js) auto-creates a Reference for any pre-existing
+  sample that predates the Reference/Client-Type model, but never sets
+  `clientType` on it (only `refNo`, `sourceType`, and a note asking staff
+  to verify/fill in details) — `createReference()` then defaults that to
+  `""`, which reads as "Unspecified".
+  - Any Reference created this way carries the note *"Auto-migrated from
+    legacy Batch Ref field — please verify source type and add
+    organization/contact details."* — that's how to find them in the
+    References tab.
+- **Optional field** — Client Type is not a required field on the New
+  Reference form (only Tracking No. is enforced), so it can also be
+  submitted blank going forward.
+
+Fix per-record: edit the Reference in the References tab and set its
+Client Type — the sample(s) under it will move out of "Unspecified" the
+next time a report is run. No code change was needed for this; flagged
+here in case a "make Client Type required" and/or a "find blank Client
+Type References" follow-up is wanted later.
+
+### Follow-up: the two "Unspecified" fixes, implemented
+
+**1. Client Type is now required.** `submitClientPart()`
+(21-sample-ui.js) rejects a blank Client Type the same way it already
+rejected a blank Tracking No. or "Others" without its specify-text, and
+the Client Type field's label carries the same red-asterisk marker as
+Tracking No. This is a single shared component (`ClientPartFields`),
+used by all three places a Reference gets created (manual registration,
+bulk-upload popup, and the inline "new Client entry" picker), so the
+requirement applies everywhere at once.
+
+**2. "N Missing Client Type" fixer.** There is no standalone References
+tab/page in this app — References are created inline during sample
+registration and otherwise only referenced by ID, with no browse/edit
+screen anywhere (the model already had an unused `editReference()`
+helper, now finally called). Rather than invent a new top-level tab for
+this one narrow task, a small warning-toned button — `"N Missing Client
+Type"` — was added to the existing Samples tab toolbar (next to "Import
+Data" / "Download Template"), visible only when
+`references.filter(r => !r.clientType)` is non-empty. It opens
+`FixClientTypesModal` (21-sample-ui.js, defined just above `SamplesTab`):
+one row per blank-Client-Type reference, showing its label, sample count,
+and (for legacy-migrated ones) the auto-migration note so the reason it's
+blank is visible at a glance; each row gets its own Client Type dropdown,
+and "Save All" applies every filled-in row in one pass via
+`editReference()` + `setReferences()`.
+
+### Follow-up: Dashboard revenue not matching MPR for the current period
+
+Found and fixed. The 5-fiscal-year bar chart, the Client Type pie chart,
+and the Test Type bar chart on this same Dashboard page were all built
+from `activeSamples = samples.filter(s => !s.archived)` — silently
+excluding any sample flagged `archived: true` — while the Monthly
+Progress Report page itself (14c-analytics-pages-2.js) passes the raw,
+unfiltered `samples` array into `computeMonthlyProgressStats()`.
+
+Archiving a sample never strips its `requestedTests[]`/results (see the
+v3 note above), so that filter looked harmless — but
+`computeMonthlyProgressStats()` has exactly **one** other path for
+archived data: a separate loop over the `archived_records` collection
+that "doesn't retain raw result values" and deliberately contributes
+**zero revenue** (samples/parameter-tally only, filed under
+Others/Non-Exceed). So any archived-flagged sample whose test record
+was still physically present in `testRecords` — which includes any
+sample carrying `archived: true` from seeded/imported data, or one
+archived through any future path that doesn't also delete its
+testRecords — had its real revenue silently dropped on this page while
+MPR's own page still counted it correctly. Two calls to the same
+aggregation function disagreeing only because one of them was quietly
+handed a smaller sample list.
+
+Fix: the FY chart, pie chart, and test-type chart on this page now all
+read straight from `samples` (no archived filter), exactly matching what
+the Monthly Progress Report page passes. `activeSamples` was removed
+entirely rather than left unused.
+
+## Monthly Progress Report — Fiscal Year + Month picker, dynamic cumulative column
+
+### 1. Fiscal Year + Month picker (replaces the old single Month dropdown)
+
+`MonthlyProgressReportPage` (14c-analytics-pages-2.js) used to have one
+Month dropdown, built from a hardcoded `BASELINE_FY_START_YEAR = 2025` and
+capped at "today" (`mprMonthOptions(BASELINE_FY_START_YEAR, currentMonthKey)`)
+— so there was no way to pick a Fiscal Year directly, and a future month
+could never be selected at all.
+
+Now there are two dropdowns:
+- **Fiscal Year** — `fyOptions` spans every FY present in the data
+  (`fiscalYearsFromSamples()`, the same helper 30-dashboard.js's period
+  filter uses), widened by a couple of years on both ends (past and
+  future) so there's always room to plan ahead or backfill old paper
+  records, even on a fresh install with no data yet.
+- **Month** — `fyMonthOptions` is always the fixed 12 months of whichever
+  FY is selected (July through June), not filtered by whether data
+  exists for them. Switching Fiscal Year resets the month to that FY's
+  July, unless today's real month happens to fall inside the newly
+  picked FY (in which case it jumps straight to "now" instead).
+
+Picking a month/FY with no data doesn't get blocked by the dropdown —
+the table (on-screen preview and the print popup both render through the
+same `buildMonthlyProgressReportTableHtml()`, so they can't drift apart)
+already had a "No released samples found for {month}" row for an empty
+result set; that now naturally covers future/no-data selections too,
+verified directly (empty `samples`/`testRecords`, `selectedMonth:
+"2030-03"` → `rows.length === 0`, no errors).
+
+### 2. The "Cumulative" column now means "up to the END OF THE PRIOR month"
+
+Previously, selecting e.g. December 2026 made the cumulative column cover
+July 1 – December 31, 2026 — i.e. it silently re-included everything the
+"During this Month" column already showed. That's now fixed:
+`computeMonthlyProgressStats()`'s cumulative window ends at the last day
+of the month BEFORE the selected one (`new Date(selYear, selMon - 1,
+0)` — JS's Date rolls month `0` over to December of the previous year on
+its own, so selecting July itself — the first month of the FY — correctly
+produces an end-date before `fyStart`, making the window empty with no
+special-casing needed). "During this Month" and "Cumulative" are now two
+non-overlapping pieces that add up to the FY-to-date total, rather than
+the second one silently containing the first.
+
+The column header is now dynamic — `stats.cumulativeAsOfLabel` — showing
+the actual last month included (e.g. selecting December/2026 labels the
+column "Up to November/2026", and it holds July–November data only). This
+replaced the old hardcoded `stats.fyStartLabel` ("July/2026", unchanging
+regardless of which month was selected) in: all three "Up to" table
+headers (Number of Sample Tested / Total Number of Parameter Tested /
+Revenue), the CSV export column names, and the on-screen explanatory
+footnote. `fyStartLabel` itself is kept (still correct as "the FY started
+in July/2026") since nothing else depended on its old, now-wrong-sounding
+usage as a cumulative-column header.
+
+Verified directly with a 6-month synthetic dataset (one released,
+fee-applicable parameter per month, July–December 2026): selecting
+December returns `duringMonth = 1 sample / ৳100` (December only) and
+`cumulative = 5 samples / ৳500` (July–November) — no overlap, no
+double-count — and selecting July returns `cumulative = 0` as expected.
+
+### 3. "Released sample" vs. "Add Test Record" — how Tested & Released is built
+
+Asked directly, so answering precisely: it's **both**, deliberately.
+- The **status filter** is "released": only parameters whose
+  `requestedTests[i].status === "released"` are counted at all (matches
+  the v3 note above — `sample.status` itself is a bottleneck rollup, so
+  this is always checked per-parameter, never per-sample).
+- The **date** used to place that parameter into a specific month/FY is
+  its own Add Test Record `date` field (the "Test Date" entered when the
+  batch/record was created), resolved via `getSampleResultForTest()` —
+  not a separate "release timestamp" (there isn't one — see the v3 note's
+  explanation of `rt.updatedAt` never actually being written).
+
+This is the exact same rule in both places that show "Tested & Released":
+MPR's `computeMonthlyProgressStats()` and the Dashboard's
+`computeSampleLifecycleV2()`. Same status filter, same date field, same
+resolution function — which is what guarantees the two screens agree.
+
+### 4. "Unspecified" sample revenue not being added to MPR — investigated, not reproduced
+
+Tested directly rather than guessing: wrote a small Node harness that
+loads the real `computeMonthlyProgressStats()` (and its dependencies —
+`getSampleResultForTest()`, `resolveParameterConfig()`, etc. — straight
+from the actual source files, not a reimplementation) and fed it
+synthetic samples with no Reference/blank Client Type (i.e. "Unspecified")
+carrying released, fee-applicable parameters, in both the single-record
+shape and the Analytical-Batch (`memberSampleIds`/`memberResults`) shape.
+In both cases the "Unspecified" row's revenue was computed correctly and
+included in the grand total (e.g. one ADP + one Unspecified sample, ৳200
+Standard Fee each → totals.revenue = 400, both rows individually correct).
+
+No bug was found in the calculation logic itself this way. The mismatch
+being seen is most likely specific to the actual uploaded data — the
+leading candidates, in order of likelihood: (a) the sample(s) in question
+have gone through the Archive action and their test record's `date`/raw
+results were purged (the `archived_records` fallback path deliberately
+contributes zero revenue for anyone, any client type — see the v3 note),
+or (b) the comparison is against the Report → Executive Dashboard /
+Revenue Analytics page specifically, which was never part of this
+matching effort and still prices revenue completely differently (flat
+Test Type `unitCost` × billed samples, not per-parameter Standard Fee —
+see the very first "Dashboard vs MPR" note in this README). Flagging here
+rather than shipping a speculative fix; a specific sample/reference code
+showing the discrepancy would let this be traced precisely.
+

@@ -309,7 +309,9 @@ function ClientPartFields({
     onChange: v => set("sourceTypeOther", v)
   }), /*#__PURE__*/React.createElement(SelectField, {
     simple: true,
-    label: "Client Type",
+    label: /*#__PURE__*/React.createElement("span", null, "Client Type ", /*#__PURE__*/React.createElement("span", {
+      style: { color: C.warn }
+    }, "*")),
     value: form.clientType,
     onChange: v => set("clientType", v),
     options: [{
@@ -422,6 +424,11 @@ function submitClientPart(form, references, session) {
   if (form.sourceType === "others" && !form.sourceTypeOther.trim()) {
     return {
       error: "Please specify the Client Source."
+    };
+  }
+  if (!form.clientType) {
+    return {
+      error: "Client Type is required."
     };
   }
   if (form.clientType === "Others (Pls Specify)" && !form.clientTypeOther.trim()) {
@@ -2241,6 +2248,89 @@ function SampleCustodyActionModal({ sample, action, onClose, onConfirm }) {
 }
 
 // ---- main tab: list + registration + detail ----
+// Small fixer for References whose Client Type was left blank — either
+// from legacy migration (migrateBatchRefsToReferences(), 19-reference-model.js)
+// or submitted before Client Type became a required field (submitClientPart()).
+// These show as "Unspecified" in the Monthly Progress Report; this lets
+// staff find and correct them in one place instead of hunting through
+// individual samples. Uses the existing editReference() model helper.
+function FixClientTypesModal({ references, samples, setReferences, notify, onClose }) {
+  const [pending, setPending] = React.useState({}); // referenceId -> { clientType, clientTypeOther }
+  const [saving, setSaving] = React.useState(false);
+  const sampleCountByRef = React.useMemo(function() {
+    const map = {};
+    (samples || []).forEach(function(s) {
+      if (!s.referenceId) return;
+      map[s.referenceId] = (map[s.referenceId] || 0) + 1;
+    });
+    return map;
+  }, [samples]);
+  function setField(refId, field, value) {
+    setPending(function(prev) {
+      return { ...prev, [refId]: { ...prev[refId], [field]: value } };
+    });
+  }
+  async function saveAll() {
+    const toSave = references.filter(function(r) { return pending[r.id] && pending[r.id].clientType; });
+    if (!toSave.length) { onClose(); return; }
+    setSaving(true);
+    for (const ref of toSave) {
+      const patch = pending[ref.id];
+      const updated = editReference(ref, patch);
+      await setReferences(function(prev) { return prev.map(function(r) { return r.id === ref.id ? updated : r; }); }, updated);
+    }
+    setSaving(false);
+    notify?.(`Client Type set for ${toSave.length} reference(s).`, "ok");
+    onClose();
+  }
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: `Missing Client Type (${references.length})`,
+    onClose: onClose,
+    wide: true
+  },
+    /*#__PURE__*/React.createElement("p", {
+      className: "text-xs mb-3",
+      style: { color: C.muted }
+    }, "These references have no Client Type set, so their samples show as \"Unspecified\" in the Monthly Progress Report. Pick a Client Type for each and save."),
+    /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-col gap-2 max-h-[55vh] overflow-y-auto"
+    }, references.map(function(ref) {
+      const p = pending[ref.id] || {};
+      return /*#__PURE__*/React.createElement("div", {
+        key: ref.id,
+        className: "flex items-end gap-2 flex-wrap p-2 rounded",
+        style: { border: `1px solid ${C.border}` }
+      },
+        /*#__PURE__*/React.createElement("div", { className: "text-xs flex-1 min-w-[160px]", style: { color: C.ink } },
+          /*#__PURE__*/React.createElement("div", { className: "font-semibold" }, referenceDisplayLabel(ref)),
+          /*#__PURE__*/React.createElement("div", { style: { color: C.muted } },
+            (sampleCountByRef[ref.id] || 0) + " sample(s) · " + (ref.notes ? ref.notes : referenceSourceMeta(ref.sourceType).label))
+        ),
+        /*#__PURE__*/React.createElement(SelectField, {
+          simple: true,
+          label: "Client Type",
+          value: p.clientType || "",
+          onChange: function(v) { setField(ref.id, "clientType", v); },
+          options: [{ value: "", label: "— select —" }].concat(CLIENT_TYPES.map(function(ct) { return { value: ct, label: ct }; }))
+        }),
+        p.clientType === "Others (Pls Specify)" && /*#__PURE__*/React.createElement(TextField, {
+          simple: true,
+          label: "Please Specify",
+          value: p.clientTypeOther || "",
+          onChange: function(v) { setField(ref.id, "clientTypeOther", v); }
+        })
+      );
+    })),
+    /*#__PURE__*/React.createElement("div", { className: "flex justify-end gap-2 mt-4" },
+      /*#__PURE__*/React.createElement(Button, { variant: "ghost", onClick: onClose }, "Close"),
+      /*#__PURE__*/React.createElement(Button, {
+        onClick: saveAll,
+        disabled: saving || !Object.keys(pending).some(function(id) { return pending[id] && pending[id].clientType; })
+      }, saving ? "Saving…" : "Save All")
+    )
+  );
+}
+
 function SamplesTab({
   samples,
   setSamples,
@@ -2275,6 +2365,14 @@ function SamplesTab({
   const setOpenId = setFocusSampleId || setInternalOpenId;
   const [statusFilter, setStatusFilter] = React.useState("");
   const [q, setQ] = React.useState("");
+  // References whose Client Type is blank (legacy-migrated or submitted
+  // before Client Type became required — see submitClientPart()). Surfaced
+  // here as a small fixer so they're easy to find and bulk-correct instead
+  // of silently showing "Unspecified" in the Monthly Progress Report.
+  const [showFixClientTypes, setShowFixClientTypes] = React.useState(false);
+  const blankClientTypeRefs = React.useMemo(function() {
+    return (references || []).filter(function(r) { return !r.clientType; });
+  }, [references]);
   const [expandedBatches, setExpandedBatches] = React.useState(new Set());
   const [pendingImportRows, setPendingImportRows] = React.useState(null);
   const [pendingImportSkipped, setPendingImportSkipped] = React.useState(0);
@@ -3020,7 +3118,21 @@ function SamplesTab({
   }, /*#__PURE__*/React.createElement(Icon, {
     name: "download",
     size: 14
-  }), "Download Template")), /*#__PURE__*/React.createElement("div", {
+  }), "Download Template"), blankClientTypeRefs.length > 0 && /*#__PURE__*/React.createElement(Button, {
+    variant: "outline",
+    size: "sm",
+    onClick: () => setShowFixClientTypes(true),
+    style: { borderColor: C.warn, color: C.warn }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    name: "warning",
+    size: 14
+  }), `${blankClientTypeRefs.length} Missing Client Type`)), showFixClientTypes && /*#__PURE__*/React.createElement(FixClientTypesModal, {
+    references: blankClientTypeRefs,
+    samples: samples,
+    setReferences: setReferences,
+    notify: notify,
+    onClose: () => setShowFixClientTypes(false)
+  }), /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 mb-4"
   }, /*#__PURE__*/React.createElement(StatCard, {
     label: "Active Samples",

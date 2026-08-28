@@ -1598,7 +1598,24 @@ function computeMonthlyProgressStats({ samples, references, testRecords, testTyp
   const fyStartYear = Number(fiscalYear.split("-")[0]);
   const fyStartLabel = `July/${fyStartYear}`;
   const fyStart = `${fyStartYear}-07-01`;
-  const cumEndStr = new Date(selYear, selMon, 0).toISOString().slice(0, 10); // last day of selected month
+  // Cumulative column = everything from the start of this fiscal year
+  // (July) up to and including the END OF THE PRIOR MONTH — deliberately
+  // NOT including the selected month itself, so "During this Month" (col 1)
+  // and this cumulative column (col 2) are two non-overlapping pieces that
+  // together make up the fiscal-year-to-date total, rather than col 2
+  // silently re-including everything col 1 already shows. `new Date(y, m,
+  // 0)` gives the last day of 1-based month `m` in year `y`; passing
+  // `selMon - 1` therefore gives the last day of the month BEFORE the
+  // selected one, and JS's Date rolls month 0 over to December of the
+  // previous year automatically — so selecting July itself (the first
+  // month of the FY) correctly yields a cumEndStr that falls before
+  // fyStart, making inCumWindow() always false (an empty, all-zero
+  // cumulative column) with no special-casing needed.
+  const cumEndStr = new Date(selYear, selMon - 1, 0).toISOString().slice(0, 10);
+  // Column header for the cumulative column — e.g. selecting December 2026
+  // labels it after November 2026 (the last month actually included).
+  // Falls back to fyStartLabel when the window is empty (July selected).
+  const cumulativeAsOfLabel = cumEndStr >= fyStart ? mprMonthLabel(mprMonthKey(cumEndStr)) : fyStartLabel;
 
   const blankCat = () => ({ As: { exceed: 0, nonExceed: 0 }, Fe: { exceed: 0, nonExceed: 0 }, Cl: { exceed: 0, nonExceed: 0 }, Others: { exceed: 0, nonExceed: 0 } });
   const blankBucket = () => ({ samples: 0, revenue: 0, byCat: blankCat() });
@@ -1619,19 +1636,41 @@ function computeMonthlyProgressStats({ samples, references, testRecords, testTyp
     const releasedRts = (s.requestedTests || []).filter(rt => rt.status === "released");
     if (!releasedRts.length) return;
     const ct = mprClientType(s, references);
-    const sampleDate = mprSampleDate(s);
-    const inM = inMonth(sampleDate);
-    const inC = inCumWindow(sampleDate);
-    if (!inM && !inC) return;
-
-    if (inM) acc[ct].duringMonth.samples += 1;
-    if (inC) acc[ct].cumulative.samples += 1;
+    // "samples" (the headcount, not the parameter tally below) is counted
+    // once per sample per bucket the first time any of its parameters
+    // lands in that window — not once per parameter — so a 3-parameter
+    // sample doesn't inflate the sample count to 3.
+    let sampleCountedM = false;
+    let sampleCountedC = false;
 
     releasedRts.forEach(rt => {
       const testType = (testTypes || []).find(t => t.id === rt.testTypeId);
       if (!testType) return;
       const info = getSampleResultForTest(s, rt.testTypeId, testRecords);
       if (!info) return;
+      // Per-PARAMETER date: the test record this specific parameter's
+      // result came from carries its own `date` (the "Test Date" entered
+      // on Add Test Record) — that's what a parameter's whole
+      // results_entered → under_review → approved → released journey is
+      // anchored to, so it's what's used to bucket it into a month/FY here.
+      // This intentionally replaces bucketing by a single whole-sample
+      // date (mprSampleDate(), kept below only as a defensive fallback for
+      // the near-impossible case of a released parameter with no
+      // resolvable record date): two parameters on the same sample tested
+      // in different batches on different days now land in their own
+      // correct months instead of being blended under one sample-wide
+      // date, and this is also the exact date the Dashboard's Sample Life
+      // Cycle "Tested & Released" card uses per parameter — see
+      // computeSampleLifecycleV2() in 30-dashboard.js — so the two screens
+      // agree on the same period's numbers by construction.
+      const paramDate = info.date || mprSampleDate(s);
+      const inM = inMonth(paramDate);
+      const inC = inCumWindow(paramDate);
+      if (!inM && !inC) return;
+
+      if (inM && !sampleCountedM) { acc[ct].duringMonth.samples += 1; sampleCountedM = true; }
+      if (inC && !sampleCountedC) { acc[ct].cumulative.samples += 1; sampleCountedC = true; }
+
       // Fallback price if a result's Parameter can't be resolved at all:
       // the originating test record's own unitCost snapshot (which itself
       // was set from the linked Parameter's Standard Fee at save time).
@@ -1730,7 +1769,7 @@ function computeMonthlyProgressStats({ samples, references, testRecords, testTyp
   const bdStandardByCategory = {};
   MPR_CATEGORIES.forEach(cat => { bdStandardByCategory[cat] = [...bdStdSets[cat]].join("; "); });
 
-  return { monthKey, monthLabel: mprMonthLabel(monthKey), fiscalYear, fyStartLabel, rows, totals, bdStandardByCategory };
+  return { monthKey, monthLabel: mprMonthLabel(monthKey), fiscalYear, fyStartLabel, cumulativeAsOfLabel, rows, totals, bdStandardByCategory };
 }
 
 function mprFmtCount(n) {
@@ -1805,16 +1844,16 @@ function buildMonthlyProgressReportTableHtml(stats) {
       </tr>
       <tr>
         <th style="${thStyle}">During this<br>month</th>
-        <th style="${thStyle}">${stats.fyStartLabel}</th>
+        <th style="${thStyle}">Up to<br>${stats.cumulativeAsOfLabel}</th>
         <th style="${thStyle}">Bangladesh<br>Standard</th>
         <th style="${thStyle}">As</th>
         <th style="${thStyle}">Fe</th>
         <th style="${thStyle}">Cl</th>
         <th style="${thStyle}">Others</th>
         <th style="${thStyle}">During this<br>month</th>
-        <th style="${thStyle}">${stats.fyStartLabel}</th>
+        <th style="${thStyle}">Up to<br>${stats.cumulativeAsOfLabel}</th>
         <th style="${thStyle}">During this<br>month</th>
-        <th style="${thStyle}">${stats.fyStartLabel}</th>
+        <th style="${thStyle}">Up to<br>${stats.cumulativeAsOfLabel}</th>
       </tr>
     </thead>
     <tbody>${rowsHtml}${totalRow}</tbody>

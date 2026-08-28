@@ -36,6 +36,190 @@ function lastNFiscalYears(n) {
   return years;
 }
 
+// Every fiscal year that appears in these samples' receivedDate, plus the
+// current fiscal year (so the picker is never empty on a fresh install),
+// ascending, oldest first. Used to populate the Sample Life Cycle period
+// filter's Year/Range dropdowns — see computeSampleLifecycleV2() below.
+function fiscalYearsFromSamples(allSamples) {
+  const starts = (allSamples || [])
+    .map(function(s) { return getFiscalYear(s.receivedDate); })
+    .filter(Boolean)
+    .map(function(fy) { return Number(fy.split("-")[0]); });
+  const curStart = Number(currentFiscalYear().split("-")[0]);
+  const minStart = starts.length ? Math.min.apply(null, starts) : curStart;
+  const maxStart = Math.max(curStart, starts.length ? Math.max.apply(null, starts) : curStart);
+  const out = [];
+  for (let y = minStart; y <= maxStart; y++) out.push(y + "-" + String(y + 1).slice(-2));
+  return out;
+}
+
+// Builds a `(dateStr) => boolean` matcher for the Sample Life Cycle period
+// filter. mode: "all" | "month" | "year" | "range". Applied per-figure to
+// whichever date field is the right anchor for that figure — see
+// computeSampleLifecycleV2()'s doc comment (receivedDate for the sample
+// headcount, each parameter's own test-record date once it's been tested).
+//   month — monthKey is "YYYY-MM", matched against dateStr's prefix.
+//   year  — fy is a single fiscal-year string e.g. "2025-26".
+//   range — fromFy/toFy are fiscal-year strings, inclusive both ends.
+function buildLifecyclePeriodMatcher(mode, monthKey, fy, fromFy, toFy) {
+  if (mode === "month") {
+    return function(dateStr) { return !!dateStr && dateStr.slice(0, 7) === monthKey; };
+  }
+  if (mode === "year") {
+    return function(dateStr) { return getFiscalYear(dateStr) === fy; };
+  }
+  if (mode === "range") {
+    const fromStart = Number((fromFy || "0-0").split("-")[0]);
+    const toStart = Number((toFy || "9999-99").split("-")[0]);
+    return function(dateStr) {
+      const gfy = getFiscalYear(dateStr);
+      if (!gfy) return false;
+      const st = Number(gfy.split("-")[0]);
+      return st >= fromStart && st <= toStart;
+    };
+  }
+  return function() { return true; }; // "all"
+}
+
+// ---------------------------------------------------------------------------
+// Sample Life Cycle KPIs (v2)
+// ---------------------------------------------------------------------------
+// Single source of truth: the raw `samples` array, archived-flagged or not —
+// archiving (see archiveReleasedMembers() in 13-testrecords-ui.js) never
+// deletes or rewrites a sample's own record, it only sets `archived: true`
+// once every one of its requested tests is done, so every field used below
+// (status, requestedTests[].status, receivedDate) is still intact and
+// correct on an archived sample. This function never reads the separate
+// `archived_records` collection, so nothing here can be double-counted
+// against it.
+//
+// Two counting units, and two date fields, used deliberately:
+//   - totalSamples/overdueSamples are counted per SAMPLE, dated by
+//     `receivedDate` — the field entered at registration for "when this
+//     sample arrived at the lab" (NOT `collectionDate`, which is when it
+//     was collected in the field — an earlier, different date, and the
+//     wrong one to answer "how many samples did we receive this month").
+//   - every other figure (Total Parameters Requested, In Testing, Awaiting,
+//     Tested & Released, Rejected & Cancelled) is counted per PARAMETER —
+//     one entry in a sample's requestedTests[] = 1 — because sample.status
+//     is only a bottleneck ROLLUP of its parameters (rollupSampleStatus(),
+//     20-sample-model.js): a sample with 3 requested parameters where 1 has
+//     been released and 2 are still in progress shows sample.status =
+//     "in_progress" as a whole, which would hide the 1 already-released
+//     parameter from any card that counted by sample.status instead of by
+//     each parameter's own status.
+//
+// Per-parameter DATE also matters, to match the Monthly Progress Report
+// (computeMonthlyProgressStats(), 17-report-generator.js):
+//   - a parameter that has reached results_entered/under_review/approved/
+//     released is dated by its own test record's Test Date (the date
+//     entered on Add Test Record — via getSampleResultForTest()), the same
+//     field MPR now buckets by. A parameter tested and released in April
+//     counts toward April here and in MPR, even if its sample was received
+//     back in February.
+//   - a parameter still pending/in_progress, or one that never got tested
+//     because its sample was rejected/cancelled/on_hold/registered/
+//     received, has no test record yet — the only date that exists for it
+//     is the sample's own receivedDate.
+// Because of this, Total Samples Received (dated by receivedDate) and
+// Total Parameters Requested (dated per-parameter, mixing receivedDate and
+// test-record date) will legitimately disagree on WHICH samples they're
+// counting once a period narrower than "All Time" is selected — they are
+// deliberately answering two different questions ("what arrived in this
+// period" vs. "what had pipeline activity dated to this period"), not a
+// bug.
+//
+// Identity that must always hold within THIS function's own numbers (no
+// parameter is ever double counted or dropped): totalParams === inTesting
+// + awaiting + releasedCnt + rejectedCnt + cancelledCnt. overdueSamples is
+// a cross-cutting alert over the receivedDate-in-period sample set (a
+// sample not yet fully released whose TAT has breached) and is
+// intentionally NOT part of that sum.
+function computeSampleLifecycleV2(allSamples, testRecords, inPeriod) {
+  const AWAITING_PARAM_STATUSES = ["results_entered", "under_review", "approved"];
+  const allArr = allSamples || [];
+
+  let totalSamples = 0;
+  let totalParams = 0;
+  let inTesting = 0;       // pending/in_progress parameters, plus registered/received/on_hold samples' parameters
+  let onHoldOnly = 0;      // subset of inTesting, tracked separately only for the sub-label
+  let awaiting = 0;        // results_entered / under_review / approved parameters
+  let releasedCnt = 0;
+  let releasedLive = 0;
+  let releasedArchived = 0;
+  let rejectedCnt = 0;
+  let cancelledCnt = 0;
+  let overdueSamples = 0;
+
+  allArr.forEach(function(s) {
+    const rts = s.requestedTests || [];
+    const receivedInPeriod = inPeriod(s.receivedDate);
+
+    if (receivedInPeriod) {
+      totalSamples++;
+      // Overdue is judged against this same receivedDate-in-period set —
+      // TAT is a per-sample commitment measured from receivedDate.
+      const notFullyReleased = rts.length === 0 || rts.some(function(rt) { return rt.status !== "released"; });
+      if (notFullyReleased && s.status !== "rejected" && s.status !== "cancelled") {
+        const days = daysBetweenD(s.receivedDate, todayStr());
+        const breached = (s.priority === "Urgent" && days > 1) || (s.priority !== "Urgent" && days > 5);
+        if (breached) overdueSamples++;
+      }
+    }
+
+    if (s.status === "rejected" || s.status === "cancelled") {
+      // Custody-level, whole-sample decision, before any test record could
+      // exist for these parameters — receivedDate is the only anchor.
+      if (!receivedInPeriod) return;
+      totalParams += rts.length;
+      if (s.status === "rejected") rejectedCnt += rts.length; else cancelledCnt += rts.length;
+      return;
+    }
+    if (s.status === "on_hold" || s.status === "registered" || s.status === "received") {
+      if (!receivedInPeriod) return;
+      totalParams += rts.length;
+      inTesting += rts.length;
+      if (s.status === "on_hold") onHoldOnly += rts.length;
+      return;
+    }
+    // assigned / in_progress / results_entered / under_review / approved /
+    // released — read each parameter's OWN status AND own date rather than
+    // the sample rollup/receivedDate, so partial releases land in the
+    // correct bucket and period.
+    rts.forEach(function(rt) {
+      let anchor = s.receivedDate;
+      if (rt.status === "released" || AWAITING_PARAM_STATUSES.indexOf(rt.status) !== -1) {
+        const info = getSampleResultForTest(s, rt.testTypeId, testRecords);
+        if (info && info.date) anchor = info.date;
+      }
+      if (!inPeriod(anchor)) return;
+      totalParams++;
+      if (rt.status === "released") {
+        releasedCnt++;
+        if (s.archived) releasedArchived++; else releasedLive++;
+      } else if (AWAITING_PARAM_STATUSES.indexOf(rt.status) !== -1) {
+        awaiting++;
+      } else {
+        inTesting++; // pending / in_progress
+      }
+    });
+  });
+
+  return {
+    totalSamples: totalSamples,
+    totalParams: totalParams,
+    inTesting: inTesting,
+    onHoldOnly: onHoldOnly,
+    awaiting: awaiting,
+    releasedCnt: releasedCnt,
+    releasedLive: releasedLive,
+    releasedArchived: releasedArchived,
+    rejectedCnt: rejectedCnt,
+    cancelledCnt: cancelledCnt,
+    overdueSamples: overdueSamples
+  };
+}
+
 // Returns the best "date of test" for a sample — the release date stored in
 // the most recent released requestedTest, falling back to updatedAt.
 function sampleReleaseDate(sample) {
@@ -241,19 +425,40 @@ function DashboardTab({
   const nonFunctionalEquip = equipment.length - functionalEquip;
   const recentTests = [...testRecords].reverse().slice(0, 6);
 
-  // ---- Sample Lifecycle KPIs ----
-  const activeSamples = samples || [];
+  // ---- Sample Lifecycle KPIs (v2, dynamic period filter) ----
+  // The FY revenue/parameter charts below now pass the raw `samples` array
+  // (identical to what the Monthly Progress Report page itself passes —
+  // see 14c-analytics-pages-2.js) instead of a `!s.archived`-filtered copy.
+  // A sample's own requestedTests/results stay intact when it's flagged
+  // archived (archiving never strips them — see archiveReleasedMembers(),
+  // 13-testrecords-ui.js), so excluding archived-flagged samples here only
+  // ever threw away real revenue/parameter data that MPR itself still
+  // counted: computeMonthlyProgressStats()'s ONLY other path for archived
+  // data (the separate archived_records fallback loop, for records whose
+  // underlying testRecord was actually deleted on archive) deliberately
+  // contributes zero revenue — it "doesn't retain raw result values" — so
+  // any archived-flagged sample whose test record was still present (e.g.
+  // seeded/imported data carrying `archived: true` without having gone
+  // through the in-app archive action) was silently dropped from this
+  // page's revenue/parameter totals while MPR itself still counted it in
+  // full. This is what caused the two screens' revenue to disagree even
+  // though both call the same aggregation function.
   const archivedCount = archived.length;
-  // archivedSampleTotal = sum of individual samples inside each archived batch
-  const archivedSampleTotal = archived.reduce(function(sum, a) {
-    const n = (a.memberSampleIds && a.memberSampleIds.length) ? a.memberSampleIds.length : 1;
-    return sum + n;
-  }, 0);
-  const activeReleased = activeSamples.filter(function(s) { return s.status === "released"; }).length;
-  const testedSampleCount = activeReleased + archivedSampleTotal;
-  const totalSampleCount = activeSamples.length + archivedSampleTotal;
-  // Operational status stats (for the 4 operational cards)
-  const lifecycleStats = sampleLifecycleStats(activeSamples);
+
+  // Period filter: All Time / Month / Fiscal Year / Fiscal Year Range.
+  const [lcPeriodMode, setLcPeriodMode] = React.useState("all");
+  const [lcMonth, setLcMonth] = React.useState(mprMonthKey(todayStr()));
+  const [lcYear, setLcYear] = React.useState(currentFiscalYear());
+  const [lcFromYear, setLcFromYear] = React.useState(currentFiscalYear());
+  const [lcToYear, setLcToYear] = React.useState(currentFiscalYear());
+  const lcFiscalYears = React.useMemo(function() { return fiscalYearsFromSamples(samples); }, [samples]);
+  const lcMonthOptions = React.useMemo(function() {
+    return mprMonthOptions(Number(lcFiscalYears[0].split("-")[0]), mprMonthKey(todayStr()));
+  }, [lcFiscalYears]);
+  const lcMatcher = buildLifecyclePeriodMatcher(lcPeriodMode, lcMonth, lcYear, lcFromYear, lcToYear);
+  const lcStats = React.useMemo(function() {
+    return computeSampleLifecycleV2(samples, testRecords, lcMatcher);
+  }, [samples, testRecords, lcPeriodMode, lcMonth, lcYear, lcFromYear, lcToYear]);
 
   // ---- 5 Fiscal Year bar chart ----
   // Reuses computeMonthlyProgressStats() — the exact same aggregation the
@@ -266,7 +471,7 @@ function DashboardTab({
   const fyBarData = fyears.map(function(fy) {
     const fyEndYear = Number(fy.split("-")[0]) + 1;
     const stats = computeMonthlyProgressStats({
-      samples: activeSamples,
+      samples: samples,
       references: references,
       testRecords: testRecords,
       testTypes: testTypes,
@@ -309,7 +514,7 @@ function DashboardTab({
     return ct;
   }
 
-  activeSamples.filter(function(s) { return (s.requestedTests || []).some(function(rt) { return rt.status === "released"; }); }).forEach(function(s) {
+  samples.filter(function(s) { return (s.requestedTests || []).some(function(rt) { return rt.status === "released"; }); }).forEach(function(s) {
     countClientType(getClientType(s));
   });
   archived.forEach(function(a) {
@@ -331,10 +536,16 @@ function DashboardTab({
   // ---- Test type bar chart for current FY ----
   const curFY = currentFiscalYear();
   const testTypeCountMap = {};
-  activeSamples.forEach(function(s) {
+  samples.forEach(function(s) {
     (s.requestedTests || []).filter(function(rt) {
-      const rd = rt.updatedAt || sampleReleaseDate(s);
-      return rt.status === "released" && rd && getFiscalYear(rd) === curFY;
+      if (rt.status !== "released") return false;
+      // Same per-parameter test-record date used by MPR/computeSampleLifecycleV2
+      // above — not the unreliable rt.updatedAt (never actually written, see
+      // computeMonthlyProgressStats() in 17-report-generator.js) or a single
+      // whole-sample date.
+      const info = getSampleResultForTest(s, rt.testTypeId, testRecords);
+      const rd = (info && info.date) || sampleReleaseDate(s);
+      return rd && getFiscalYear(rd) === curFY;
     }).forEach(function(rt) {
       const name = rt.testTypeName || rt.testTypeId || "Unknown";
       testTypeCountMap[name] = (testTypeCountMap[name] || 0) + 1;
@@ -359,60 +570,126 @@ function DashboardTab({
     React.createElement(SectionCard, {
       title: "Sample Life Cycle",
       icon: React.createElement(Icon, { name: "clipboard", size: 15, color: C.teal }),
-      right: React.createElement(Button, { size: "sm", variant: "outline", onClick: function() { goTo("samples"); } },
-        "Open Samples ", React.createElement(Icon, { name: "arrowRight", size: 12 }))
+      right: React.createElement("div", { className: "flex items-center gap-2" },
+        React.createElement("button", {
+          className: "text-xs underline",
+          style: { color: C.muted },
+          onClick: function() { goTo("archive"); }
+        }, archivedCount + " archived batches"),
+        React.createElement(Button, { size: "sm", variant: "outline", onClick: function() { goTo("samples"); } },
+          "Open Samples ", React.createElement(Icon, { name: "arrowRight", size: 12 }))
+      )
     },
-      // Row 1: Summary totals (3 cards)
+      // Period filter — Total Samples/Parameters/Tested/etc below are all
+      // computed from this one selection (see computeSampleLifecycleV2()).
+      React.createElement("div", { className: "flex flex-wrap items-center gap-2 mb-3 text-xs", style: { color: C.muted } },
+        React.createElement("span", null, "Period:"),
+        React.createElement("select", {
+          className: "border rounded px-2 py-1 text-xs",
+          style: { borderColor: C.border },
+          value: lcPeriodMode,
+          onChange: function(e) { setLcPeriodMode(e.target.value); }
+        },
+          React.createElement("option", { value: "all" }, "All Time"),
+          React.createElement("option", { value: "month" }, "Month"),
+          React.createElement("option", { value: "year" }, "Fiscal Year"),
+          React.createElement("option", { value: "range" }, "Fiscal Year Range")
+        ),
+        lcPeriodMode === "month" && React.createElement("select", {
+          className: "border rounded px-2 py-1 text-xs",
+          style: { borderColor: C.border },
+          value: lcMonth,
+          onChange: function(e) { setLcMonth(e.target.value); }
+        }, lcMonthOptions.map(function(mk) {
+          return React.createElement("option", { key: mk, value: mk }, mprMonthLabel(mk));
+        })),
+        lcPeriodMode === "year" && React.createElement("select", {
+          className: "border rounded px-2 py-1 text-xs",
+          style: { borderColor: C.border },
+          value: lcYear,
+          onChange: function(e) { setLcYear(e.target.value); }
+        }, lcFiscalYears.map(function(fy) {
+          return React.createElement("option", { key: fy, value: fy }, "FY " + fy);
+        })),
+        lcPeriodMode === "range" && React.createElement(React.Fragment, null,
+          React.createElement("span", null, "From"),
+          React.createElement("select", {
+            className: "border rounded px-2 py-1 text-xs",
+            style: { borderColor: C.border },
+            value: lcFromYear,
+            onChange: function(e) { setLcFromYear(e.target.value); }
+          }, lcFiscalYears.map(function(fy) {
+            return React.createElement("option", { key: fy, value: fy }, "FY " + fy);
+          })),
+          React.createElement("span", null, "To"),
+          React.createElement("select", {
+            className: "border rounded px-2 py-1 text-xs",
+            style: { borderColor: C.border },
+            value: lcToYear,
+            onChange: function(e) { setLcToYear(e.target.value); }
+          }, lcFiscalYears.map(function(fy) {
+            return React.createElement("option", { key: fy, value: fy }, "FY " + fy);
+          }))
+        )
+      ),
+      // Row 1: Totals (3 cards) — card 1 counts SAMPLES, cards 2–3 count
+      // PARAMETERS (see computeSampleLifecycleV2 doc comment for why).
       React.createElement("div", { className: "grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3" },
         React.createElement(StatCard, {
-          label: "Total Samples",
-          value: totalSampleCount,
-          sub: activeSamples.length + " active · " + archivedCount + " archived",
+          label: "Total Samples Received",
+          value: lcStats.totalSamples,
+          sub: "every sample received at the lab in this period, any status",
           icon: "beaker",
+          onClick: function() { goTo("samples"); }
+        }),
+        React.createElement(StatCard, {
+          label: "Total Parameters Requested",
+          value: lcStats.totalParams,
+          sub: "each dated by its own test date once tested",
+          icon: "clipboard",
           onClick: function() { goTo("samples"); }
         }),
         React.createElement(StatCard, {
           label: "Tested & Released",
-          value: testedSampleCount,
-          sub: activeReleased + " active · " + archivedSampleTotal + " archived",
+          value: lcStats.releasedCnt,
+          sub: lcStats.releasedLive + " live · " + lcStats.releasedArchived + " archived",
           icon: "chart",
           tone: "ok",
           onClick: function() { goTo("samples"); }
-        }),
-        React.createElement(StatCard, {
-          label: "Archived",
-          value: archivedCount + " batches",
-          sub: archivedSampleTotal + " total samples archived",
-          icon: "clipboard",
-          onClick: function() { goTo("archive"); }
         })
       ),
-      // Row 2: Operational status (4 cards)
+      // Row 2: Pipeline breakdown (4 cards, parameter-level). These four
+      // always sum back to Total Parameters Requested above — Overdue is a
+      // cross-cutting alert over In Testing/Awaiting, not a 5th bucket.
       React.createElement("div", { className: "grid grid-cols-2 sm:grid-cols-4 gap-3" },
         React.createElement(StatCard, {
-          label: "Active Samples",
-          value: lifecycleStats.activeCount,
+          label: "In Testing",
+          value: lcStats.inTesting,
+          sub: lcStats.onHoldOnly > 0 ? "incl. " + lcStats.onHoldOnly + " on hold" : "registered · assigned · in progress",
           icon: "beaker",
           onClick: function() { goTo("samples"); }
         }),
         React.createElement(StatCard, {
-          label: "Pending Review",
-          value: lifecycleStats.pendingApproval,
+          label: "Awaiting Review, Approval & Release",
+          value: lcStats.awaiting,
+          sub: "results entered · under review · approved",
           icon: "chart",
-          tone: lifecycleStats.pendingApproval ? "warn" : "ink",
+          tone: lcStats.awaiting ? "warn" : "ink",
           onClick: function() { goTo("samples"); }
         }),
         React.createElement(StatCard, {
-          label: "Awaiting Release",
-          value: lifecycleStats.awaitingRelease,
-          icon: "printer",
-          onClick: function() { goTo("samples"); }
-        }),
-        React.createElement(StatCard, {
-          label: "Overdue (TAT)",
-          value: lifecycleStats.overdue,
+          label: "Rejected & Cancelled",
+          value: lcStats.rejectedCnt + lcStats.cancelledCnt,
+          sub: lcStats.rejectedCnt + " rejected · " + lcStats.cancelledCnt + " cancelled",
           icon: "warning",
-          tone: lifecycleStats.overdue ? "warn" : "ink",
+          onClick: function() { goTo("samples"); }
+        }),
+        React.createElement(StatCard, {
+          label: "Overdue (TAT Breached)",
+          value: lcStats.overdueSamples,
+          sub: "of samples still in testing/awaiting",
+          icon: "warning",
+          tone: lcStats.overdueSamples ? "warn" : "ink",
           onClick: function() { goTo("samples"); }
         })
       )
