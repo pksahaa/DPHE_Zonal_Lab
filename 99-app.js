@@ -327,6 +327,7 @@ function LabApp({
       if (sub === "backend") setShowBackendSettings(true);
       if (sub === "labIdentity") setShowLabIdentitySettings(true);
       if (sub === "dataBackup") setShowDataBackupSettings(true);
+      if (sub === "archiveSettings") setShowArchiveSettings(true);
       setMobileNavOpen(false);
       return;
     }
@@ -497,6 +498,10 @@ function LabApp({
         k: "dataBackup",
         label: "Data Backup",
         icon: "archive"
+      }, {
+        k: "archiveSettings",
+        label: "Archive Settings",
+        icon: "archive"
       }]
     }];
   }
@@ -543,6 +548,7 @@ function LabApp({
   const [showBackendSettings, setShowBackendSettings] = useState(false);
   const [showLabIdentitySettings, setShowLabIdentitySettings] = useState(false);
   const [showDataBackupSettings, setShowDataBackupSettings] = useState(false);
+  const [showArchiveSettings, setShowArchiveSettings] = useState(false);
 
   // >>> PHASE 1: Sample Lifecycle collection — loaded/saved through DataService, NOT the
   // legacy loadKey/saveKey mechanism used above. Today DataService defaults to localStorage
@@ -1276,6 +1282,9 @@ function LabApp({
     subBatches: subBatches,
     setTestRecords: setTestRecords,
     session: session
+  }), showArchiveSettings && /*#__PURE__*/React.createElement(ArchiveSettingsModal, {
+    notify: notify,
+    onClose: () => setShowArchiveSettings(false)
   }), toast && /*#__PURE__*/React.createElement("div", {
     className: "fixed bottom-5 right-5 px-4 py-2.5 rounded shadow-lg text-sm font-medium flex items-center gap-2 z-50",
     style: {

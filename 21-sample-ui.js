@@ -239,6 +239,15 @@ const CLIENT_PART_EMPTY = {
   contactPerson: "",
   contactPhone: ""
 };
+// Small red-asterisk "required" marker, same visual convention already used
+// for Client Type/Tracking No. — factored out so every mandatory field
+// across the registration forms looks identical.
+function RequiredMark() {
+  return /*#__PURE__*/React.createElement("span", { style: { color: C.warn } }, " *");
+}
+function requiredLabel(text) {
+  return /*#__PURE__*/React.createElement("span", null, text, /*#__PURE__*/React.createElement(RequiredMark, null));
+}
 function ClientPartFields({
   form,
   setForm,
@@ -328,13 +337,13 @@ function ClientPartFields({
     onChange: v => set("clientTypeOther", v)
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "Ref / Memo No.",
+    label: requiredLabel("Ref / Memo No."),
     value: form.refNo,
     onChange: v => set("refNo", v)
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
     type: "date",
-    label: "Date",
+    label: requiredLabel("Date"),
     max: todayStr(),
     value: form.letterDate,
     onChange: v => set("letterDate", v)
@@ -392,17 +401,17 @@ function ClientPartFields({
     style: { minWidth: 0 }
   }, /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "Organization Name",
+    label: requiredLabel("Organization Name"),
     value: form.organizationName,
     onChange: v => set("organizationName", v)
   })), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "Client Name",
+    label: requiredLabel("Client Name"),
     value: form.contactPerson,
     onChange: v => set("contactPerson", v)
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "Client Contact No.",
+    label: requiredLabel("Client Contact No."),
     value: form.contactPhone,
     onChange: v => set("contactPhone", v)
   })));
@@ -436,6 +445,31 @@ function submitClientPart(form, references, session) {
       error: "Please specify the Client Type."
     };
   }
+  if (!(form.refNo || "").trim()) {
+    return {
+      error: "Ref / Memo No. is required."
+    };
+  }
+  if (!form.letterDate) {
+    return {
+      error: "Date of Ref / Memo No. is required."
+    };
+  }
+  if (!(form.organizationName || "").trim()) {
+    return {
+      error: "Organization Name is required."
+    };
+  }
+  if (!(form.contactPerson || "").trim()) {
+    return {
+      error: "Client Name is required."
+    };
+  }
+  if (!(form.contactPhone || "").trim()) {
+    return {
+      error: "Client Contact No. is required."
+    };
+  }
   const isDuplicateTrackingNo = isTrackingNoTaken(form.trackingNo, references);
   const reference = createReference(form, references, session);
   return {
@@ -445,12 +479,18 @@ function submitClientPart(form, references, session) {
 }
 
 // Cross-field date-order checks shared by every Register Sample entry point
-// (manual Batch form + bulk-upload popup). "next/previous date" here means
-// "on or after / on or before" for the Ref-Memo <-> Collection pair (same
-// day is fine), and "on or after both" for Received Date — NOT "the very
-// next calendar day". Plain ISO yyyy-mm-dd strings compare correctly with
-// normal string operators, so no Date parsing is needed. Any blank date is
-// skipped (not everything is required at every entry point).
+// (manual Batch form + bulk-upload popup). Rule (per lab workflow):
+//   - Date of Ref / Memo No. must fall ON OR AFTER the Collection Date — when
+//     a sample has a range of Collection Dates (a batch/multiple-sample
+//     entry spanning several days), it must fall on or after the LAST
+//     (latest) Collection Date in that range. Callers pass the latest
+//     Collection Date of the batch as `collectionDate` for this check.
+//   - Received Date must fall on or after the Date of Ref / Memo No.
+//   - Received Date must also fall on or after the Collection Date (implied
+//     by the two rules above, kept as an explicit belt-and-braces check).
+// "On or after" means same day is fine. Plain ISO yyyy-mm-dd strings compare
+// correctly with normal string operators, so no Date parsing is needed. Any
+// blank date is skipped (not everything is required at every entry point).
 function validateRegistrationDates({ letterDate, collectionDate, receivedDate }) {
   // Future-date guard first — a mistyped year here (e.g. 2026 instead of
   // 2025) is what used to silently produce records that then don't show up
@@ -459,8 +499,8 @@ function validateRegistrationDates({ letterDate, collectionDate, receivedDate })
   if (isFutureDate(letterDate)) return "Date of Ref / Memo No. can't be in the future.";
   if (isFutureDate(collectionDate)) return "Collection Date can't be in the future.";
   if (isFutureDate(receivedDate)) return "Received Date can't be in the future.";
-  if (letterDate && collectionDate && letterDate > collectionDate) {
-    return "Date of Ref / Memo No. can't be after the Collection Date.";
+  if (letterDate && collectionDate && letterDate < collectionDate) {
+    return "Date of Ref / Memo No. must be on or after the (last) Collection Date.";
   }
   if (receivedDate && letterDate && receivedDate < letterDate) {
     return "Received Date can't be before the Date of Ref / Memo No.";
@@ -1520,7 +1560,10 @@ function ClientPartSummaryBar({ clientPart, selectedTests, onEdit }) {
 }
 
 // ---- One clean card per sample (replaces the cramped 4-line flex rows) ----
-function SampleEntryCard({ index, row, updateRow, onDuplicate, onRemove, canRemove, collectionDateFrom, collectionDateTo }) {
+// Every field is mandatory except Latitude, Longitude and Water Point ID
+// (those three stay optional — not every water point has GPS coordinates or
+// an assigned ID at registration time).
+function SampleEntryCard({ index, row, updateRow, onDuplicate, onRemove, canRemove }) {
   const gridCls = "grid gap-3";
   const gridStyle = { gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" };
   const waterPointOptions = [{ value: "", label: "— Type of Water Point —" }].concat(WATER_POINT_TYPES.map(wt => ({ value: wt, label: wt })));
@@ -1554,40 +1597,39 @@ function SampleEntryCard({ index, row, updateRow, onDuplicate, onRemove, canRemo
     style: gridStyle
   }, /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "Customer Name",
+    label: requiredLabel("Customer Name"),
     value: row.customerName,
     onChange: v => updateRow("customerName", v)
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "Father's / Husband's Name",
+    label: requiredLabel("Father's / Husband's Name"),
     value: row.fatherHusbandName,
     onChange: v => updateRow("fatherHusbandName", v)
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "Site Name/Village",
+    label: requiredLabel("Site Name/Village"),
     value: row.village,
     onChange: v => updateRow("village", v)
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "Collection Date",
+    label: requiredLabel("Collection Date"),
     type: "date",
     value: row.collectionDate,
-    min: collectionDateFrom || undefined,
-    max: collectionDateTo || todayStr(),
+    max: todayStr(),
     onChange: v => updateRow("collectionDate", v)
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "District",
+    label: requiredLabel("District"),
     value: row.district,
     onChange: v => updateRow("district", v)
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "City Corp. / Pouroshova / Upazilla",
+    label: requiredLabel("City Corp. / Pouroshova / Upazilla"),
     value: row.upazila,
     onChange: v => updateRow("upazila", v)
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "Ward / Union",
+    label: requiredLabel("Ward / Union"),
     value: row.union,
     onChange: v => updateRow("union", v)
   }), /*#__PURE__*/React.createElement(TextField, {
@@ -1602,13 +1644,13 @@ function SampleEntryCard({ index, row, updateRow, onDuplicate, onRemove, canRemo
     onChange: v => updateRow("longitude", v)
   }), /*#__PURE__*/React.createElement(SelectField, {
     simple: true,
-    label: "Type of Water Point",
+    label: requiredLabel("Type of Water Point"),
     value: row.waterPointType,
     onChange: v => updateRow("waterPointType", v),
     options: waterPointOptions
   }), row.waterPointType === "Other (Pls. Specify)" && /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "Water Point Type — Please Specify",
+    label: requiredLabel("Water Point Type — Please Specify"),
     value: row.waterPointTypeOther,
     onChange: v => updateRow("waterPointTypeOther", v)
   }), /*#__PURE__*/React.createElement(TextField, {
@@ -1633,8 +1675,43 @@ function emptySampleRow() {
     waterPointType: "",
     waterPointTypeOther: "",
     twId: "",
-    collectionDate: ""
+    collectionDate: todayStr()
   };
+}
+
+// Every Sample Details field is mandatory EXCEPT Latitude, Longitude and
+// Water Point ID (twId) — see requiredLabel() usages in SampleEntryCard.
+const REQUIRED_SAMPLE_ROW_FIELDS = [["customerName", "Customer Name"], ["fatherHusbandName", "Father's / Husband's Name"], ["village", "Site Name/Village"], ["district", "District"], ["upazila", "City Corp. / Pouroshova / Upazilla"], ["union", "Ward / Union"], ["waterPointType", "Type of Water Point"], ["collectionDate", "Collection Date"]];
+// A row only "counts" as a sample the person intends to submit once they've
+// put something into it — an untouched extra row from [Add Another Sample]
+// is simply dropped rather than flagged as incomplete.
+function isSampleRowTouched(row) {
+  return REQUIRED_SAMPLE_ROW_FIELDS.some(([f]) => String(row[f] || "").trim()) || String(row.latitude || "").trim() || String(row.longitude || "").trim() || String(row.twId || "").trim();
+}
+function sampleRowMissingFields(row) {
+  const missing = REQUIRED_SAMPLE_ROW_FIELDS.filter(([f]) => !String(row[f] || "").trim()).map(([, label]) => label);
+  if (row.waterPointType === "Other (Pls. Specify)" && !String(row.waterPointTypeOther || "").trim()) {
+    missing.push("Water Point Type — Please Specify");
+  }
+  return missing;
+}
+// Display-only "DD/MM/YYYY" formatter for the auto-derived Collection Date
+// range shown to the user — the underlying value stays plain ISO
+// (yyyy-mm-dd) everywhere else in the app/data model.
+function fmtDMY(iso) {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
+// The Collection Date range is no longer a manually-typed field: for a
+// single sample it's just that sample's own Collection Date (From === To);
+// for multiple samples/a batch it's the earliest -> latest Collection Date
+// actually entered across the sample rows. Computed fresh from `rows`
+// wherever it's needed instead of being separate, editable state.
+function deriveCollectionDateRange(rows) {
+  const dates = (rows || []).map(r => r.collectionDate).filter(Boolean).sort();
+  if (!dates.length) return { collectionDateFrom: "", collectionDateTo: "" };
+  return { collectionDateFrom: dates[0], collectionDateTo: dates[dates.length - 1] };
 }
 
 // ---- manual batch registration: Step 1 (Client & Batch Info, collapses once
@@ -1653,8 +1730,6 @@ function BatchRegistrationForm({
   const [step1Confirmed, setStep1Confirmed] = React.useState(false);
   const [shared, setShared] = React.useState({
     sampleType: "Drinking Water",
-    collectionDateFrom: todayStr(),
-    collectionDateTo: todayStr(),
     collectedBy: "",
     receivedDate: todayStr(),
     priority: "Routine"
@@ -1666,6 +1741,11 @@ function BatchRegistrationForm({
   const [rows, setRows] = React.useState([emptySampleRow()]);
   const [err, setErr] = React.useState("");
   const [saving, setSaving] = React.useState(false);
+  // Collection Date — From/To is a read-only, auto-derived summary now (see
+  // deriveCollectionDateRange above), not data entry: single sample = its
+  // own Collection Date on both ends, multiple samples/batch = earliest ->
+  // latest Collection Date entered in Step 2.
+  const { collectionDateFrom, collectionDateTo } = React.useMemo(() => deriveCollectionDateRange(rows.filter(isSampleRowTouched)), [rows]);
 
   function toggleTest(t) {
     setSelectedTests(prev => prev.some(x => x.testTypeId === t.id) ? prev.filter(x => x.testTypeId !== t.id) : [...prev, {
@@ -1688,29 +1768,18 @@ function BatchRegistrationForm({
 
   // Local, side-effect-free validation gate for "Continue to Sample Details" —
   // the real uniqueness check + Reference creation still happens exactly
-  // once, in submit() below via the shared submitClientPart(), same as
-  // every other Client Part entry point in the app.
+  // once, in submit() below via the shared submitClientPart(). Collection
+  // Date isn't known yet at this point (it lives on the Step 2 sample rows),
+  // so the Ref/Memo-Date-vs-Collection-Date cross-check happens later, in
+  // submit(), once the actual Collection Date(s) exist.
   function validateStep1() {
-    if (!(clientPart.trackingNo || "").trim()) return "Tracking No. is required.";
-    if (!clientPart.sourceType) return "Client Source is required.";
-    if (clientPart.sourceType === "others" && !(clientPart.sourceTypeOther || "").trim()) return "Please specify the Client Source.";
-    if (clientPart.clientType === "Others (Pls Specify)" && !(clientPart.clientTypeOther || "").trim()) return "Please specify the Client Type.";
+    const clientErr = submitClientPart(clientPart, references, session).error;
+    if (clientErr) return clientErr;
     if (selectedTests.length === 0) return "Select at least one requested test.";
-    if (shared.collectionDateFrom && shared.collectionDateTo && shared.collectionDateTo < shared.collectionDateFrom) {
-      return "Collection Date \u2014 To can't be before Collection Date \u2014 From.";
-    }
-    // Ref/Memo Date is checked against the earliest Collection Date in the
-    // range; Received Date is checked against the latest — so both hold for
-    // every individual sample row, whatever date each one ends up with.
-    const dateErr = validateRegistrationDates({
-      letterDate: clientPart.letterDate,
-      collectionDate: shared.collectionDateFrom
-    }) || validateRegistrationDates({
-      receivedDate: shared.receivedDate,
-      collectionDate: shared.collectionDateTo,
-      letterDate: clientPart.letterDate
-    });
-    if (dateErr) return dateErr;
+    if (!(shared.collectedBy || "").trim()) return "Collected By is required.";
+    if (!shared.receivedDate) return "Received Date is required.";
+    if (isFutureDate(clientPart.letterDate)) return "Date of Ref / Memo No. can't be in the future.";
+    if (isFutureDate(shared.receivedDate)) return "Received Date can't be in the future.";
     return "";
   }
   function goToStep2() {
@@ -1727,12 +1796,37 @@ function BatchRegistrationForm({
       setStep(1);
       return;
     }
-    if (rows.every(r => !r.customerName.trim() && !r.village.trim())) {
-      setErr("Fill in at least one sample row (Customer Name or Site Name/Village).");
+    const touchedRows = rows.filter(isSampleRowTouched);
+    if (!touchedRows.length) {
+      setErr("Fill in at least one sample row.");
       setStep(2);
       return;
     }
-    const validRows = rows.filter(r => r.customerName.trim() || r.village.trim());
+    for (let i = 0; i < touchedRows.length; i++) {
+      const missing = sampleRowMissingFields(touchedRows[i]);
+      if (missing.length) {
+        setErr(`Sample ${rows.indexOf(touchedRows[i]) + 1} is missing: ${missing.join(", ")}.`);
+        setStep(2);
+        return;
+      }
+    }
+    // Collection Date range, now derived (not typed): a single sample's
+    // range is just its own date on both ends; a batch's range is the
+    // earliest -> latest Collection Date across its sample rows. Ref/Memo
+    // Date must fall on/after the LAST (latest) Collection Date, and
+    // Received Date must fall on/after both Ref/Memo Date and Collection
+    // Date — see validateRegistrationDates().
+    const { collectionDateTo } = deriveCollectionDateRange(touchedRows);
+    const dateErr = validateRegistrationDates({
+      letterDate: clientPart.letterDate,
+      collectionDate: collectionDateTo,
+      receivedDate: shared.receivedDate
+    });
+    if (dateErr) {
+      setErr(dateErr);
+      setStep(2);
+      return;
+    }
     const result = submitClientPart(clientPart, references, session);
     if (result.error) {
       // Tracking No. / Client Source live in Step 1 — jump back so the
@@ -1749,11 +1843,11 @@ function BatchRegistrationForm({
     await onCreate({
       ...shared,
       requestedTests: selectedTests
-    }, validRows, result.reference);
+    }, touchedRows, result.reference);
     setSaving(false);
   }
 
-  const validCount = rows.filter(r => r.village.trim() || r.customerName.trim()).length;
+  const validCount = rows.filter(isSampleRowTouched).length;
 
   return /*#__PURE__*/React.createElement("div", {
     className: "fixed inset-0 flex items-center justify-center p-4 z-50",
@@ -1808,48 +1902,35 @@ function BatchRegistrationForm({
     style: { gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }
   }, /*#__PURE__*/React.createElement(SelectField, {
     simple: true,
-    label: "Sample Type",
+    label: requiredLabel("Sample Type"),
     value: shared.sampleType,
     onChange: v => setShared({ ...shared, sampleType: v }),
     options: ["Drinking Water", "Surface Water", "Wastewater", "Groundwater", "Other"].map(m => ({ value: m, label: m }))
   }), /*#__PURE__*/React.createElement(SelectField, {
     simple: true,
-    label: "Priority",
+    label: requiredLabel("Priority"),
     value: shared.priority,
     onChange: v => setShared({ ...shared, priority: v }),
     options: ["Routine", "Urgent"].map(m => ({ value: m, label: m }))
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "Collection Date — From",
-    type: "date",
-    max: todayStr(),
-    value: shared.collectionDateFrom,
-    onChange: v => setShared({ ...shared, collectionDateFrom: v, collectionDateTo: shared.collectionDateTo < v ? v : shared.collectionDateTo })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Collection Date — To",
-    type: "date",
-    value: shared.collectionDateTo,
-    min: shared.collectionDateFrom || undefined,
-    max: todayStr(),
-    onChange: v => setShared({ ...shared, collectionDateTo: v })
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Received Date",
+    label: requiredLabel("Received Date"),
     type: "date",
     max: todayStr(),
     value: shared.receivedDate,
     onChange: v => setShared({ ...shared, receivedDate: v })
   }), /*#__PURE__*/React.createElement(TextField, {
     simple: true,
-    label: "Collected By",
+    label: requiredLabel("Collected By"),
     value: shared.collectedBy,
     onChange: v => setShared({ ...shared, collectedBy: v })
-  }))), /*#__PURE__*/React.createElement("p", {
-    className: "text-xs mt-2",
-    style: { color: C.muted }
-  }, "Each water point in Step 2 can be given its own single Collection Date if it differs from the rest — leave it blank there to default to ", shared.collectionDateFrom || "the From date", "."), /*#__PURE__*/React.createElement("div", {
-    className: "h-px",
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "mt-3 p-2.5 rounded text-xs",
+    style: { background: C.bg, color: C.muted }
+  }, /*#__PURE__*/React.createElement("span", { style: { color: C.ink, fontWeight: 600 } }, "Collection Date range: "), collectionDateFrom ? `${fmtDMY(collectionDateFrom)} \u2013 ${fmtDMY(collectionDateTo)}` : "not set yet — fill in each sample's Collection Date in Step 2.", /*#__PURE__*/React.createElement("div", {
+    className: "mt-1"
+  }, "Not entered here — it's the Collection Date of each water point in Step 2 (a single sample \u2192 one date on both ends; a batch \u2192 earliest to latest date entered).")), /*#__PURE__*/React.createElement("div", {
+    className: "h-px mt-3",
     style: { background: C.border }
   }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "text-sm font-semibold mb-1",
@@ -1892,7 +1973,10 @@ function BatchRegistrationForm({
     disabled: rows.length >= MAX_BATCH_ROWS,
     className: "flex items-center gap-1 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed",
     style: { color: C.teal }
-  }, /*#__PURE__*/React.createElement(Icon, { name: "plus", size: 13 }), "Add Another Sample")), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement(Icon, { name: "plus", size: 13 }), "Add Another Sample")), collectionDateFrom && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs",
+    style: { color: C.muted }
+  }, /*#__PURE__*/React.createElement("span", { style: { color: C.ink, fontWeight: 600 } }, "Collection Date range: "), collectionDateFrom === collectionDateTo ? fmtDMY(collectionDateFrom) : `${fmtDMY(collectionDateFrom)} \u2013 ${fmtDMY(collectionDateTo)}`), /*#__PURE__*/React.createElement("div", {
     className: "space-y-3"
   }, rows.map((row, i) => /*#__PURE__*/React.createElement(SampleEntryCard, {
     key: i,
@@ -1901,9 +1985,7 @@ function BatchRegistrationForm({
     updateRow: (field, v) => updateRow(i, field, v),
     onDuplicate: () => duplicateRow(i),
     onRemove: () => removeRow(i),
-    canRemove: rows.length > 1,
-    collectionDateFrom: shared.collectionDateFrom,
-    collectionDateTo: shared.collectionDateTo
+    canRemove: rows.length > 1
   }))), rows.length >= MAX_BATCH_ROWS && /*#__PURE__*/React.createElement("p", {
     className: "text-xs",
     style: { color: C.muted }
@@ -1937,23 +2019,34 @@ function BatchRegistrationForm({
 // ---- shown right after a bulk manifest file is picked: choose which tests
 // apply to every row in that file (checkbox multi-select, same pattern as
 // Register New Sample / Register Batch — no more typing test names) ----
+// A manifest row's Collection Date is whatever its own "Collection Date"
+// column holds; rows without one fall back to today. Kept as one function so
+// the Batch Defaults preview here and the actual import in confirmImportSamples
+// (below, in SamplesPage) can never disagree on what date a row ends up with.
+function effectiveImportRowCollectionDate(row) {
+  return String(readSampleImportField(row, "collectionDate") || "").trim() || todayStr();
+}
 function ImportTestPickerModal({
   testTypes,
   references,
   setReferences,
   session,
-  rowCount,
+  rows,
   onConfirm,
   onClose,
   notify
 }) {
+  const rowCount = rows.length;
   const [selectedTests, setSelectedTests] = React.useState([]);
   const [clientPart, setClientPart] = React.useState({ ...CLIENT_PART_EMPTY });
-  const [collectionDateFrom, setCollectionDateFrom] = React.useState(todayStr());
-  const [collectionDateTo, setCollectionDateTo] = React.useState(todayStr());
   const [priority, setPriority] = React.useState("Routine");
   const [err, setErr] = React.useState("");
   const [saving, setSaving] = React.useState(false);
+  // Collection Date range here is not data entry — it's read straight off the
+  // manifest's own "Collection Date" column per row (rows missing it default
+  // to today), the same way a single sample's range is just its own date and
+  // a batch's range is earliest -> latest across its samples.
+  const { collectionDateFrom, collectionDateTo } = React.useMemo(() => deriveCollectionDateRange(rows.map(r => ({ collectionDate: effectiveImportRowCollectionDate(r) }))), [rows]);
   function toggleTest(t) {
     setSelectedTests(prev => prev.some(x => x.testTypeId === t.id) ? prev.filter(x => x.testTypeId !== t.id) : [...prev, {
       testTypeId: t.id,
@@ -1966,13 +2059,11 @@ function ImportTestPickerModal({
       setErr("Select at least one requested test.");
       return;
     }
-    if (collectionDateTo < collectionDateFrom) {
-      setErr("Collection Date \u2014 To can't be before Collection Date \u2014 From.");
-      return;
-    }
+    // Ref/Memo Date must fall on/after the LAST (latest) Collection Date
+    // across every row in this manifest.
     const dateErr = validateRegistrationDates({
       letterDate: clientPart.letterDate,
-      collectionDate: collectionDateFrom
+      collectionDate: collectionDateTo
     });
     if (dateErr) {
       setErr(dateErr);
@@ -1988,7 +2079,7 @@ function ImportTestPickerModal({
     if (result.isDuplicateTrackingNo) {
       notify?.(`Tracking No. "${(result.reference.trackingNo || "").trim()}" matches an existing batch — these samples will be grouped under it.`, "ok");
     }
-    await onConfirm(selectedTests, result.reference, { collectionDateFrom, collectionDateTo, priority });
+    await onConfirm(selectedTests, result.reference, { priority });
     setSaving(false);
   }
   return /*#__PURE__*/React.createElement(Modal, {
@@ -2017,31 +2108,19 @@ function ImportTestPickerModal({
   }, "Batch Defaults"), /*#__PURE__*/React.createElement("div", {
     className: "text-xs mb-3",
     style: { color: C.muted }
-  }, "Collection Date is applied to any row in the manifest that doesn't already have its own \"Collection Date\" column value — rows with one keep that date. Priority applies to every sample in this upload."), /*#__PURE__*/React.createElement("div", {
+  }, "Collection Date comes from each row's own \"Collection Date\" column in the manifest (rows without one default to today) — it isn't typed in here. Priority applies to every sample in this upload."), /*#__PURE__*/React.createElement("div", {
     className: "grid gap-3",
     style: { gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }
-  }, /*#__PURE__*/React.createElement(TextField, {
+  }, /*#__PURE__*/React.createElement(SelectField, {
     simple: true,
-    label: "Collection Date — From",
-    type: "date",
-    max: todayStr(),
-    value: collectionDateFrom,
-    onChange: v => { setCollectionDateFrom(v); if (collectionDateTo < v) setCollectionDateTo(v); }
-  }), /*#__PURE__*/React.createElement(TextField, {
-    simple: true,
-    label: "Collection Date — To",
-    type: "date",
-    value: collectionDateTo,
-    min: collectionDateFrom || undefined,
-    max: todayStr(),
-    onChange: v => setCollectionDateTo(v)
-  }), /*#__PURE__*/React.createElement(SelectField, {
-    simple: true,
-    label: "Priority",
+    label: requiredLabel("Priority"),
     value: priority,
     onChange: setPriority,
     options: ["Routine", "Urgent"].map(m => ({ value: m, label: m }))
-  }))), /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "mt-3 p-2 rounded text-xs",
+    style: { background: "#fff", border: `1px solid ${C.border}` }
+  }, /*#__PURE__*/React.createElement("span", { style: { color: C.ink, fontWeight: 600 } }, "Collection Date range: "), collectionDateFrom === collectionDateTo ? fmtDMY(collectionDateFrom) : `${fmtDMY(collectionDateFrom)} \u2013 ${fmtDMY(collectionDateTo)}`)), /*#__PURE__*/React.createElement("div", {
     className: "text-xs mb-2",
     style: {
       color: C.muted
@@ -2548,7 +2627,7 @@ function SamplesTab({
     let runningSamples = [...samples];
     const newSamples = [];
     for (const row of pendingImportRows) {
-      const rowCollectionDate = String(readSampleImportField(row, "collectionDate") || "").trim();
+      const rowCollectionDate = effectiveImportRowCollectionDate(row);
       const sample = createSample({
         clientName: String(readSampleImportField(row, "customerName")).trim(),
         siteLocation: String(readSampleImportField(row, "siteName")).trim(),
@@ -2568,11 +2647,11 @@ function SamplesTab({
         referenceId: ref ? ref.id : "",
         batchRef: ref ? ref.refNo : "",
         sampleType: String(readSampleImportField(row, "sampleType") || "Drinking Water").trim(),
-        // Per-row Collection Date from the manifest wins; otherwise fall back
-        // to the start of the batch's Collection Date range picked in this
-        // dialog (not always "today" — the whole point of the range is to
-        // cover manifests collected over several days).
-        collectionDate: rowCollectionDate || batchDefaults?.collectionDateFrom || todayStr(),
+        // Collection Date comes straight from the manifest's own column for
+        // this row; rowCollectionDate already has the "default to today"
+        // fallback applied (effectiveImportRowCollectionDate, above) — no
+        // separate batch-level date range to fall back to any more.
+        collectionDate: rowCollectionDate,
         collectedBy: String(readSampleImportField(row, "collectedBy")).trim(),
         receivedDate: String(readSampleImportField(row, "receivedDate") || todayStr()),
         // Priority is a Batch Default picked in the popup, not a manifest
@@ -2768,13 +2847,12 @@ function SamplesTab({
     }
     let runningSamples = [...samples];
     const newSamples = [];
-    const { collectionDateFrom, collectionDateTo, ...sharedRest } = shared;
     for (const row of rows) {
       const sample = createSample({
-        ...sharedRest,
-        // Each water point can carry its own single collection date; if left
-        // blank it defaults to the start of the batch's collection range.
-        collectionDate: row.collectionDate || collectionDateFrom,
+        ...shared,
+        // Collection Date is a mandatory per-row field now (validated before
+        // this is ever called) — no shared fallback needed.
+        collectionDate: row.collectionDate,
         clientName: row.customerName,
         siteLocation: row.village,
         referenceId: ref.id,
@@ -3430,7 +3508,7 @@ function SamplesTab({
     references: references,
     setReferences: setReferences,
     session: session,
-    rowCount: pendingImportRows.length,
+    rows: pendingImportRows,
     onConfirm: confirmImportSamples,
     onClose: () => {
       setPendingImportRows(null);

@@ -184,6 +184,7 @@ function resultCell(row) {
 const ARCHIVE_EMPTY_FILTERS = {
   sampleId: "",
   clientName: "",
+  subBatch: "",
   parameter: "",
   dateFrom: "",
   dateTo: ""
@@ -207,6 +208,7 @@ function ArchiveTab({
   const [error, setError] = React.useState(null);
   const [hasSearched, setHasSearched] = React.useState(false);
   const [restoringId, setRestoringId] = React.useState(null);
+  const [archivingId, setArchivingId] = React.useState(null);
   const [viewMode, setViewMode] = React.useState("flat"); // "flat" | "batch"
   const [collapsedBatches, setCollapsedBatches] = React.useState(() => new Set());
 
@@ -377,6 +379,111 @@ function ArchiveTab({
       setRestoringId(null);
     }
   }
+  // A "Not Yet Archived" search hit (see handleArchiveQuery_ / the
+  // fetchArchivedRecords fallback) is a genuine, still-live testRecord that
+  // has simply aged out of the app's normal active window. Most of the time
+  // "Bring Back to Active" (below) is the right move; this is the secondary
+  // option for a record that's actually done and Released, letting someone
+  // file it into Archive right away instead of waiting for the next daily
+  // sweep. Mirrors runArchiveSweep()'s own rule (ArchiveService.gs): only
+  // ever archives once every member sample's requestedTest for this test
+  // type is Released — blocked otherwise, same as the automatic sweep would
+  // skip it. A member sample that's no longer in the fast windowed
+  // `samples` list can't be checked either way, so (being a one-off,
+  // explicit admin action rather than an unattended daily job) it's allowed
+  // through rather than blocked on a check that simply can't be done here.
+  async function handleArchiveNow(rec) {
+    if (!archiveRestoreGate.allowed) {
+      notify?.("Guest access can't file records into Archive — this login is view-only for this action.", "warn");
+      return;
+    }
+    const sampleIds = rec.memberSampleIds && rec.memberSampleIds.length ? rec.memberSampleIds : rec.sampleId ? [rec.sampleId] : [];
+    const notReleased = sampleIds.filter(id => {
+      const s = (samples || []).find(x => x.id === id);
+      if (!s) return false; // can't verify — let it through, see comment above
+      const rt = (s.requestedTests || []).find(t => t.testTypeId === rec.testTypeId);
+      return rt && rt.status !== "released";
+    });
+    if (notReleased.length) {
+      notify?.(`Can't archive — ${notReleased.length} sample${notReleased.length > 1 ? "s" : ""} on this record ${notReleased.length > 1 ? "haven't" : "hasn't"} been Released yet.`, "warn");
+      return;
+    }
+    setArchivingId(rec.id);
+    try {
+      const archivedSampleSnapshots = sampleIds.map(id => {
+        const s = (samples || []).find(x => x.id === id);
+        return s ? {
+          id: s.id,
+          sampleCode: s.sampleCode,
+          clientName: s.clientName,
+          village: s.village,
+          union: s.union,
+          upazila: s.upazila,
+          referenceId: s.referenceId,
+          clientType: s.clientType
+        } : { id };
+      });
+      const archivedRecord = {
+        ...rec,
+        archivedAt: new Date().toISOString(),
+        archivedSampleSnapshots
+      };
+      delete archivedRecord._notYetArchived;
+      delete archivedRecord._archiveSheet;
+      delete archivedRecord.restoredAt;
+      await DataService.save("archived_records", archivedRecord);
+      await DataService.remove("testRecords", rec.id);
+      setTestRecords(prev => prev.filter(r => r.id !== rec.id));
+      setResults(prev => prev.map(r => r.id === rec.id ? { ...archivedRecord, _archiveSheet: "archived_records" } : r));
+      DataService.appendAudit({
+        entity: "testRecord",
+        entityId: rec.id,
+        action: "archive",
+        user: session?.username,
+        role: session?.role,
+        note: `Manually filed "${rec.testTypeName}" (${rec.date}) into Archive from a Recall search — it had aged out of the active window without ever being archived.`
+      }).catch(() => {});
+      notify?.(`"${rec.testTypeName}" (${rec.date}) is now properly filed in Archive.`, "ok");
+    } catch (e) {
+      notify?.(`Couldn't file this into Archive: ${e.message}`, "warn");
+    } finally {
+      setArchivingId(null);
+    }
+  }
+  // The PRIMARY fix for "I can't retrieve this from Archive": a
+  // "_notYetArchived" hit is already sitting live in testRecords — it was
+  // never actually moved anywhere. It just needs to be marked recently
+  // restored so isWithinActiveWindow_ (Code.gs) counts it as active again,
+  // exactly like a real Archive restore does — no sheet move needed since
+  // it never left testRecords in the first place.
+  async function handleReviveRecord(rec) {
+    if (!archiveRestoreGate.allowed) {
+      notify?.("Guest access can't bring records back to active — this login is view-only for this action.", "warn");
+      return;
+    }
+    setRestoringId(rec.id);
+    try {
+      const revived = { ...rec, restoredAt: new Date().toISOString() };
+      delete revived._notYetArchived;
+      delete revived._archiveSheet;
+      await DataService.save("testRecords", revived);
+      setTestRecords(prev => prev.some(r => r.id === rec.id) ? prev.map(r => r.id === rec.id ? revived : r) : [...prev, revived]);
+      setResults(prev => prev.map(r => r.id === rec.id ? revived : r));
+      DataService.appendAudit({
+        entity: "testRecord",
+        entityId: rec.id,
+        action: "restore",
+        user: session?.username,
+        role: session?.role,
+        note: `Brought "${rec.testTypeName}" (${rec.date}) back to active Test Records from a Recall search — it had aged out of the active window without ever being archived.`
+      }).catch(() => {});
+      notify?.(`"${rec.testTypeName}" (${rec.date}) is back in active Test Records.`, "ok");
+    } catch (e) {
+      notify?.(`Couldn't bring this back to active: ${e.message}`, "warn");
+    } finally {
+      setRestoringId(null);
+    }
+  }
   const allRows = React.useMemo(() => results.flatMap(rec => archivedRecordRows(rec, testTypes)), [results, testTypes]);
   const totalCount = viewMode === "flat" ? allRows.length : results.length;
   return /*#__PURE__*/React.createElement("div", {
@@ -391,18 +498,23 @@ function ArchiveTab({
   }, /*#__PURE__*/React.createElement(Banner, {
     tone: "info",
     storageKey: "archive-tab-intro"
-  }, "Completed (Released) test records get moved here from Test Records to keep the active dataset fast — search for them any time, reprint their certificate, export to CSV, or restore one back to active records."), /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2 mb-3"
+  }, "Completed (Released) test records get moved here from Test Records to keep the active dataset fast — search for them any time, reprint their certificate, export to CSV, or restore one back to active records. This search also finds records that simply aged out of the day-to-day list (e.g. an old/back-dated Test Date) but were never formally archived — those show a \"Not Yet Archived\" badge with a one-click option to file them in properly."), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-2 mb-3"
   }, /*#__PURE__*/React.createElement(TextField, {
     label: "Sample ID",
     value: filters.sampleId,
     onChange: e => patchFilter("sampleId", e.target.value),
     placeholder: "e.g. RNP-2026-000014"
   }), /*#__PURE__*/React.createElement(TextField, {
-    label: "Client Name",
+    label: "Client Name / Reference / Tracking No.",
     value: filters.clientName,
     onChange: e => patchFilter("clientName", e.target.value),
-    placeholder: "Search client name"
+    placeholder: "Client, organization, or Ref/Tracking No."
+  }), /*#__PURE__*/React.createElement(TextField, {
+    label: "Sub-Batch",
+    value: filters.subBatch,
+    onChange: e => patchFilter("subBatch", e.target.value),
+    placeholder: "Sub-batch label/tracking"
   }), /*#__PURE__*/React.createElement(TextField, {
     label: "Parameter / Test",
     value: filters.parameter,
@@ -493,7 +605,7 @@ function ArchiveTab({
   }), "Searching the archive…"), !error && !loading && totalCount === 0 && /*#__PURE__*/React.createElement(EmptyState, {
     icon: "archive",
     title: hasSearched ? "No archived records match" : "Enter a search above",
-    subtitle: hasSearched ? "Try a different Sample ID, client name, parameter, or widen the date range." : "Type any filter (or leave everything blank for all records) and click Search — nothing loads automatically."
+    subtitle: hasSearched ? "Try a different Sample ID, client name/reference, sub-batch, parameter, or widen the date range." : "Type any filter (or leave everything blank for all records) and click Search — nothing loads automatically."
   }), !error && !loading && totalCount > 0 && viewMode === "flat" && /*#__PURE__*/React.createElement(FlatArchiveTable, {
     rows: allRows,
     samples: samples,
@@ -502,7 +614,10 @@ function ArchiveTab({
     onPrint: (rec, sampleId) => printArchivedRecord(rec, testTypes, sampleId),
     onRestore: handleRestore,
     canRestore: canRestore,
-    restoringId: restoringId
+    restoringId: restoringId,
+    onArchiveNow: handleArchiveNow,
+    onReviveRecord: handleReviveRecord,
+    archivingId: archivingId
   }), !error && !loading && totalCount > 0 && viewMode === "batch" && /*#__PURE__*/React.createElement(BatchArchiveGroups, {
     records: results,
     samples: samples,
@@ -512,6 +627,9 @@ function ArchiveTab({
     onRestore: handleRestore,
     canRestore: canRestore,
     restoringId: restoringId,
+    onArchiveNow: handleArchiveNow,
+    onReviveRecord: handleReviveRecord,
+    archivingId: archivingId,
     collapsedBatches: collapsedBatches,
     onToggleCollapsed: toggleBatchCollapsed
   })));
@@ -532,7 +650,10 @@ function FlatArchiveTable({
   onPrint,
   onRestore,
   canRestore,
-  restoringId
+  restoringId,
+  onArchiveNow,
+  onReviveRecord,
+  archivingId
 }) {
   return /*#__PURE__*/React.createElement("div", {
     className: "overflow-x-auto"
@@ -594,9 +715,9 @@ function FlatArchiveTable({
     }, resultCell(row)), /*#__PURE__*/React.createElement("td", {
       className: "px-2 py-1.5"
     }, /*#__PURE__*/React.createElement(Badge, {
-      tone: "ok",
-      title: row.record.archivedAt ? `Archived ${row.record.archivedAt.slice(0, 10)}` : undefined
-    }, "Released")), /*#__PURE__*/React.createElement("td", {
+      tone: row.record._notYetArchived ? "warn" : "ok",
+      title: row.record._notYetArchived ? "Aged out of the active window but never formally archived" : row.record.archivedAt ? `Archived ${row.record.archivedAt.slice(0, 10)}` : undefined
+    }, row.record._notYetArchived ? "Not Yet Archived" : "Released")), /*#__PURE__*/React.createElement("td", {
       className: "px-2 py-1.5"
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex items-center gap-1"
@@ -605,7 +726,19 @@ function FlatArchiveTable({
       color: C.info,
       title: row.isBatch ? "Print this sample only" : "Print / Generate Report",
       onClick: () => onPrint(row.record, row.sample?.id)
-    }), !row.isBatch && canRestore && /*#__PURE__*/React.createElement(IconButton, {
+    }), row.record._notYetArchived && onReviveRecord && /*#__PURE__*/React.createElement(IconButton, {
+      name: "restore",
+      color: C.teal,
+      title: "Bring back to active Test Records",
+      disabled: restoringId === row.record.id,
+      onClick: () => onReviveRecord(row.record)
+    }), row.record._notYetArchived && onArchiveNow && /*#__PURE__*/React.createElement(IconButton, {
+      name: "archive",
+      color: C.warn,
+      title: "File this into Archive now (skip waiting for the next sweep)",
+      disabled: archivingId === row.record.id,
+      onClick: () => onArchiveNow(row.record)
+    }), !row.isBatch && !row.record._notYetArchived && canRestore && /*#__PURE__*/React.createElement(IconButton, {
       name: "restore",
       color: C.teal,
       title: "Restore to active Test Records",
@@ -629,6 +762,9 @@ function BatchArchiveGroups({
   onRestore,
   canRestore,
   restoringId,
+  onArchiveNow,
+  onReviveRecord,
+  archivingId,
   collapsedBatches,
   onToggleCollapsed
 }) {
@@ -653,8 +789,9 @@ function BatchArchiveGroups({
         color: C.ink
       }
     }, archiveBatchLabel(rec)), React.createElement(Badge, {
-      tone: "ok"
-    }, "Released"), React.createElement("span", {
+      tone: rec._notYetArchived ? "warn" : "ok",
+      title: rec._notYetArchived ? "Aged out of the active window but never formally archived" : undefined
+    }, rec._notYetArchived ? "Not Yet Archived" : "Released"), React.createElement("span", {
       className: "text-xs",
       style: {
         color: C.muted
@@ -671,7 +808,22 @@ function BatchArchiveGroups({
     }, React.createElement(Icon, {
       name: "printer",
       size: 13
-    }), "Print Batch"), canRestore && React.createElement(Button, {
+    }), "Print Batch"), rec._notYetArchived && onReviveRecord ? React.createElement(Button, {
+      size: "sm",
+      onClick: () => onReviveRecord(rec),
+      loading: restoringId === rec.id
+    }, React.createElement(Icon, {
+      name: "restore",
+      size: 13
+    }), "Bring Back to Active") : null, rec._notYetArchived && onArchiveNow ? React.createElement(Button, {
+      size: "sm",
+      variant: "outline",
+      onClick: () => onArchiveNow(rec),
+      loading: archivingId === rec.id
+    }, React.createElement(Icon, {
+      name: "archive",
+      size: 13
+    }), "Archive Now") : !rec._notYetArchived && canRestore && React.createElement(Button, {
       size: "sm",
       onClick: () => onRestore(rec),
       loading: restoringId === rec.id
@@ -717,7 +869,7 @@ function BatchArchiveGroups({
         color: C.info,
         title: "Print this sample only",
         onClick: () => onPrint(rec, row.sample?.id)
-      }), canRestore && row.sample?.id && React.createElement(IconButton, {
+      }), canRestore && !rec._notYetArchived && row.sample?.id && React.createElement(IconButton, {
         name: "restore",
         color: C.teal,
         title: "Restore this sample only",
@@ -750,6 +902,134 @@ function BatchArchiveGroups({
   return React.createElement("div", {
     className: "grid gap-3"
   }, groupEls);
+}
+
+// ============================================================================
+// Archive Settings — admin-configurable thresholds for the automatic Archive
+// sweep (runArchiveSweep(), ArchiveService.gs, runs daily) and for how long a
+// manually-restored record is protected before it's eligible to be archived
+// again. Stored server-side (the "archiveSettings" singleton collection —
+// see getArchiveSettings_()/ARCHIVE_SETTINGS_DEFAULTS in ArchiveService.gs),
+// NOT in browser localStorage, because the daily sweep trigger runs entirely
+// server-side with no browser involved and needs to read the same value
+// every admin sees here.
+// ============================================================================
+function ArchiveSettingsModal({ onClose, notify }) {
+  const [loading, setLoading] = React.useState(true);
+  const [saving, setSaving] = React.useState(false);
+  const [settings, setSettings] = React.useState(null);
+
+  React.useEffect(function() {
+    let cancelled = false;
+    DataService.getArchiveSettings().then(function(s) {
+      if (!cancelled) setSettings(s);
+    }).catch(function() {
+      if (!cancelled) setSettings({ archiveAfterDays: { testRecords: 730 }, restoreGraceDays: 90 });
+    }).finally(function() {
+      if (!cancelled) setLoading(false);
+    });
+    return function() { cancelled = true; };
+  }, []);
+
+  function setDays(v) {
+    const n = v === "" ? "" : Math.max(1, Math.round(Number(v) || 0));
+    setSettings(prev => ({ ...prev, archiveAfterDays: { ...prev.archiveAfterDays, testRecords: n } }));
+  }
+  function setGraceDays(v) {
+    const n = v === "" ? "" : Math.max(0, Math.round(Number(v) || 0));
+    setSettings(prev => ({ ...prev, restoreGraceDays: n }));
+  }
+
+  async function handleSave() {
+    // Guard against saving "" (a cleared input mid-edit) as an actual value
+    // — fall back to the existing safe defaults for anything left blank.
+    const clean = {
+      archiveAfterDays: {
+        testRecords: settings.archiveAfterDays.testRecords || 730
+      },
+      restoreGraceDays: settings.restoreGraceDays === "" || settings.restoreGraceDays == null ? 90 : settings.restoreGraceDays
+    };
+    setSaving(true);
+    try {
+      await DataService.saveArchiveSettings(clean);
+      notify?.("Archive settings saved. The daily archive sweep will use these values from its next run.", "ok");
+      onClose();
+    } catch (e) {
+      notify?.(`Couldn't save Archive Settings: ${e.message}`, "warn");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: "Archive Settings",
+    onClose: onClose,
+    wide: true
+  }, loading || !settings ? /*#__PURE__*/React.createElement("div", {
+    className: "text-sm py-6 text-center",
+    style: { color: C.muted }
+  }, "Loading…") : /*#__PURE__*/React.createElement(React.Fragment, null,
+    React.createElement("div", {
+      className: "text-xs mb-4",
+      style: { color: C.muted }
+    }, "Controls the automatic Archive sweep that runs once a day (", React.createElement("code", null, "runArchiveSweep()"), "). Archiving only ever applies to Test Records, and only once every sample a record covers has that specific test fully Released — an old-but-not-yet-released test is never auto-archived, no matter how much time has passed. Changes apply from the sweep's next run — nothing already archived gets moved back by changing these numbers."),
+
+    React.createElement("div", {
+      className: "font-semibold text-xs mb-2",
+      style: { color: C.ink }
+    }, "Archive a fully-Released test record after this many days"),
+    React.createElement("div", {
+      className: "text-xs mb-3",
+      style: { color: C.muted }
+    }, "Counted from the record's own Test Date — not from when it was last touched — and only once nothing on it is still pending."),
+    React.createElement("div", {
+      className: "grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4"
+    },
+      React.createElement(TextField, {
+        simple: true,
+        label: "Days",
+        type: "number",
+        min: 1,
+        value: settings.archiveAfterDays.testRecords,
+        onChange: setDays
+      })
+    ),
+
+    React.createElement("div", {
+      className: "h-px mb-4",
+      style: { background: C.border }
+    }),
+
+    React.createElement("div", {
+      className: "font-semibold text-xs mb-2",
+      style: { color: C.ink }
+    }, "Restore grace period"),
+    React.createElement("div", {
+      className: "text-xs mb-3",
+      style: { color: C.muted }
+    }, "When you restore a record from Archive (see the Archive tab), it stays visible in Test Records and protected from the sweep above for this many days — even if its own date is old. After that, the normal \"days since its own date\" rule above applies again and it can be archived once more."),
+    React.createElement("div", {
+      className: "grid grid-cols-1 sm:grid-cols-3 gap-3 mb-2"
+    },
+      React.createElement(TextField, {
+        simple: true,
+        label: "Days",
+        type: "number",
+        min: 0,
+        value: settings.restoreGraceDays,
+        onChange: setGraceDays
+      })
+    ),
+
+    React.createElement("div", {
+      className: "mt-4 flex justify-end gap-2"
+    },
+      React.createElement(Button, { variant: "outline", onClick: onClose }, "Cancel"),
+      React.createElement(Button, { onClick: handleSave, loading: saving },
+        React.createElement(Icon, { name: "check", size: 13 }), "Save"
+      )
+    )
+  ));
 }
 
 // ============================================================================

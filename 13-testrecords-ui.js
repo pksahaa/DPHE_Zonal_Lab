@@ -1385,33 +1385,60 @@ function AddTestTab({
       // record (see buildApprovalSnapshot, 20-sample-model.js) still keeps
       // the ORIGINALLY approved value frozen regardless of this edit — this
       // history is what lets a reviewer see what changed and why.
+      const beforeMemberResults = (editingRecord.memberResults || []).map(m => ({
+        sampleId: m.sampleId,
+        results: m.results
+      }));
+      const afterMemberResults = (computedMemberResults || []).map(m => ({
+        sampleId: m.sampleId,
+        results: m.results
+      }));
+      const finalEquipmentName = equip ? equip.name : "";
+      const finalTester = tester.trim();
+      // Only the reported-values snapshot actually scales with batch size —
+      // for a 100+ member Analytical Batch it can be a genuinely large
+      // array. It used to be duplicated into BOTH before AND after on every
+      // Correction Only save, even for a correction that only touches the
+      // Test Date (or tester/equipment) and changes not one result value.
+      // Re-sending that full duplicated array over a slow connection is
+      // exactly the kind of oversized POST body that gets dropped
+      // mid-transfer — "NetworkError when attempting to fetch resource" /
+      // "Failed to fetch" — the SAME root cause already called out for
+      // large-batch archiving above (see ARCHIVE_CHUNK_SIZE). A metadata-only
+      // correction (date/tester/equipment) no longer pays that cost: the
+      // results snapshot is only included when a result actually changed.
+      const resultsChanged = JSON.stringify(beforeMemberResults) !== JSON.stringify(afterMemberResults) || JSON.stringify(editingRecord.consumption || {}) !== JSON.stringify(consumption) || JSON.stringify(editingRecord.bottleLog || {}) !== JSON.stringify(bottleLog) || JSON.stringify(editingRecord.gasLog || []) !== JSON.stringify(gasLog);
       const historyEntry = editingRecord.isCorrectionEdit ? {
         id: uid("ch"),
         reason: editingRecord.correctionReason || "Correction Only",
         date: new Date().toISOString(),
         by: session?.name || "System",
-        before: {
-          memberResults: (editingRecord.memberResults || []).map(m => ({
-            sampleId: m.sampleId,
-            results: m.results
-          })),
+        // Cheap metadata-level diff — always recorded, whatever else changed
+        // or didn't, so a pure Test Date correction still shows up clearly
+        // in the audit trail without needing the (potentially huge)
+        // memberResults snapshot below.
+        fieldChanges: {
+          ...(editingRecord.date !== recordPayload.date ? { date: { before: editingRecord.date, after: recordPayload.date } } : {}),
+          ...((editingRecord.tester || "") !== finalTester ? { tester: { before: editingRecord.tester || "", after: finalTester } } : {}),
+          ...((editingRecord.equipmentName || "") !== finalEquipmentName ? { equipmentName: { before: editingRecord.equipmentName || "", after: finalEquipmentName } } : {})
+        },
+        resultsChanged,
+        before: resultsChanged ? {
+          memberResults: beforeMemberResults,
           consumption: editingRecord.consumption || {},
           bottleLog: editingRecord.bottleLog || {},
           gasLog: editingRecord.gasLog || [],
           equipmentName: editingRecord.equipmentName || "",
           tester: editingRecord.tester || ""
-        },
-        after: {
-          memberResults: (computedMemberResults || []).map(m => ({
-            sampleId: m.sampleId,
-            results: m.results
-          })),
+        } : null,
+        after: resultsChanged ? {
+          memberResults: afterMemberResults,
           consumption,
           bottleLog,
           gasLog,
-          equipmentName: equip ? equip.name : "",
-          tester: tester.trim()
-        }
+          equipmentName: finalEquipmentName,
+          tester: finalTester
+        } : null
       } : null;
 
       const updatedRecord = {
@@ -1559,7 +1586,16 @@ function AddTestTab({
     try {
       await handleSaveInner(confirmedRetestReason, chargeRetestFeeMap);
     } catch (e) {
-      notify(`Failed to save: ${e.message}`, "warn");
+      // A raw fetch()-level failure ("Failed to fetch" / "NetworkError when
+      // attempting to fetch resource") means the request itself never
+      // completed — most often a large payload dropped mid-transfer on a
+      // slow connection (see the payload-size note on the correction-edit
+      // historyEntry above, and ARCHIVE_CHUNK_SIZE's comment for the same
+      // symptom on archiving). DataService already retries several times
+      // before giving up, so surfacing "try again" here isn't just filler —
+      // a fresh attempt (or a better connection) usually gets it through.
+      const looksLikeNetworkFailure = /network ?error|failed to fetch/i.test(e.message || "");
+      notify(looksLikeNetworkFailure ? `Failed to save: the connection dropped before the save finished. Please check your internet connection and try again. (${e.message})` : `Failed to save: ${e.message}`, "warn");
     } finally {
       setIsSaving(false);
     }
@@ -2700,13 +2736,16 @@ function TestRecordsTab({
     const idChunks = isBatch && releasedIds.length > ARCHIVE_CHUNK_SIZE ? Array.from({
       length: Math.ceil(releasedIds.length / ARCHIVE_CHUNK_SIZE)
     }, (_, i) => releasedIds.slice(i * ARCHIVE_CHUNK_SIZE, (i + 1) * ARCHIVE_CHUNK_SIZE)) : [releasedIds];
-    // Limit snapshot to ID + sampleCode + clientName only — storing full sample
-    // objects in each archived record bloated payloads and could hit GAS size
-    // limits on large batches. The Archive tab fetches full sample detail via
-    // the active samples list if needed.
+    // Limit snapshot to the handful of fields the Archive tab and the
+    // Dashboard/MPR reporting aggregates actually need (full sample detail
+    // is still available via the active samples list when loaded) — but
+    // referenceId/clientType MUST be included: without them, every
+    // archived sample fell back to "Unspecified" in Sample Breakdown by
+    // Programme (getClientType() has nothing to resolve a client type from
+    // once sampleCode/clientName are all that's left).
     const buildSnapshots = ids => ids.map(id => {
       const s = (samples || []).find(x => x.id === id);
-      return s ? { id: s.id, sampleCode: s.sampleCode, clientName: s.clientName } : { id };
+      return s ? { id: s.id, sampleCode: s.sampleCode, clientName: s.clientName, referenceId: s.referenceId, clientType: s.clientType, village: s.village, union: s.union, upazila: s.upazila } : { id };
     });
     // Save to backend FIRST — only update local state after every chunk's
     // backend call confirms the save. This prevents the record from

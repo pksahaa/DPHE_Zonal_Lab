@@ -3612,6 +3612,35 @@ function MonthlyProgressReportPage({
     }).catch(function() {});
   }, []);
 
+  // The rest of the app deliberately reads testRecords/samples through the
+  // "active window" (active:testRecords / active:samples, ~1 year — see
+  // Code.gs) to keep the screens people have open all day fast. That's the
+  // right trade-off there, but it means a test record whose own Test Date
+  // is (or was corrected to) genuinely more than a year old quietly drops
+  // out of `testRecords`/`samples` as passed into this page as props — even
+  // though it was never formally moved to Archive. This report needs to be
+  // able to reach ANY month/fiscal year regardless of that, so — exactly
+  // like the `archived` lazy-load just above — it fetches the FULL,
+  // un-windowed testRecords + samples ONCE when this page is opened (NOT on
+  // every month change, and NOT as part of the app's normal boot sequence),
+  // and caches them for the rest of this page visit. Every other screen in
+  // the app keeps using the fast windowed lists untouched; only this
+  // occasionally-opened report pays for completeness over the wire.
+  var [fullData, setFullData] = React.useState(null);
+  React.useEffect(function() {
+    Promise.all([DataService.list("testRecords"), DataService.list("samples")]).then(function(res) {
+      setFullData({ testRecords: res[0] || [], samples: res[1] || [] });
+    }).catch(function() {
+      // Leaves fullData null — the report just keeps working off the
+      // windowed props below (out-of-window months may under-count until
+      // this succeeds) instead of breaking the page.
+    });
+  }, []);
+  // Falls back to the fast windowed props while the full fetch is still in
+  // flight (or if it failed), so the page renders immediately either way.
+  var effectiveTestRecords = fullData ? fullData.testRecords : testRecords;
+  var effectiveSamples = fullData ? fullData.samples : samples;
+
   // Fiscal Year + Month-within-FY picker — replaces the old single Month
   // dropdown (which was capped at "today", so a future month could never
   // be selected, and had no separate Fiscal Year control at all). Both
@@ -3625,7 +3654,7 @@ function MonthlyProgressReportPage({
   // a few years on both ends so a lab planning ahead (or backfilling old
   // paper records) always has room to pick a year with no data yet.
   var fyOptions = React.useMemo(function() {
-    var dataFYs = fiscalYearsFromSamples(samples); // ascending, from 30-dashboard.js
+    var dataFYs = fiscalYearsFromSamples(effectiveSamples); // ascending, from 30-dashboard.js
     var dataStart = dataFYs.length ? Number(dataFYs[0].split("-")[0]) : Number(currentFY.split("-")[0]);
     var curStart = Number(currentFY.split("-")[0]);
     var minStart = Math.min(dataStart, curStart - 2);
@@ -3633,7 +3662,7 @@ function MonthlyProgressReportPage({
     var out = [];
     for (var y = minStart; y <= maxStart; y++) out.push(y + "-" + String(y + 1).slice(-2));
     return out.reverse(); // most recent first
-  }, [samples, currentFY]);
+  }, [effectiveSamples, currentFY]);
   var [selectedFY, setSelectedFY] = React.useState(fyOptions.indexOf(currentFY) !== -1 ? currentFY : fyOptions[0]);
   // The 12 months of the selected FY (July through June) — always all 12,
   // not filtered by whether data exists for them.
@@ -3678,15 +3707,15 @@ function MonthlyProgressReportPage({
 
   var stats = React.useMemo(function() {
     return computeMonthlyProgressStats({
-      samples: samples,
+      samples: effectiveSamples,
       references: references,
-      testRecords: testRecords,
+      testRecords: effectiveTestRecords,
       testTypes: testTypes,
       parameters: parameters,
       archived: archived,
       selectedMonth: selectedMonth
     });
-  }, [samples, references, testRecords, testTypes, parameters, archived, selectedMonth]);
+  }, [effectiveSamples, references, effectiveTestRecords, testTypes, parameters, archived, selectedMonth]);
 
   var tableHtml = React.useMemo(function() {
     return buildMonthlyProgressReportTableHtml(stats);

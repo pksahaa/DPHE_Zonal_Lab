@@ -335,7 +335,7 @@ function getSheet_(collection) {
   }
   return sheet;
 }
-const CACHED_COLLECTIONS = ["parameters", "testTypes", "masterChemicals", "users", "permissionMatrix"];
+const CACHED_COLLECTIONS = ["parameters", "testTypes", "masterChemicals", "users", "permissionMatrix", "archiveSettings"];
 const CACHE_TTL_SECS = 300;
 
 function invalidateCache_(collection) {
@@ -1173,6 +1173,24 @@ function applyCollectionReadPolicy_(collection, rows, sessionToken) {
   }
   return rows;
 }
+// A row counts as "active" if its own `date` is inside the normal 1-year
+// window, OR — narrowly — if it was manually restored from Archive (see
+// handleRestoreRecord_, ArchiveService.gs, which stamps `restoredAt`)
+// within the admin-configurable Restore Grace Period (Settings ▸ Archive
+// Settings ▸ getArchiveSettings_()/ARCHIVE_SETTINGS_DEFAULTS.restoreGraceDays).
+// This deliberately does NOT fall back to createdAt/updatedAt for every
+// record — an earlier attempt at that changed visibility for ALL records
+// regardless of whether anyone asked for it, and was reverted. Only an
+// explicit, user-initiated restore gets this protection, and only for the
+// configured number of days after that restore.
+function isWithinActiveWindow_(r, cutoffStr, graceDays) {
+  if (!r.date || r.date >= cutoffStr) return true;
+  if (r.restoredAt) {
+    const restoredMs = new Date(r.restoredAt).getTime();
+    if (!isNaN(restoredMs) && (Date.now() - restoredMs) < graceDays * 24 * 60 * 60 * 1000) return true;
+  }
+  return false;
+}
 function doGet(e) {
   try {
     const action = e.parameter.action;
@@ -1191,21 +1209,24 @@ function doGet(e) {
       const cutoff = new Date();
       cutoff.setFullYear(cutoff.getFullYear() - 1);
       const cutoffStr = cutoff.toISOString().slice(0, 10);
+      const graceDays = getArchiveSettings_().restoreGraceDays;
       const all = readAllRows_(collection);
-      const active = all.filter(r => !r.date || r.date >= cutoffStr);
+      const active = all.filter(r => isWithinActiveWindow_(r, cutoffStr, graceDays));
       return jsonOut_({ data: applyCollectionReadPolicy_(collection, active, sessionToken) });
     }
     if (action === "multiList") {
       const collections = (e.parameter.collections || "").split(",").filter(Boolean);
       const res = {};
+      let graceDays = null;
       collections.forEach(col => {
         const bareCol = col.startsWith("active:") ? col.slice(7) : col;
         if (col.startsWith("active:")) {
           const cutoff = new Date();
           cutoff.setFullYear(cutoff.getFullYear() - 1);
           const cutoffStr = cutoff.toISOString().slice(0, 10);
+          if (graceDays === null) graceDays = getArchiveSettings_().restoreGraceDays;
           const all = readAllRows_(bareCol);
-          res[col] = applyCollectionReadPolicy_(bareCol, all.filter(r => !r.date || r.date >= cutoffStr), sessionToken);
+          res[col] = applyCollectionReadPolicy_(bareCol, all.filter(r => isWithinActiveWindow_(r, cutoffStr, graceDays)), sessionToken);
         } else {
           res[col] = applyCollectionReadPolicy_(bareCol, readAllRowsCached_(bareCol), sessionToken);
         }

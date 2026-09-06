@@ -218,6 +218,8 @@ const DataService = (() => {
       return gasCall("multiList", { collections: collectionsArray.join(",") });
     } else {
       const res = {};
+      const needsActive = collectionsArray.some(col => col.startsWith("active:"));
+      const graceDays = needsActive ? (await getArchiveSettings()).restoreGraceDays : 0;
       collectionsArray.forEach(col => {
         if (col.startsWith("active:")) {
           const c = col.slice(7);
@@ -225,7 +227,7 @@ const DataService = (() => {
           cutoff.setFullYear(cutoff.getFullYear() - 1);
           const cutoffStr = cutoff.toISOString().slice(0, 10);
           const all = localList(c);
-          res[col] = all.filter(r => !r.date || r.date >= cutoffStr);
+          res[col] = all.filter(r => isWithinActiveWindowLocal_(r, cutoffStr, graceDays));
         } else {
           res[col] = localList(col);
         }
@@ -368,13 +370,17 @@ const DataService = (() => {
     const snaps = rec.archivedSampleSnapshots || [];
     if (f.sampleId && f.sampleId.trim()) {
       const needle = f.sampleId.trim().toLowerCase();
-      const hit = snaps.some(s => (s.sampleCode || "").toLowerCase().includes(needle)) || (rec.sampleCode || "").toLowerCase().includes(needle);
+      const hit = snaps.some(s => (s.sampleCode || "").toLowerCase().includes(needle)) || (rec.sampleCode || "").toLowerCase().includes(needle) || (rec.memberSampleIds || []).some(id => (id || "").toLowerCase().includes(needle));
       if (!hit) return false;
     }
     if (f.clientName && f.clientName.trim()) {
       const needle = f.clientName.trim().toLowerCase();
       const hit = snaps.some(s => (s.clientName || "").toLowerCase().includes(needle));
       if (!hit) return false;
+    }
+    if (f.subBatch && f.subBatch.trim()) {
+      const needle = f.subBatch.trim().toLowerCase();
+      if (!(rec.subBatchLabel || "").toLowerCase().includes(needle)) return false;
     }
     if (f.parameter && f.parameter.trim()) {
       const needle = f.parameter.trim().toLowerCase();
@@ -400,8 +406,21 @@ const DataService = (() => {
         console.warn("GAS archiveQuery failed, falling back to full list filter:", e);
       }
     }
-    const all = await list("archived_records");
-    return all.filter(rec => matchesArchiveQuery(rec, queryFilters));
+    const archivedAll = await list("archived_records");
+    const matched = archivedAll.filter(rec => matchesArchiveQuery(rec, queryFilters));
+    // "local" mode has no dated "<collection>_Archive_<year>" sheets or
+    // daily-sweep concept (that's a Google-Sheets-specific mechanism — see
+    // runArchiveSweep(), ArchiveService.gs) — but a testRecord can still age
+    // out of the 1-year active window without ever being explicitly
+    // archived here too. Surfacing those matches what the "gas" backend's
+    // archiveQuery does, so a search behaves the same in both modes.
+    const cutoff = new Date();
+    cutoff.setFullYear(cutoff.getFullYear() - 1);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    const seenIds = new Set(matched.map(r => r.id));
+    const allTestRecords = await list("testRecords");
+    const notYetArchived = allTestRecords.filter(r => r.date && r.date < cutoffStr && !seenIds.has(r.id)).filter(r => matchesArchiveQuery(r, queryFilters)).map(r => ({ ...r, _notYetArchived: true }));
+    return [...matched, ...notYetArchived];
   }
   async function restoreRecord(recordId, recordObj) {
     if (config.mode === "gas") {
@@ -423,6 +442,12 @@ const DataService = (() => {
       _archiveSheet,
       ...restored
     } = record;
+    // See ARCHIVE_SETTINGS_DEFAULTS.restoreGraceDays / isWithinActiveWindowLocal_
+    // below — without this stamp a just-restored record (whose own `date`
+    // may still be very old) would either vanish from the active list again
+    // on the very next load, or get swept straight back into Archive by the
+    // next runArchiveSweep() run (mirrors handleRestoreRecord_, ArchiveService.gs).
+    restored.restoredAt = new Date().toISOString();
     const testRecordsArr = await list("testRecords");
     if (!testRecordsArr.some(r => r.id === recordId)) {
       // Was: bulkSet("testRecords", [...testRecordsArr, restored]) — same
@@ -432,6 +457,38 @@ const DataService = (() => {
     }
     await remove("archived_records", recordId);
     return restored;
+  }
+
+  // ---- Admin-configurable Archive Settings (mirrors ARCHIVE_SETTINGS_DEFAULTS
+  // / getArchiveSettings_() in ArchiveService.gs) — how many days before a
+  // completed record is swept into Archive (per collection), and how many
+  // days a manually-restored record stays protected/visible afterward. ----
+  const ARCHIVE_SETTINGS_DEFAULTS = {
+    archiveAfterDays: { testRecords: 730 },
+    restoreGraceDays: 90
+  };
+  async function getArchiveSettings() {
+    const saved = await getSingleton("archiveSettings");
+    if (!saved) return { ...ARCHIVE_SETTINGS_DEFAULTS };
+    return {
+      archiveAfterDays: { ...ARCHIVE_SETTINGS_DEFAULTS.archiveAfterDays, ...(saved.archiveAfterDays || {}) },
+      restoreGraceDays: typeof saved.restoreGraceDays === "number" && saved.restoreGraceDays >= 0 ? saved.restoreGraceDays : ARCHIVE_SETTINGS_DEFAULTS.restoreGraceDays
+    };
+  }
+  async function saveArchiveSettings(settings) {
+    return saveSingleton("archiveSettings", settings);
+  }
+  // Mirrors isWithinActiveWindow_ in Code.gs — a row is active if its own
+  // `date` is inside the window, OR it was manually restored within the
+  // configured grace period (never falls back to createdAt/updatedAt for
+  // every record — see the comment on isWithinActiveWindow_ for why).
+  function isWithinActiveWindowLocal_(r, cutoffStr, graceDays) {
+    if (!r.date || r.date >= cutoffStr) return true;
+    if (r.restoredAt) {
+      const restoredMs = new Date(r.restoredAt).getTime();
+      if (!isNaN(restoredMs) && (Date.now() - restoredMs) < graceDays * 24 * 60 * 60 * 1000) return true;
+    }
+    return false;
   }
 
   async function listActive(collection) {
@@ -445,8 +502,9 @@ const DataService = (() => {
     const cutoff = new Date();
     cutoff.setFullYear(cutoff.getFullYear() - 1);
     const cutoffStr = cutoff.toISOString().slice(0, 10);
+    const graceDays = (await getArchiveSettings()).restoreGraceDays;
     const all = await list(collection);
-    return all.filter(r => !r.date || r.date >= cutoffStr);
+    return all.filter(r => isWithinActiveWindowLocal_(r, cutoffStr, graceDays));
   }
 
   // ---- Auth (mirrors Code.gs: login / logout / bootstrapAdmin / setUserPassword) ----
@@ -550,6 +608,8 @@ const DataService = (() => {
     archiveTestRecord,
     fetchArchivedRecords,
     restoreRecord,
+    getArchiveSettings,
+    saveArchiveSettings,
     login,
     logout,
     bootstrapAdmin,

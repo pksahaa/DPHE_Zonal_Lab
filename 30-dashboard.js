@@ -459,6 +459,10 @@ function DashboardTab({
   const lcStats = React.useMemo(function() {
     return computeSampleLifecycleV2(samples, testRecords, lcMatcher);
   }, [samples, testRecords, lcPeriodMode, lcMonth, lcYear, lcFromYear, lcToYear]);
+  // Human-readable label for whatever's currently selected in the Sample
+  // Life Cycle period filter — reused in the two chart titles below so it's
+  // always obvious which period a chart is showing.
+  const lcPeriodLabel = lcPeriodMode === "month" ? mprMonthLabel(lcMonth) : lcPeriodMode === "year" ? "FY " + lcYear : lcPeriodMode === "range" ? "FY " + lcFromYear + " to FY " + lcToYear : "All Time";
 
   // ---- 5 Fiscal Year bar chart ----
   // Reuses computeMonthlyProgressStats() — the exact same aggregation the
@@ -488,6 +492,22 @@ function DashboardTab({
   });
 
   // ---- Pie chart: Breakdown by Client Type ----
+  // Driven directly from testRecords/archived (the actual "Add Test Record"
+  // ledger) rather than derived indirectly by walking each sample's
+  // requestedTests[].status and looking the test record back up from there
+  // (getSampleResultForTest) — that lookup could silently come up empty for
+  // a test record that had aged out of the active window, undercounting it
+  // here even though it plainly exists. Counting the test records
+  // themselves is the more direct, more robust source of truth; a sample's
+  // own requestedTests[].status is still consulted, but only as the
+  // release gate, not as what drives the count.
+  const sampleById = {};
+  samples.forEach(function(s) { sampleById[s.id] = s; });
+  function isMemberReleased(sampleId, testTypeId) {
+    const s = sampleById[sampleId];
+    const rt = s && (s.requestedTests || []).find(function(t) { return t.testTypeId === testTypeId; });
+    return !!(rt && rt.status === "released");
+  }
   const pieMap = {
     "ADP": 0, "Non-ADP": 0, "Calamity": 0, "Monitoring": 0, "VVIP": 0, "Others": 0, "Unspecified": 0
   };
@@ -514,11 +534,27 @@ function DashboardTab({
     return ct;
   }
 
-  samples.filter(function(s) { return (s.requestedTests || []).some(function(rt) { return rt.status === "released"; }); }).forEach(function(s) {
-    countClientType(getClientType(s));
+  testRecords.filter(function(r) {
+    return lcMatcher(r.date);
+  }).forEach(function(r) {
+    const memberIds = (r.memberSampleIds && r.memberSampleIds.length) ? r.memberSampleIds : r.sampleId ? [r.sampleId] : [];
+    memberIds.forEach(function(id) {
+      if (!isMemberReleased(id, r.testTypeId)) return;
+      countClientType(getClientType(sampleById[id]));
+    });
   });
-  archived.forEach(function(a) {
-    const snaps = (a.archivedSampleSnapshots || [{ id: a.id, referenceId: a.referenceId }]);
+  archived.filter(function(a) {
+    // Bucket by the record's own Test Date (`a.date`) — NOT archivedAt/
+    // updatedAt. A record can get filed into Archive (or swept there) on
+    // any day regardless of when the test itself was actually run; using
+    // archivedAt/updatedAt here made a test genuinely dated e.g. 2021 show
+    // up under whatever period it happened to be archived in instead of
+    // the period it was tested in. (Archiving — manual or the daily sweep —
+    // only ever happens once every member is Released, so there's no
+    // separate release gate to re-check here.)
+    return lcMatcher(a.date);
+  }).forEach(function(a) {
+    const snaps = (a.archivedSampleSnapshots && a.archivedSampleSnapshots.length) ? a.archivedSampleSnapshots : [{ id: a.id, referenceId: a.referenceId }];
     snaps.forEach(function(snap) {
       countClientType(getClientType(snap));
     });
@@ -533,27 +569,24 @@ function DashboardTab({
     { label: "Unspecified", value: pieMap.Unspecified, color: "#94a3b8" }
   ].filter(function(sl) { return sl.value > 0; });
 
-  // ---- Test type bar chart for current FY ----
-  const curFY = currentFiscalYear();
+  // ---- Test type bar chart ----
+  // Same fix — counted directly off testRecords/archived instead of
+  // per-sample requestedTests, for the same robustness reason as the pie
+  // chart above.
   const testTypeCountMap = {};
-  samples.forEach(function(s) {
-    (s.requestedTests || []).filter(function(rt) {
-      if (rt.status !== "released") return false;
-      // Same per-parameter test-record date used by MPR/computeSampleLifecycleV2
-      // above — not the unreliable rt.updatedAt (never actually written, see
-      // computeMonthlyProgressStats() in 17-report-generator.js) or a single
-      // whole-sample date.
-      const info = getSampleResultForTest(s, rt.testTypeId, testRecords);
-      const rd = (info && info.date) || sampleReleaseDate(s);
-      return rd && getFiscalYear(rd) === curFY;
-    }).forEach(function(rt) {
-      const name = rt.testTypeName || rt.testTypeId || "Unknown";
-      testTypeCountMap[name] = (testTypeCountMap[name] || 0) + 1;
-    });
+  testRecords.filter(function(r) {
+    return lcMatcher(r.date);
+  }).forEach(function(r) {
+    const memberIds = (r.memberSampleIds && r.memberSampleIds.length) ? r.memberSampleIds : r.sampleId ? [r.sampleId] : [];
+    const releasedCount = memberIds.filter(function(id) { return isMemberReleased(id, r.testTypeId); }).length;
+    if (!releasedCount) return;
+    const name = r.testTypeName || r.testTypeId || "Unknown";
+    testTypeCountMap[name] = (testTypeCountMap[name] || 0) + releasedCount;
   });
   archived.filter(function(a) {
-    const rd = a.archivedAt || a.updatedAt;
-    return rd && getFiscalYear(rd) === curFY;
+    // Same fix as the pie chart above — bucket by the record's own Test
+    // Date, not archivedAt/updatedAt.
+    return lcMatcher(a.date);
   }).forEach(function(a) {
     const name = a.testTypeName || "Unknown";
     const cnt = (a.memberSampleIds || [a.id]).length;
@@ -738,7 +771,7 @@ function DashboardTab({
 
       // Chart 3: Pie — Client Type
       React.createElement(SectionCard, {
-        title: "Sample Breakdown by Programme",
+        title: "Sample Breakdown by Programme — " + lcPeriodLabel,
         icon: React.createElement(Icon, { name: "chart", size: 15, color: "#6366f1" })
       },
         React.createElement("div", { className: "flex justify-center py-2" },
@@ -746,9 +779,9 @@ function DashboardTab({
         )
       ),
 
-      // Chart 4: Test type breakdown for current FY
+      // Chart 4: Test type breakdown for the selected period
       React.createElement(SectionCard, {
-        title: "Test Type Distribution — FY " + curFY,
+        title: "Test Type Distribution — " + lcPeriodLabel,
         icon: React.createElement(Icon, { name: "chart", size: 15, color: "#6366f1" })
       },
         React.createElement("div", { className: "py-1" },
