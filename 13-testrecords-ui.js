@@ -1145,13 +1145,53 @@ function AddTestTab({
     }) : null;
     if (computedMemberResults) {
       const SHEETS_CELL_CHAR_LIMIT = 50000;
-      const SAFETY_MARGIN = 5000; // headroom for the record's other fields (chemicals/gas/qc/etc), unicode escaping, updatedAt stamping
       const memberResultsSize = JSON.stringify(computedMemberResults).length;
-      if (memberResultsSize > SHEETS_CELL_CHAR_LIMIT - SAFETY_MARGIN) {
+      // Previously ONLY memberResults was measured, with a flat 5,000-
+      // character margin assumed to cover "everything else" (date, tester,
+      // consumption, gasesUsed, dilutionGasesUsed, values, optionalUsed,
+      // etc.). That assumption breaks for an Analytical Batch that ALSO
+      // uses Standard Samples + Dilution: those add their own chemical/gas
+      // entries (values, optionalUsed, dilutionGasesUsed, consumption,
+      // bottleLog) on top of the same large memberResults array, and the
+      // combined total could cross the real 50,000-character Sheets cell
+      // limit even though memberResults alone looked safely under the old
+      // fixed margin — the save then failed downstream with a generic
+      // "NetworkError when attempting to fetch resource" instead of this
+      // clear, actionable message, because nothing had actually measured
+      // the REST of the payload. Every other sizeable field is now measured
+      // for real (using data already available at this point, before any
+      // inventory is touched) instead of assumed to fit in a flat margin.
+      const otherFieldsSize = JSON.stringify({
+        date: testDate,
+        tester: tester.trim(),
+        testTypeName: selectedTest?.name,
+        testTypeId: selectedTest?.id,
+        equipmentId,
+        consumptionApprox: totals,
+        bottleLogApprox: totals,
+        values,
+        optionalUsed,
+        resultInputs,
+        gasesUsed,
+        dilutionGasesUsed: dilutionRequired ? dilutionGasesUsed : [],
+        expiredReason,
+        sampleSource,
+        numberOfSamples: samplesNum,
+        numberOfStandardSamples: standardSamplesNum,
+        numberOfFieldSamples: fieldSamplesNum,
+        dilutionRequired,
+        numberOfDilutedSamples: dilutionRequired ? dilutedSamplesNum : 0,
+        subBatchId: selectedSubBatch?.id,
+        subBatchLabel: selectedSubBatch?.label,
+        memberSampleIds: selectedSubBatch?.memberSampleIds
+      }).length;
+      const SAFETY_MARGIN = 1500; // headroom for updatedAt stamping/unicode escaping only now that everything else is actually measured above
+      const totalEstimate = memberResultsSize + otherFieldsSize;
+      if (totalEstimate > SHEETS_CELL_CHAR_LIMIT - SAFETY_MARGIN) {
         const memberCount = selectedSubBatch.memberSampleIds.length;
         const perMember = Math.max(1, Math.round(memberResultsSize / memberCount));
-        const safeMemberCount = Math.max(1, Math.floor((SHEETS_CELL_CHAR_LIMIT - SAFETY_MARGIN) / perMember));
-        notify(`This Analytical Batch is too large to save (~${memberResultsSize.toLocaleString()} characters of results — the backend spreadsheet caps a single record at ${SHEETS_CELL_CHAR_LIMIT.toLocaleString()}). With this test's number of parameters, roughly ${safeMemberCount} sample(s) per batch is the safe limit — please split this batch into smaller ones (e.g. via Analytical Batch management) and save separately. Nothing has been changed — chemical/gas inventory has NOT been touched.`, "warn");
+        const safeMemberCount = Math.max(1, Math.floor((SHEETS_CELL_CHAR_LIMIT - SAFETY_MARGIN - otherFieldsSize) / perMember));
+        notify(`This Analytical Batch is too large to save (~${totalEstimate.toLocaleString()} characters total — results plus Standard/Dilution/chemical & gas details — the backend spreadsheet caps a single record at ${SHEETS_CELL_CHAR_LIMIT.toLocaleString()}). With this test's current parameters and Standard/Dilution setup, roughly ${safeMemberCount} sample(s) per batch is the safe limit — please split this batch into smaller ones (e.g. via Analytical Batch management) and save separately. Nothing has been changed — chemical/gas inventory has NOT been touched.`, "warn");
         return;
       }
     }

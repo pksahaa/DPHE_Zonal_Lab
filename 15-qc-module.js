@@ -406,7 +406,40 @@ function QcModuleTab({
   testTypes,
   testRecords
 }) {
-  const groups = React.useMemo(() => collectQcGroups(testTypes, testRecords).map(evaluateQcGroup).sort((a, b) => a.testTypeName.localeCompare(b.testTypeName) || a.qcTypeLabel.localeCompare(b.qcTypeLabel)), [testTypes, testRecords]);
+  // Sub-Batch is now the PRIMARY lens for this module. It previously showed
+  // one running Levey-Jennings trend per Method+QC-Type pooled across EVERY
+  // Analytical Sub-Batch ever saved for that method — technically a more
+  // conventional long-run QC trend, but not what a tester actually asks
+  // day-to-day ("did QC for THIS batch pass?"). Now you pick one Sub-Batch
+  // first, and the chart(s) below only ever reflect QC data recorded
+  // within that specific batch — a batch using bracketing/interspersed QC
+  // can still show several points (one per checkpoint in that run), but
+  // nothing from any OTHER batch is ever mixed in.
+  const subBatchOptions = React.useMemo(() => {
+    const byId = new Map();
+    (testRecords || []).forEach(r => {
+      if (!r.qcCheck || !r.subBatchId) return;
+      if (!byId.has(r.subBatchId)) {
+        byId.set(r.subBatchId, {
+          value: r.subBatchId,
+          label: r.subBatchLabel || r.subBatchId,
+          date: r.date
+        });
+      } else {
+        // Keep the most recent date seen for this sub-batch (a batch could
+        // in principle have more than one QC-tagged record).
+        const existing = byId.get(r.subBatchId);
+        if ((r.date || "") > (existing.date || "")) existing.date = r.date;
+      }
+    });
+    return Array.from(byId.values()).sort((a, b) => (b.date || "").localeCompare(a.date || "") || a.label.localeCompare(b.label)).map(o => ({
+      value: o.value,
+      label: o.date ? `${o.label} · ${o.date}` : o.label
+    }));
+  }, [testRecords]);
+  const [subBatchFilter, setSubBatchFilter] = React.useState("");
+  const scopedTestRecords = React.useMemo(() => subBatchFilter ? (testRecords || []).filter(r => r.subBatchId === subBatchFilter) : [], [testRecords, subBatchFilter]);
+  const groups = React.useMemo(() => collectQcGroups(testTypes, scopedTestRecords).map(evaluateQcGroup).sort((a, b) => a.testTypeName.localeCompare(b.testTypeName) || a.qcTypeLabel.localeCompare(b.qcTypeLabel)), [testTypes, scopedTestRecords]);
   const methodOptions = React.useMemo(() => Array.from(new Map(groups.map(g => [g.testTypeId, g.testTypeName])).entries()).map(([value, label]) => ({
     value,
     label
@@ -423,7 +456,15 @@ function QcModuleTab({
   }, [groups, methodFilter]);
   const [selectedKey, setSelectedKey] = React.useState(null);
   const selected = groups.find(g => g.key === selectedKey) || visibleGroups[0] || null;
-  if (groups.length === 0) {
+  // A newly-picked Sub-Batch starts with a clean slate — a Method/QC-Type
+  // filter left over from a previously-viewed batch could otherwise hide
+  // everything in the new one without any obvious reason why.
+  React.useEffect(() => {
+    setMethodFilter("");
+    setTypeFilter("");
+    setSelectedKey(null);
+  }, [subBatchFilter]);
+  if (subBatchOptions.length === 0) {
     return /*#__PURE__*/React.createElement(SectionCard, {
       title: "QC Module",
       icon: /*#__PURE__*/React.createElement(Icon, {
@@ -445,8 +486,14 @@ function QcModuleTab({
       size: 16
     }),
     right: /*#__PURE__*/React.createElement("div", {
-      className: "flex gap-2"
+      className: "flex gap-2 flex-wrap"
     }, /*#__PURE__*/React.createElement(SelectField, {
+      simple: true,
+      value: subBatchFilter,
+      onChange: setSubBatchFilter,
+      options: subBatchOptions,
+      placeholder: "Select Sub-Batch…"
+    }), subBatchFilter && /*#__PURE__*/React.createElement(SelectField, {
       simple: true,
       value: methodFilter,
       onChange: v => {
@@ -456,7 +503,7 @@ function QcModuleTab({
       },
       options: methodOptions,
       placeholder: "All Methods"
-    }), /*#__PURE__*/React.createElement(SelectField, {
+    }), subBatchFilter && /*#__PURE__*/React.createElement(SelectField, {
       simple: true,
       value: typeFilter,
       onChange: v => {
@@ -466,7 +513,19 @@ function QcModuleTab({
       options: typeOptionsForMethod,
       placeholder: "All QC Types"
     }))
-  }, /*#__PURE__*/React.createElement("div", {
+  }, !subBatchFilter ? /*#__PURE__*/React.createElement("div", {
+    className: "text-xs p-3 rounded",
+    style: {
+      background: C.infoBg,
+      color: C.info
+    }
+  }, "Select an Analytical Sub-Batch above to view its QC data.") : groups.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "text-xs p-3 rounded",
+    style: {
+      background: C.infoBg,
+      color: C.info
+    }
+  }, "This sub-batch has no QC-tagged test records.") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "grid gap-1.5"
   }, visibleGroups.map(g => /*#__PURE__*/React.createElement("button", {
     key: g.key,
@@ -493,7 +552,7 @@ function QcModuleTab({
     style: {
       color: C.muted
     }
-  }, g.points.length, " points · last ", g.points[g.points.length - 1]?.date)), /*#__PURE__*/React.createElement(QcStatusBadge, {
+  }, g.points.length, " point", g.points.length === 1 ? "" : "s", " in this batch · last ", g.points[g.points.length - 1]?.date)), /*#__PURE__*/React.createElement(QcStatusBadge, {
     status: g.status
   })))), visibleGroups.length === 0 && /*#__PURE__*/React.createElement("div", {
     className: "text-xs p-2",
@@ -502,5 +561,5 @@ function QcModuleTab({
     }
   }, "No QC series match this filter.")), selected && /*#__PURE__*/React.createElement(QcControlChart, {
     group: selected
-  }));
+  })));
 }
